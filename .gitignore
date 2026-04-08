@@ -8,7 +8,10 @@ uploads/
 __pycache__/
 *.py[cod]
 *.pyo
+
+# Variables de entorno (connection strings, secrets)
 .env
+.env.*
 venv/
 env/
 .venv/

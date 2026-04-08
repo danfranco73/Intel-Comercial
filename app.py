@@ -1,11 +1,13 @@
 import cgi
 import json
 import os
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from analyzer import DATASET_DEFINITIONS, analyze_datasets, suggest_mappings
+from mongo_client import get_db, ping
 from xlsx_reader import preview_sheet, read_sheet_names
 
 
@@ -40,6 +42,9 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/datasets":
             self.send_json({"datasets": build_dataset_schema()})
             return
+        if parsed.path == "/api/analyses":
+            self.handle_list_analyses(parsed)
+            return
         if parsed.path == "/api/workbook":
             self.handle_workbook(parsed)
             return
@@ -58,6 +63,9 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/analyze":
             self.handle_analyze()
+            return
+        if parsed.path == "/api/db-status":
+            self.send_json({"connected": ping()})
             return
         self.send_error(404, "Ruta no encontrada")
 
@@ -210,7 +218,29 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json({"error": str(exc)}, status=500)
             return
 
+        # Guardar en MongoDB Atlas (colección "registros")
+        db = get_db()
+        if db is not None:
+            try:
+                db["registros"].insert_one({
+                    "timestamp": datetime.now(timezone.utc),
+                    "filters": data.get("filters", {}),
+                    "result": result,
+                })
+            except Exception:
+                pass  # No bloquear la respuesta si falla MongoDB
+
         self.send_json(result)
+
+    def handle_list_analyses(self, parsed):
+        db = get_db()
+        if db is None:
+            self.send_json({"error": "MongoDB no configurado"}, status=503)
+            return
+        query = parse_qs(parsed.query)
+        limit = min(int(query.get("limit", [50])[0]), 200)
+        cursor = db["registros"].find({}, {"_id": 0}).sort("timestamp", -1).limit(limit)
+        self.send_json({"analyses": list(cursor)})
 
     def serve_file(self, path, content_type):
         if not path.exists():
@@ -348,4 +378,8 @@ if __name__ == "__main__":
     UPLOAD_DIR.mkdir(exist_ok=True)
     print(f"Servidor local activo en http://{HOST}:{PORT}")
     print("Cargá venta por cliente y sus maestros para relacionar ventas, artículos, rutas y vendedores.")
+    if ping():
+        print("MongoDB Atlas conectado — DB: Intel-Comercial")
+    else:
+        print("MongoDB no conectado (revisá MONGO_URI en .env)")
     HTTPServer((HOST, PORT), AppHandler).serve_forever()
