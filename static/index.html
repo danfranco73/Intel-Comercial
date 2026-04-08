@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Gestión Comercial</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body>
+    <main class="layout">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Distribuidora - Modelo Comercial</p>
+          <h1>Ventas históricas enriquecidas con maestros</h1>
+          <p class="lead">Cargá la venta por cliente, el maestro de artículos, el maestro de rutas y el maestro de vendedores para relacionar la operación completa y generar ratios, proyecciones y oportunidades de mejora.</p>
+        </div>
+        <div class="hero-note">
+          <p>Modelo de carga</p>
+          <ol>
+            <li>Venta por cliente: hecho principal.</li>
+            <li>Maestro de artículos: familia, línea, proveedor, sabor, UxB y calibre.</li>
+            <li>Maestro de rutas: fuerza de ventas, vendedor y descripción de ruta.</li>
+            <li>Maestro de vendedores: vendedor, fuerza de ventas y ruta.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="panel controls">
+        <div class="row">
+          <label class="wide">
+            Subir archivos
+            <input id="uploadInput" type="file" accept=".xlsx,.xlsm" multiple>
+          </label>
+          <button id="uploadBtn">Subir a la app</button>
+          <button id="clearUploadsBtn">Limpiar subidos</button>
+          <button id="refreshFiles">Actualizar lista</button>
+          <button id="analyzeBtn" class="primary">Relacionar y analizar</button>
+        </div>
+
+        <div class="subpanel">
+          <div class="subpanel-header">
+            <h2>Biblioteca de archivos</h2>
+            <label>
+              Vista
+              <select id="libraryScope">
+                <option value="uploads">Solo subidos</option>
+                <option value="all">Todos los detectados</option>
+              </select>
+            </label>
+          </div>
+          <div id="fileLibrary" class="file-library"></div>
+        </div>
+
+        <div class="subpanel">
+          <div class="subpanel-header">
+            <h2>Datasets de análisis</h2>
+            <p class="muted">Cada bloque tiene su propio archivo, hoja, encabezado y mapeo.</p>
+          </div>
+          <div id="datasetConfigs" class="dataset-grid"></div>
+        </div>
+
+        <p id="status" class="status"></p>
+      </section>
+
+      <section class="panel">
+        <div class="subpanel-header">
+          <h2>Vista previa</h2>
+          <div id="previewMeta" class="muted"></div>
+        </div>
+        <div id="previewContainer" class="preview"></div>
+      </section>
+
+      <section id="results" class="results hidden">
+        <div class="panel inner-panel filters-panel">
+          <div id="resultsFilters"></div>
+        </div>
+
+        <div class="cards" id="summaryCards"></div>
+
+        <div class="two-col">
+          <div class="panel inner-panel">
+            <h2>Semáforos</h2>
+            <div id="semaphores"></div>
+          </div>
+          <div class="panel inner-panel">
+            <h2>Cobertura de maestros</h2>
+            <div id="coverageCards" class="insight-list"></div>
+          </div>
+        </div>
+
+        <div class="two-col">
+          <div class="panel inner-panel">
+            <h2>Insights ejecutivos</h2>
+            <div id="insights" class="insight-list"></div>
+          </div>
+          <div class="panel inner-panel">
+            <h2>Plan de acción</h2>
+            <div id="actionPlan" class="insight-list"></div>
+          </div>
+        </div>
+
+        <div class="two-col">
+          <div class="panel inner-panel">
+            <h2>Ratios y potencial</h2>
+            <div id="ratiosCards" class="insight-list"></div>
+          </div>
+          <div class="panel inner-panel">
+            <h2>Proyección comercial</h2>
+            <div id="forecastCards" class="insight-list"></div>
+          </div>
+        </div>
+
+        <div class="chart-grid">
+          <div class="panel inner-panel">
+            <h2>Ventas por mes</h2>
+            <div id="chartSalesByMonth"></div>
+          </div>
+          <div class="panel inner-panel">
+            <h2>Pronóstico próximo trimestre</h2>
+            <div id="chartForecast"></div>
+          </div>
+          <div class="panel inner-panel">
+            <h2>Ventas por fuerza de ventas</h2>
+            <div id="chartZoneSales"></div>
+          </div>
+          <div class="panel inner-panel">
+            <h2>Ventas por vendedor</h2>
+            <div id="chartSellerSales"></div>
+          </div>
+          <div class="panel inner-panel">
+            <h2>Momentum de familias</h2>
+            <div id="chartFamilyMomentum"></div>
+          </div>
+          <div class="panel inner-panel">
+            <h2>Cobertura de maestros</h2>
+            <div id="chartCoverage"></div>
+          </div>
+        </div>
+
+        <div class="three-col">
+          <div class="panel inner-panel">
+            <h2>Clientes</h2>
+            <div id="clientsRankings"></div>
+          </div>
+          <div class="panel inner-panel">
+            <h2>Territorio y vendedores</h2>
+            <div id="commercialRankings"></div>
+          </div>
+          <div class="panel inner-panel">
+            <h2>Mix</h2>
+            <div id="mixRankings"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+  </html>

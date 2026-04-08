@@ -1,0 +1,20 @@
+# Archivos Excel / datos locales
+*.xlsx
+*.xlsm
+*.xls
+uploads/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+env/
+.venv/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
