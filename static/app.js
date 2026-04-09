@@ -5,10 +5,20 @@ const state = {
   preview: { datasetType: "sales", sourceIndex: 0 },
   scope: "uploads",
   filters: { available: {}, selected: {} },
+  dynamic: { tasks: [], selectedTaskId: null },
 };
 
 const datasetOrder = ["sales", "articles", "routes", "sellers"];
 const filterOrder = ["year", "month", "family", "line", "supplier", "sales_force", "route_description", "seller_name", "channel"];
+
+const filterGroups = [
+  { id: "tiempo",     label: "Período",       fields: ["year", "month"] },
+  { id: "producto",   label: "Producto",      fields: ["family", "line", "supplier"] },
+  { id: "comercial",  label: "Comercial",     fields: ["sales_force", "route_description", "seller_name"] },
+  { id: "canal",      label: "Canal",         fields: ["channel"] },
+];
+
+let activeFilterTab = "tiempo";
 
 async function api(url, options) {
   const response = await fetch(url, options);
@@ -21,17 +31,73 @@ async function api(url, options) {
 
 async function boot() {
   setStatus("Preparando estructura de análisis...");
-  const [filesResponse, schemaResponse] = await Promise.all([
+  const [filesResponse, schemaResponse, sessionResponse] = await Promise.all([
     api(`/api/files?scope=${encodeURIComponent(state.scope)}`),
     api("/api/datasets"),
+    api("/api/session").catch(() => ({ datasets: null })),
   ]);
   state.files = filesResponse.files || [];
   state.schema = schemaResponse.datasets || {};
   initializeDatasets();
+
+  if (sessionResponse.datasets) {
+    await restoreSession(sessionResponse.datasets);
+    setStatus("Sesión anterior restaurada. Podés analizar directamente o cambiar los archivos.");
+  } else {
+    setStatus("Cargá uno o más archivos de venta por cliente y luego los maestros.");
+  }
+
   renderFileLibrary();
   renderDatasetConfigs();
   renderPreview();
-  setStatus("Cargá uno o más archivos de venta por cliente y luego los maestros.");
+}
+
+async function restoreSession(saved) {
+  // Ventas (múltiples fuentes)
+  const savedSales = saved.sales;
+  if (savedSales?.sources?.length) {
+    state.datasets.sales.mapping = savedSales.mapping || {};
+    const restoredSources = [];
+    for (const src of savedSales.sources) {
+      if (!src.file || !src.sheet) continue;
+      const fileExists = state.files.some((f) => f.path === src.file);
+      if (!fileExists) continue;   // el archivo ya no está en disco, omitir
+      const source = createSource();
+      source.file      = src.file;
+      source.sheet     = src.sheet;
+      source.headerRow = src.headerRow ?? 0;
+      try {
+        const wb = await api(`/api/workbook?file=${encodeURIComponent(src.file)}`);
+        source.sheets = wb.sheets || [];
+        const previewData = await api(`/api/preview?file=${encodeURIComponent(src.file)}&sheet=${encodeURIComponent(src.sheet)}&datasetType=sales`);
+        source.preview = previewData.preview;
+        source.mappingSuggestions = previewData.mappingSuggestions || {};
+      } catch (_) { /* archivo inaccesible, dejar sin preview */ }
+      restoredSources.push(source);
+    }
+    if (restoredSources.length) {
+      state.datasets.sales.sources = restoredSources;
+    }
+  }
+
+  // Datasets singulares (articles, routes, sellers)
+  for (const dt of datasetOrder.filter((d) => d !== "sales")) {
+    const savedDs = saved[dt];
+    if (!savedDs?.file || !savedDs?.sheet) continue;
+    const fileExists = state.files.some((f) => f.path === savedDs.file);
+    if (!fileExists) continue;
+    state.datasets[dt].file      = savedDs.file;
+    state.datasets[dt].sheet     = savedDs.sheet;
+    state.datasets[dt].headerRow = savedDs.headerRow ?? 0;
+    state.datasets[dt].mapping   = savedDs.mapping || {};
+    try {
+      const wb = await api(`/api/workbook?file=${encodeURIComponent(savedDs.file)}`);
+      state.datasets[dt].sheets = wb.sheets || [];
+      const previewData = await api(`/api/preview?file=${encodeURIComponent(savedDs.file)}&sheet=${encodeURIComponent(savedDs.sheet)}&datasetType=${dt}`);
+      state.datasets[dt].preview = previewData.preview;
+      state.datasets[dt].mappingSuggestions = previewData.mappingSuggestions || {};
+    } catch (_) { /* inaccessible */ }
+  }
 }
 
 function initializeDatasets() {
@@ -586,34 +652,58 @@ function renderResults(data) {
   renderForecast(data.forecast);
   renderCharts(data.charts);
   renderRankings(data.rankings);
+  renderDynamicPanel(data);
 }
 
 function renderFilterPanel(meta) {
   const container = document.getElementById("resultsFilters");
+  container._lastMeta = meta;  // guardado para re-render al cambiar tab
   const activeCount = Object.keys(state.filters.selected || {}).length;
   const summary = activeCount
     ? `${meta.activeFilterSummary}. ${meta.rowsAnalyzed} registros analizados de ${meta.rowsUniverse} disponibles.`
-    : `Sin filtros aplicados. ${meta.rowsAnalyzed} registros disponibles para el informe.`;
-  const hint = "Podés combinar varios valores por filtro con Ctrl/Cmd + clic.";
-  const filtersMarkup = filterOrder
-    .filter((field) => state.filters.available[field]?.options?.length)
-    .map((field) => renderFilterField(field, state.filters.available[field], state.filters.selected[field] || []))
-    .join("");
+    : `Sin filtros aplicados. ${meta.rowsAnalyzed} registros disponibles.`;
+
+  // Calcular qué grupos tienen opciones disponibles
+  const availableGroups = filterGroups.filter((g) =>
+    g.fields.some((f) => state.filters.available[f]?.options?.length)
+  );
+
+  // Si la pestaña activa no tiene datos, resetear a la primera disponible
+  if (!availableGroups.find((g) => g.id === activeFilterTab) && availableGroups.length) {
+    activeFilterTab = availableGroups[0].id;
+  }
+
+  // Badges con conteo de filtros activos por grupo
+  const tabsHtml = availableGroups.map((g) => {
+    const activeInGroup = g.fields.filter((f) => state.filters.selected[f]?.length).length;
+    const badge = activeInGroup ? `<span class="filter-tab-badge">${activeInGroup}</span>` : "";
+    return `<button class="filter-tab${g.id === activeFilterTab ? " active" : ""}" data-filter-tab="${g.id}">${escapeHtml(g.label)}${badge}</button>`;
+  }).join("");
+
+  // Contenido del tab activo
+  const activeGroup = availableGroups.find((g) => g.id === activeFilterTab);
+  const fieldsHtml = activeGroup
+    ? activeGroup.fields
+        .filter((f) => state.filters.available[f]?.options?.length)
+        .map((f) => renderFilterField(f, state.filters.available[f], state.filters.selected[f] || []))
+        .join("")
+    : "<div class='muted'>No hay dimensiones disponibles.</div>";
 
   container.innerHTML = `
     <div class="subpanel-header">
       <div>
         <h2>Filtros del informe</h2>
         <div class="muted">${escapeHtml(summary)}</div>
-        <div class="muted">${hint}</div>
       </div>
       <div class="button-row">
-        <button id="applyFiltersBtn">Aplicar filtros</button>
+        <button id="applyFiltersBtn" class="primary">Aplicar</button>
         <button id="clearFiltersBtn">Limpiar filtros</button>
       </div>
     </div>
-    <div class="mapping-grid compact filter-grid">
-      ${filtersMarkup || "<div class='muted'>Todavía no hay dimensiones filtrables para este análisis.</div>"}
+    <div class="filter-tabs">${tabsHtml}</div>
+    <div class="filter-tab-body">
+      <div class="filter-tab-hint muted">Ctrl/Cmd + clic para selección múltiple</div>
+      <div class="filter-fields-row">${fieldsHtml}</div>
     </div>
   `;
   bindFilterEvents();
@@ -754,6 +844,15 @@ function renderRankings(rankings) {
 }
 
 function bindFilterEvents() {
+  // Cambio de pestaña
+  document.querySelectorAll("[data-filter-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      activeFilterTab = btn.dataset.filterTab;
+      // Re-render solo el panel sin volver a llamar analyze
+      const meta = document.getElementById("resultsFilters")._lastMeta;
+      if (meta) renderFilterPanel(meta);
+    });
+  });
   document.querySelectorAll("[data-filter-field]").forEach((select) => {
     select.addEventListener("change", () => {
       const field = select.dataset.filterField;
@@ -945,10 +1044,259 @@ function showError(error) {
   setStatus(error.message || "Error inesperado");
 }
 
+// ─── Fase 6: Motor dinámico de análisis ─────────────────────────────────────
+
+function renderDynamicPanel(data) {
+  state.dynamic.tasks        = data.availableAnalyses || [];
+  state.dynamic.selectedTaskId = null;
+  const sum = data.insightsSummary || {};
+  document.getElementById("dynSummaryLine").textContent =
+    `${sum.total || 0} insights detectados — ${state.dynamic.tasks.length} tipos de análisis disponibles`;
+  renderDynTaskSelector();
+  renderDynKpis(data.kpiSet || {});
+  renderDynInsights(data.dynamicInsights || [], sum);
+  document.getElementById("dynSemaphores").innerHTML = renderDynSemaphoresHtml(data.kpiSet?.semaphores || []);
+  document.getElementById("dynViz").innerHTML = "<div class='muted'>Seleccioná un tipo de análisis y ejecutá para ver la visualización.</div>";
+  document.getElementById("dynResults").classList.remove("hidden");
+}
+
+function renderDynTaskSelector() {
+  const container = document.getElementById("dynTaskSelector");
+  const tasks = state.dynamic.tasks;
+  if (!tasks.length) {
+    container.innerHTML = "<div class='muted'>No hay análisis disponibles para los datos actuales.</div>";
+    return;
+  }
+  const domainOrder = ["tiempo","cartera","territorio","producto","canal","margen","fuerza","general"];
+  const domainLabels = {
+    tiempo: "Tiempo", cartera: "Cartera", territorio: "Territorio",
+    producto: "Producto", canal: "Canal", margen: "Margen",
+    fuerza: "Fuerza de ventas", general: "General",
+  };
+  const byDomain = {};
+  tasks.forEach((t) => {
+    const d = t.domain || "general";
+    if (!byDomain[d]) byDomain[d] = [];
+    byDomain[d].push(t);
+  });
+  container.innerHTML = domainOrder.filter((d) => byDomain[d]).map((d) => `
+    <div class="dyn-domain-group">
+      <span class="dyn-domain-label">${escapeHtml(domainLabels[d] || d)}</span>
+      ${byDomain[d].map((t) => `
+        <button class="dyn-task-pill${t.id === state.dynamic.selectedTaskId ? " active" : ""}" data-task-id="${t.id}">
+          ${escapeHtml(t.label)}
+        </button>
+      `).join("")}
+    </div>
+  `).join("");
+  container.querySelectorAll("[data-task-id]").forEach((btn) => {
+    btn.addEventListener("click", () => onSelectDynTask(btn.dataset.taskId));
+  });
+}
+
+function onSelectDynTask(taskId) {
+  state.dynamic.selectedTaskId = taskId;
+  renderDynTaskSelector();
+  const task = state.dynamic.tasks.find((t) => t.id === taskId);
+  if (!task) return;
+  const comboRow    = document.getElementById("dynComboRow");
+  const comboSelect = document.getElementById("dynComboSelect");
+  comboRow.classList.remove("hidden");
+  if (task.combos && task.combos.length) {
+    comboSelect.style.display = "";
+    comboSelect.innerHTML = task.combos.map((c, i) =>
+      `<option value="${i}">${escapeHtml(c.label)}</option>`
+    ).join("");
+  } else {
+    comboSelect.style.display = "none";
+    comboSelect.innerHTML = "";
+  }
+}
+
+async function runDynamicTask() {
+  const taskId = state.dynamic.selectedTaskId;
+  if (!taskId) { setStatus("Seleccioná un tipo de análisis primero."); return; }
+  const task = state.dynamic.tasks.find((t) => t.id === taskId);
+  const comboSelect = document.getElementById("dynComboSelect");
+  const comboIdx = Number(comboSelect.value || 0);
+  const combo = (task?.combos || [])[comboIdx] || null;
+
+  const salesSources = state.datasets.sales.sources
+    .filter((s) => s.file && s.sheet)
+    .map((s) => ({ file: s.file, sheet: s.sheet, headerRow: Number(s.headerRow || 0) }));
+  if (!salesSources.length) { setStatus("No hay datos cargados para analizar."); return; }
+
+  const datasetsPayload = { sales: { sources: salesSources, mapping: state.datasets.sales.mapping } };
+  for (const dt of datasetOrder.filter((d) => d !== "sales")) {
+    const ds = state.datasets[dt];
+    if (ds.file && ds.sheet) {
+      datasetsPayload[dt] = { file: ds.file, sheet: ds.sheet, headerRow: Number(ds.headerRow || 0), mapping: ds.mapping };
+    }
+  }
+
+  const btn = document.getElementById("dynRunBtn");
+  btn.disabled = true;
+  setStatus(`Ejecutando: ${task?.label || taskId}...`);
+  try {
+    const data = await api("/api/analyze-dynamic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ datasets: datasetsPayload, filters: serializeFilters(), task_id: taskId, combo }),
+    });
+    renderDynKpis(data.kpiSet || {});
+    renderDynInsights(data.insights || [], data.insightsSummary || {});
+    document.getElementById("dynSemaphores").innerHTML = renderDynSemaphoresHtml(data.kpiSet?.semaphores || []);
+    renderVizSpec(data.vizSpec, "dynViz");
+    setStatus(`Análisis: ${task?.label || taskId}${combo ? " — " + combo.label : ""}`);
+  } catch (err) {
+    showError(err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderDynKpis(kpiSet) {
+  const kpis = kpiSet.kpis || [];
+  document.getElementById("dynKpiCards").innerHTML = kpis.slice(0, 8).map((k) => {
+    const fmtVal = fmtKpiValue(k.value, k.format);
+    const delta  = k.delta != null
+      ? `<div class="dyn-kpi-delta ${k.delta_dir || "flat"}">${k.delta >= 0 ? "▲" : "▼"} ${Math.abs(k.delta).toFixed(1)}${k.format === "pct" ? "%" : ""}</div>`
+      : "";
+    return `
+      <div class="dyn-kpi-card">
+        <div class="dyn-kpi-label">${escapeHtml(k.label)}</div>
+        <div class="dyn-kpi-value">${fmtVal}</div>
+        ${delta}
+        <div class="dyn-kpi-context muted">${escapeHtml(k.context || "")}</div>
+      </div>`;
+  }).join("");
+}
+
+function renderDynInsights(insights, summary) {
+  const typeLabels = { alert: "Alerta", opportunity: "Oportunidad", positive: "Positivo", trend: "Tendencia", context: "Contexto" };
+  document.getElementById("dynInsightsList").innerHTML = (insights || []).map((ins) => `
+    <div class="insight-item">
+      <span class="ins-badge ins-${ins.type}">${escapeHtml(typeLabels[ins.type] || ins.type)}</span>
+      ${escapeHtml(ins.text)}
+    </div>
+  `).join("") || "<div class='muted'>Sin insights para los datos actuales.</div>";
+}
+
+function renderDynSemaphoresHtml(semaphores) {
+  return (semaphores || []).map((s) => `
+    <div class="semaphore">
+      <div><span class="dot ${s.color}"></span><strong>${escapeHtml(s.label)}</strong></div>
+      <div class="muted">${escapeHtml(s.detail)}</div>
+    </div>
+  `).join("") || "<div class='muted'>Sin semáforos.</div>";
+}
+
+function fmtKpiValue(value, format) {
+  if (format === "money") return money(value);
+  if (format === "pct")   return `${Number(value).toFixed(1)}%`;
+  if (format === "int")   return Number(value).toLocaleString("es-AR");
+  return escapeHtml(String(value ?? ""));
+}
+
+function renderVizSpec(spec, containerId) {
+  const container = document.getElementById(containerId);
+  if (!spec || spec.empty || !spec.series?.length) {
+    container.innerHTML = "<div class='muted'>Sin datos suficientes para visualizar.</div>";
+    return;
+  }
+  const fmt = spec.format === "money" ? money
+    : spec.format === "pct" ? (v) => `${Number(v).toFixed(1)}%`
+    : (v) => Number(v).toLocaleString("es-AR");
+  const main = spec.series[0];
+  let vizHtml = "";
+  if (spec.type === "line" || spec.type === "area") {
+    const items = (main?.data || []).map((p) => ({ label: p.x, value: p.y }));
+    vizHtml = renderLineChart(items, fmt);
+  } else if (spec.type === "bar" || spec.type === "stacked_bar") {
+    const items = (main?.data || []).map((p) => ({ label: p.x, value: p.y }));
+    vizHtml = renderBars(items, fmt);
+  } else if (spec.type === "bar_horizontal") {
+    vizHtml = renderBarHorizontal(main?.data || [], fmt);
+  } else if (spec.type === "donut") {
+    vizHtml = renderDonutSVG(main?.data || [], fmt);
+  } else if (spec.type === "scatter") {
+    vizHtml = renderScatterSVG(main?.data || [], spec.axes || {});
+  } else {
+    const items = (main?.data || []).map((p) => ({ label: p.x, value: p.y }));
+    vizHtml = renderBars(items, fmt);
+  }
+  container.innerHTML = `<div class="dyn-viz-title">${escapeHtml(spec.title)}</div>` + vizHtml;
+}
+
+function renderBarHorizontal(data, formatter) {
+  if (!data.length) return "<div class='muted'>Sin datos.</div>";
+  const maxVal = Math.max(...data.map((p) => Math.abs(p.y)), 1);
+  return `<div class="bars">${data.slice(0, 10).map((p) => {
+    const w = Math.max(Math.abs(p.y) / maxVal * 100, 2);
+    const extra = p.z != null ? ` <span class="muted">(${typeof p.z === "number" ? p.z.toFixed(1) + "%" : p.z})</span>` : "";
+    return `
+      <div class="bar-row">
+        <div class="bar-label">
+          <span>${escapeHtml(String(p.x))}${extra}</span>
+          <span>${formatter(p.y)}</span>
+        </div>
+        <div class="bar-track"><div class="bar-fill" style="width:${w}%"></div></div>
+      </div>`;
+  }).join("")}</div>`;
+}
+
+function renderDonutSVG(data, formatter) {
+  if (!data.length) return "<div class='muted'>Sin datos.</div>";
+  const total = data.reduce((s, p) => s + Math.abs(p.y), 0) || 1;
+  const cx = 100, cy = 100, r = 70, sw = 36;
+  const circ = 2 * Math.PI * r;
+  const colors = ["#0f766e","#1d4ed8","#b45309","#7c3aed","#be185d","#15803d","#b91c1c","#0369a1"];
+  let offset = 0;
+  const slices = data.map((p, i) => {
+    const pct  = Math.abs(p.y) / total;
+    const dash = pct * circ;
+    const gap  = circ - dash;
+    const slice = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${colors[i % colors.length]}" stroke-width="${sw}" stroke-dasharray="${dash.toFixed(2)} ${gap.toFixed(2)}" stroke-dashoffset="${(-offset * circ).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})" />`;
+    offset += pct;
+    return slice;
+  });
+  const legend = data.slice(0, 8).map((p, i) => `
+    <div class="donut-legend-item">
+      <span class="donut-dot" style="background:${colors[i % colors.length]}"></span>
+      <span>${escapeHtml(String(p.x))}</span>
+      <span class="muted">${formatter(p.y)} · ${((Math.abs(p.y)/total)*100).toFixed(1)}%</span>
+    </div>`).join("");
+  return `<div class="donut-wrap"><svg viewBox="0 0 200 200" class="donut-svg">${slices.join("")}</svg><div class="donut-legend">${legend}</div></div>`;
+}
+
+function renderScatterSVG(data, axes) {
+  if (!data.length) return "<div class='muted'>Sin datos.</div>";
+  const W = 500, H = 300, pad = 45;
+  const xs = data.map((p) => p.x), ys = data.map((p) => p.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs) || 1;
+  const minY = Math.min(0, Math.min(...ys)), maxY = Math.max(...ys) || 1;
+  const sx = (v) => pad + (v - minX) / (maxX - minX || 1) * (W - pad * 2);
+  const sy = (v) => H - pad - (v - minY) / (maxY - minY || 1) * (H - pad * 2);
+  const dots = data.slice(0, 20).map((p) => {
+    const lbl = p.z ? escapeHtml(String(p.z)) : "";
+    return `<g><circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="5" fill="#0f766e" fill-opacity="0.75" />${lbl ? `<title>${lbl}</title>` : ""}</g>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" class="scatter-svg">
+    <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${H-pad}" stroke="#ccc" />
+    <line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#ccc" />
+    <text x="${W/2}" y="${H-8}" text-anchor="middle" font-size="11" fill="#999">${escapeHtml(axes.x || "X")}</text>
+    <text x="12" y="${H/2}" text-anchor="middle" font-size="11" fill="#999" transform="rotate(-90 12 ${H/2})">${escapeHtml(axes.y || "Y")}</text>
+    ${dots.join("")}
+  </svg>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 document.getElementById("uploadBtn").addEventListener("click", () => uploadFiles().catch(showError));
 document.getElementById("clearUploadsBtn").addEventListener("click", () => clearUploads().catch(showError));
 document.getElementById("refreshFiles").addEventListener("click", () => boot().catch(showError));
 document.getElementById("analyzeBtn").addEventListener("click", () => analyze().catch(showError));
+document.getElementById("dynRunBtn").addEventListener("click", () => runDynamicTask().catch(showError));
 document.getElementById("libraryScope").addEventListener("change", async (event) => {
   state.scope = event.target.value;
   await boot().catch(showError);

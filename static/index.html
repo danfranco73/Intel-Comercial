@@ -153,6 +153,37 @@
             <div id="mixRankings"></div>
           </div>
         </div>
+
+        <div class="panel inner-panel dyn-panel">
+          <div class="subpanel-header">
+            <div>
+              <h2>Motor dinámico de análisis</h2>
+              <p class="muted" id="dynSummaryLine"></p>
+            </div>
+          </div>
+          <div id="dynTaskSelector" class="dyn-task-selector"></div>
+          <div id="dynComboRow" class="dyn-combo-row hidden">
+            <label>
+              Dimensión de análisis
+              <select id="dynComboSelect"></select>
+            </label>
+            <button id="dynRunBtn" class="primary">Ejecutar análisis</button>
+          </div>
+          <div id="dynResults" class="hidden">
+            <div id="dynKpiCards" class="dyn-kpi-grid"></div>
+            <div class="two-col">
+              <div>
+                <h3>Semáforos</h3>
+                <div id="dynSemaphores"></div>
+              </div>
+              <div>
+                <h3>Insights del análisis</h3>
+                <div id="dynInsightsList" class="insight-list"></div>
+              </div>
+            </div>
+            <div id="dynViz" class="dyn-viz"></div>
+          </div>
+        </div>
       </section>
     </main>
     <script src="/app.js"></script>

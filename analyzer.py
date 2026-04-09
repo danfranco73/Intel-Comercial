@@ -3,6 +3,12 @@ from datetime import date, datetime, timedelta
 from statistics import median
 
 from xlsx_reader import _load_workbook, make_headers, read_sheet_rows
+from schema_detector import detect_schema
+from rule_engine import resolve_tasks, tasks_summary
+from analysis_engine import AnalysisEngine
+from kpi_generator import generate_kpis
+from viz_selector import build_all_viz
+from insight_writer import write_insights, insights_summary
 
 
 DATASET_DEFINITIONS = {
@@ -219,6 +225,14 @@ def analyze_datasets(datasets, filters=None):
     if not enriched_sales:
         raise ValueError("No quedaron ventas válidas para analizar")
 
+    schema = detect_schema(enriched_sales)
+    tasks  = resolve_tasks(schema)
+    engine = AnalysisEngine()
+    engine_results = engine.run_all(tasks, enriched_sales)
+    kpi_set      = generate_kpis(engine_results, tasks)
+    viz_configs  = build_all_viz(tasks, engine_results)
+    dyn_insights = write_insights(kpi_set, engine_results, tasks)
+
     applied_filters, filtered_sales = apply_filters(enriched_sales, filters or {})
     if not filtered_sales:
         raise ValueError("No quedaron ventas para los filtros seleccionados")
@@ -262,6 +276,13 @@ def analyze_datasets(datasets, filters=None):
             "activeFilterSummary": summarize_filters(applied_filters),
             "datasets": build_dataset_meta(loaded),
         },
+        "schema": schema,
+        "availableAnalyses": tasks_summary(tasks),
+        "engineResults": engine_results,
+        "kpiSet": kpi_set,
+        "dynamicCharts": viz_configs,
+        "dynamicInsights": dyn_insights,
+        "insightsSummary": insights_summary(dyn_insights),
         "summary": summary,
         "coverage": coverage,
         "ratios": ratios,

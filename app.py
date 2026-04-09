@@ -7,7 +7,13 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from analyzer import DATASET_DEFINITIONS, analyze_datasets, suggest_mappings
-from mongo_client import get_db, ping
+from schema_detector import detect_schema_from_raw
+from rule_engine import resolve_tasks, tasks_by_domain
+from analysis_engine import AnalysisEngine
+from kpi_generator import generate_kpis
+from viz_selector import build_all_viz, build_viz
+from insight_writer import write_insights, insights_summary
+from mongo_client import get_db, ping, save_session, load_session
 from xlsx_reader import preview_sheet, read_sheet_names
 
 
@@ -34,6 +40,9 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path == "/app.js":
             self.serve_file(STATIC_DIR / "app.js", "application/javascript; charset=utf-8")
             return
+        if parsed.path == "/api/session":
+            self.handle_get_session()
+            return
         if parsed.path == "/api/files":
             query = parse_qs(parsed.query)
             scope = query.get("scope", ["uploads"])[0]
@@ -41,6 +50,12 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/datasets":
             self.send_json({"datasets": build_dataset_schema()})
+            return
+        if parsed.path == "/api/schema":
+            self.handle_schema(parsed)
+            return
+        if parsed.path == "/api/possible-analyses":
+            self.handle_possible_analyses(parsed)
             return
         if parsed.path == "/api/analyses":
             self.handle_list_analyses(parsed)
@@ -64,10 +79,79 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/analyze":
             self.handle_analyze()
             return
+        if parsed.path == "/api/analyze-dynamic":
+            self.handle_analyze_dynamic()
+            return
+        if parsed.path == "/api/session":
+            self.handle_save_session()
+            return
         if parsed.path == "/api/db-status":
             self.send_json({"connected": ping()})
             return
         self.send_error(404, "Ruta no encontrada")
+
+    def handle_possible_analyses(self, parsed):
+        """
+        GET /api/possible-analyses?file=<nombre>&sheet=<hoja>&headerRow=<n>
+        Devuelve los AnalysisTasks disponibles agrupados por dominio,
+        listos para que el frontend construya el selector dinámico.
+        """
+        from xlsx_reader import preview_sheet
+        query = parse_qs(parsed.query)
+        filename = query.get("file", [None])[0]
+        sheet_name = query.get("sheet", [None])[0]
+        if not filename or not sheet_name:
+            self.send_json({"error": "Faltan parámetros file y sheet"}, status=400)
+            return
+        target = safe_file_path(filename)
+        if not target.exists():
+            self.send_json({"error": f"No se encontró {filename}"}, status=404)
+            return
+        try:
+            preview = preview_sheet(target, sheet_name, preview_rows=200)
+            header_row = int(query.get("headerRow", [preview.get("headerRow", 0)])[0])
+            headers = preview["headers"]
+            rows = preview.get("rows", [])
+            sample = rows[header_row + 1:] if header_row + 1 < len(rows) else rows
+            schema = detect_schema_from_raw(headers, sample)
+            tasks = resolve_tasks(schema)
+            self.send_json({
+                "file":          filename,
+                "sheet":         sheet_name,
+                "schema":        schema,
+                "tasks":         tasks,
+                "tasks_by_domain": tasks_by_domain(tasks),
+            })
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, status=500)
+
+    def handle_schema(self, parsed):
+        """
+        GET /api/schema?file=<nombre>&sheet=<hoja>&headerRow=<n>
+        Devuelve el SchemaProfile detectado para un archivo sin necesidad de
+        hacer un análisis completo (usa detect_schema_from_raw con muestra).
+        """
+        from xlsx_reader import preview_sheet
+        query = parse_qs(parsed.query)
+        filename = query.get("file", [None])[0]
+        sheet_name = query.get("sheet", [None])[0]
+        if not filename or not sheet_name:
+            self.send_json({"error": "Faltan parámetros file y sheet"}, status=400)
+            return
+        target = safe_file_path(filename)
+        if not target.exists():
+            self.send_json({"error": f"No se encontró {filename}"}, status=404)
+            return
+        try:
+            preview = preview_sheet(target, sheet_name, preview_rows=200)
+            header_row = int(query.get("headerRow", [preview.get("headerRow", 0)])[0])
+            headers = preview["headers"]
+            rows = preview.get("rows", [])
+            sample = rows[header_row + 1:] if header_row + 1 < len(rows) else rows
+            schema = detect_schema_from_raw(headers, sample)
+            self.send_json({"file": filename, "sheet": sheet_name, "schema": schema})
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, status=500)
 
     def handle_workbook(self, parsed):
         query = parse_qs(parsed.query)
@@ -160,6 +244,90 @@ class AppHandler(BaseHTTPRequestHandler):
                 removed += 1
         self.send_json({"removed": removed, "files": list_available_files(scope="uploads")})
 
+    def handle_analyze_dynamic(self):
+        """
+        POST /api/analyze-dynamic
+        Body: {
+            "datasets":  { ... },   ← mismo formato que /api/analyze
+            "filters":   { ... },
+            "task_id":   "temporal_trend",
+            "combo":     {"dim_a": "seller_name", "dim_b": null}
+        }
+        Ejecuta un único AnalysisTask con el combo elegido por el usuario.
+        """
+        from analyzer import analyze_datasets
+        from schema_detector import detect_schema
+        from rule_engine import resolve_tasks
+
+        length  = int(self.headers.get("Content-Length", "0"))
+        payload = self.rfile.read(length).decode("utf-8")
+        data    = json.loads(payload or "{}")
+
+        task_id = data.get("task_id")
+        combo   = data.get("combo")
+        if not task_id:
+            self.send_json({"error": "Falta task_id"}, status=400)
+            return
+
+        datasets = data.get("datasets", {})
+        if not datasets:
+            self.send_json({"error": "No llegaron datasets para analizar"}, status=400)
+            return
+
+        try:
+            resolved = _resolve_datasets(datasets)
+            # Importar solo lo necesario para cargar los registros enriquecidos
+            from analyzer import (
+                load_sales_dataset, load_dataset,
+                enrich_sales, apply_filters,
+                DATASET_DEFINITIONS,
+            )
+            loaded = {"sales": load_sales_dataset(resolved["sales"])} if "sales" in resolved else {}
+            for dt, src in resolved.items():
+                if dt == "sales":
+                    continue
+                loaded[dt] = load_dataset(dt, src)
+
+            sales_records = loaded["sales"]["records"]
+            from analyzer import (
+                enrich_sales,
+                normalize_text,
+            )
+            article_map       = {r["product_key"]: r for r in loaded.get("articles", {}).get("records", []) if r.get("product_key")}
+            route_seller_map  = {normalize_text(r["seller_name"]): r for r in loaded.get("routes", {}).get("records", []) if r.get("seller_name")}
+            seller_key_map    = {r["seller_key"]: r for r in loaded.get("sellers", {}).get("records", []) if r.get("seller_key")}
+            seller_name_map   = {normalize_text(r["seller_name"]): r for r in loaded.get("sellers", {}).get("records", []) if r.get("seller_name")}
+            seller_route_map  = {normalize_text(r["route_description"]): r for r in loaded.get("sellers", {}).get("records", []) if r.get("route_description")}
+
+            enriched = enrich_sales(sales_records, article_map, route_seller_map,
+                                    seller_key_map, seller_name_map, seller_route_map)
+
+            _, filtered = apply_filters(enriched, data.get("filters", {}))
+
+            schema = detect_schema(filtered)
+            tasks  = resolve_tasks(schema)
+            task   = next((t for t in tasks if t["id"] == task_id), None)
+            if task is None:
+                self.send_json({"error": f"El análisis '{task_id}' no está disponible con los datos actuales"}, status=422)
+                return
+
+            engine = AnalysisEngine()
+            result = engine.run_task_with_combo(task, filtered, combo)
+            kpi_set    = generate_kpis({task_id: result}, [task])
+            viz_spec   = build_viz(task, result)
+            dyn_ins    = write_insights(kpi_set, {task_id: result}, [task])
+            self.send_json({
+                "task_id":  task_id,
+                "combo":    combo,
+                "result":   result,
+                "kpiSet":   kpi_set,
+                "vizSpec":  viz_spec,
+                "insights": dyn_ins,
+                "insightsSummary": insights_summary(dyn_ins),
+            })
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, status=500)
+
     def handle_analyze(self):
         length = int(self.headers.get("Content-Length", "0"))
         payload = self.rfile.read(length).decode("utf-8")
@@ -230,7 +398,26 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass  # No bloquear la respuesta si falla MongoDB
 
+        # Persistir configuración de datasets en sesión
+        save_session(data.get("datasets", {}))
+
         self.send_json(result)
+
+    def handle_get_session(self):
+        """GET /api/session — devuelve la última configuración de datasets guardada."""
+        session = load_session()
+        if session:
+            self.send_json(session)
+        else:
+            self.send_json({"datasets": None})
+
+    def handle_save_session(self):
+        """POST /api/session — persiste la configuración de datasets."""
+        length  = int(self.headers.get("Content-Length", "0"))
+        payload = self.rfile.read(length).decode("utf-8")
+        data    = json.loads(payload or "{}")
+        ok = save_session(data.get("datasets", {}))
+        self.send_json({"saved": ok})
 
     def handle_list_analyses(self, parsed):
         db = get_db()
@@ -338,7 +525,7 @@ def save_uploaded_file(item):
     if extension not in ALLOWED_EXTENSIONS:
         raise ValueError(f"Tipo de archivo no permitido: {original_name}")
 
-    target = unique_upload_path(original_name)
+    target = UPLOAD_DIR / original_name   # sobrescribir si ya existe
     with target.open("wb") as handle:
         while True:
             chunk = item.file.read(1024 * 1024)
@@ -364,6 +551,56 @@ def unique_upload_path(filename):
         if not next_candidate.exists():
             return next_candidate
         counter += 1
+
+
+def _resolve_datasets(datasets):
+    """
+    Convierte el payload de datasets del frontend en paths reales validados.
+    Reutilizado tanto por handle_analyze como por handle_analyze_dynamic.
+    """
+    from analyzer import DATASET_DEFINITIONS
+    resolved = {}
+    for dataset_type, config in datasets.items():
+        if dataset_type not in DATASET_DEFINITIONS:
+            continue
+        if dataset_type == "sales":
+            sources = []
+            for source in config.get("sources", []):
+                filename  = source.get("file")
+                sheet_name = source.get("sheet")
+                if not filename or not sheet_name:
+                    continue
+                target = safe_file_path(filename)
+                if not target.exists():
+                    raise FileNotFoundError(f"No se encontró {filename}")
+                sources.append({
+                    "file":      filename,
+                    "path":      target,
+                    "sheet":     sheet_name,
+                    "headerRow": int(source.get("headerRow", 0)),
+                })
+            if not sources:
+                continue
+            resolved[dataset_type] = {
+                "sources": sources,
+                "mapping": config.get("mapping", {}),
+            }
+        else:
+            filename  = config.get("file")
+            sheet_name = config.get("sheet")
+            if not filename or not sheet_name:
+                continue
+            target = safe_file_path(filename)
+            if not target.exists():
+                raise FileNotFoundError(f"No se encontró {filename}")
+            resolved[dataset_type] = {
+                "file":      filename,
+                "path":      target,
+                "sheet":     sheet_name,
+                "headerRow": int(config.get("headerRow", 0)),
+                "mapping":   config.get("mapping", {}),
+            }
+    return resolved
 
 
 def safe_file_path(filename):
