@@ -30,6 +30,40 @@
   backdrop-filter: blur(4px);
 }
 
+.surface-switch {
+  position: fixed;
+  top: 18px;
+  right: 24px;
+  z-index: 1400;
+  display: inline-flex;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 253, 248, 0.86);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(6px);
+}
+
+.surface-switch a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 110px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  color: var(--muted);
+  text-decoration: none;
+  font-family: "Trebuchet MS", Verdana, sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.surface-switch a.active {
+  background: var(--brand);
+  color: white;
+}
+
 .sticky-controls .row {
   margin-bottom: 0;
 }
@@ -64,7 +98,7 @@ body.modal-open {
   width: 100%;
   max-width: none;
   margin: 0;
-  padding: 28px 32px 40px;
+  padding: 88px 32px 40px;
 }
 
 .hero,
@@ -143,12 +177,100 @@ table,
   align-items: start;
 }
 
+.controls-bi {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .subpanel {
   margin-top: 18px;
 }
 
 .controls .subpanel {
   margin-top: 0;
+}
+
+.commercial-guide {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.guide-callout,
+.dyn-help-card {
+  background: linear-gradient(180deg, #fffaf0, #f6eee1);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 16px 18px;
+}
+
+.guide-grid,
+.dyn-help-grid,
+.request-flow {
+  display: grid;
+  gap: 14px;
+}
+
+.guide-grid,
+.request-flow {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.guide-card,
+.request-step {
+  background: #fffdfa;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+}
+
+.guide-card-title,
+.dyn-help-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+
+.guide-card-action {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--brand);
+  margin-bottom: 8px;
+}
+
+.guide-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.guide-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.request-flow {
+  margin-bottom: 14px;
+}
+
+.dyn-task-help {
+  margin-bottom: 16px;
+}
+
+.dyn-help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
 }
 
 .controls .status {
@@ -311,6 +433,15 @@ button.primary {
   font-size: 14px;
 }
 
+.bi-surface-note {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 14px;
+}
+
 .dataset-grid {
   grid-template-columns: minmax(0, 1fr);
   margin-top: 16px;
@@ -373,6 +504,14 @@ th {
   margin-top: 22px;
 }
 
+.admin-ops {
+  margin-top: 22px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
 .progress-modal {
   position: fixed;
   inset: 0;
@@ -405,6 +544,12 @@ th {
   margin: 0;
   font-size: 15px;
   line-height: 1.5;
+}
+
+#progressMeta {
+  margin-top: 6px;
+  font-size: 13px;
+  opacity: 0.92;
 }
 
 .progress-spinner {
@@ -812,8 +957,13 @@ th {
 }
 
 @media (max-width: 840px) {
+  .surface-switch {
+    top: 12px;
+    right: 12px;
+  }
+
   .layout {
-    padding: 16px;
+    padding: 82px 16px 16px;
   }
 
   .hero {

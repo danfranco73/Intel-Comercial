@@ -3,50 +3,94 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Gestión Comercial BI</title>
+    <title>Gestión Comercial Admin</title>
     <link rel="stylesheet" href="/app.css">
   </head>
-  <body data-surface="bi">
+  <body data-surface="admin">
     <main class="layout">
       <nav class="surface-switch" aria-label="Superficies">
-        <a class="active" href="/bi">Comercial</a>
-        <a href="/admin">Admin</a>
+        <a href="/bi">Comercial</a>
+        <a class="active" href="/admin">Admin</a>
       </nav>
 
       <section class="hero">
         <div>
-          <p class="eyebrow">Portal Comercial</p>
-          <h1>BI comercial sobre la base histórica</h1>
-          <p class="lead">Trabajá sobre la base comercial para consultar indicadores, filtros, rankings, insights y análisis dinámicos sin exponerte a tareas operativas del sistema.</p>
+          <p class="eyebrow">Centro de Operación</p>
+          <h1>Administración de ingestión y mantenimiento</h1>
+          <p class="lead">Usá esta superficie para sincronizar ChessERP, revisar la salud de MongoDB y ClickHouse, diagnosticar errores y preparar la base persistida que consume el equipo comercial.</p>
         </div>
         <div class="hero-note">
-          <p>Uso recomendado</p>
+          <p>Flujo recomendado</p>
           <ol>
-            <li>Elegí el período del informe.</li>
-            <li>Definí el enfoque comercial por agrupaciones.</li>
-            <li>Actualizá el BI con el botón principal.</li>
-            <li>Refiná métricas y rankings con filtros del informe.</li>
+            <li>Revisá estado de ChessERP, Mongo y ClickHouse.</li>
+            <li>Ejecutá sincronizaciones o backfills desde acá.</li>
+            <li>Validá cobertura, errores y maestros.</li>
+            <li>Dejá a Comercial consumiendo ClickHouse o Mongo según disponibilidad.</li>
           </ol>
         </div>
       </section>
 
       <div class="sticky-controls">
         <div class="row">
-          <button id="analyzeBtn" class="primary">Actualizar informe</button>
+          <label class="wide">
+            Subir archivos
+            <input id="uploadInput" type="file" accept=".xlsx,.xlsm" multiple>
+          </label>
+          <button id="uploadBtn">Subir archivos</button>
+          <button id="clearUploadsBtn">Limpiar biblioteca</button>
+          <button id="refreshFiles">Actualizar biblioteca</button>
+          <button id="analyzeBtn" class="primary">Relacionar y analizar</button>
         </div>
       </div>
 
-      <section class="panel controls controls-bi">
+      <section class="panel controls">
         <div class="subpanel controls-main">
-        <div class="subpanel-header">
-          <h2>Parámetros del informe</h2>
-            <p class="muted">La vista comercial consulta automáticamente la base correcta según el período elegido y deja la operación técnica en la superficie admin.</p>
-        </div>
-          <div id="commercialGuide" class="commercial-guide"></div>
+          <div class="subpanel-header">
+            <h2>Fuentes y operación</h2>
+            <p class="muted">Esta vista administra fuentes, syncs, previsualizaciones y diagnóstico de ingestión.</p>
+          </div>
           <div id="datasetConfigs" class="dataset-grid"></div>
         </div>
 
+        <div class="subpanel controls-side">
+          <div class="subpanel-header">
+            <h2>Biblioteca de archivos</h2>
+            <label>
+              Vista
+              <select id="libraryScope">
+                <option value="uploads">Solo subidos</option>
+                <option value="all">Todos los detectados</option>
+              </select>
+            </label>
+          </div>
+          <div id="fileLibrary" class="file-library"></div>
+        </div>
+
         <p id="status" class="status"></p>
+      </section>
+
+      <section class="panel">
+        <div class="subpanel-header">
+          <h2>Vista previa</h2>
+          <div id="previewMeta" class="muted"></div>
+        </div>
+        <div id="previewContainer" class="preview"></div>
+      </section>
+
+      <section class="panel admin-ops">
+        <div class="two-col">
+          <div class="panel inner-panel">
+            <h2>Operación y mantenimiento</h2>
+            <div id="adminOpsSummary" class="insight-list"></div>
+          </div>
+          <div class="panel inner-panel">
+            <div class="subpanel-header">
+              <h2>Errores recientes</h2>
+              <button id="refreshAdminErrors">Actualizar errores</button>
+            </div>
+            <div id="adminErrors" class="insight-list"></div>
+          </div>
+        </div>
       </section>
 
       <section id="results" class="results hidden">
@@ -91,27 +135,27 @@
 
         <div class="chart-grid">
           <div class="panel inner-panel">
-            <h2>Volumen por mes</h2>
+            <h2>Ventas por mes</h2>
             <div id="chartSalesByMonth"></div>
           </div>
           <div class="panel inner-panel">
-            <h2>Proyección próxima</h2>
+            <h2>Pronóstico próximo trimestre</h2>
             <div id="chartForecast"></div>
           </div>
           <div class="panel inner-panel">
-            <h2>Volumen por fuerza de ventas</h2>
+            <h2>Ventas por fuerza de ventas</h2>
             <div id="chartZoneSales"></div>
           </div>
           <div class="panel inner-panel">
-            <h2>Volumen por vendedor</h2>
+            <h2>Ticket por vendedor</h2>
             <div id="chartSellerSales"></div>
           </div>
           <div class="panel inner-panel">
-            <h2>Volumen por marca</h2>
+            <h2>Ventas por marca</h2>
             <div id="chartFamilyMomentum"></div>
           </div>
           <div class="panel inner-panel">
-            <h2>Volumen por canal</h2>
+            <h2>Ventas por canal</h2>
             <div id="chartCoverage"></div>
           </div>
         </div>
@@ -138,7 +182,6 @@
               <p class="muted" id="dynSummaryLine"></p>
             </div>
           </div>
-          <div id="dynTaskHelp" class="dyn-task-help"></div>
           <div id="dynTaskSelector" class="dyn-task-selector"></div>
           <div id="dynComboRow" class="dyn-combo-row hidden">
             <label>
@@ -170,7 +213,6 @@
         <div>
           <h3>Procesando</h3>
           <p id="progressMessage" class="muted">Esperando la próxima tarea.</p>
-          <p id="progressMeta" class="muted">Calculando tiempo estimado...</p>
         </div>
       </div>
     </div>

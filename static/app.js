@@ -6,16 +6,22 @@ const state = {
   scope: "uploads",
   erpStatus: { configured: false, reachable: false, message: "" },
   erpStorage: { connected: false, available: false, message: "" },
+  clickhouseStorage: { connected: false, available: false, configured: false, message: "" },
   prefilters: { available: {}, selected: {} },
   filterSearch: {},
   erpSyncPending: false,
   filters: { available: {}, selected: {} },
   dynamic: { tasks: [], selectedTaskId: null },
+  adminErrors: [],
+  adminAuth: { token: readStoredAdminToken() },
 };
 
 const datasetOrder = ["sales"];
 const filterOrder = ["year", "month", "family", "line", "brand", "business_unit", "supplier", "sales_force", "route_description", "seller_name", "channel"];
 const ERP_KEEPALIVE_MS = 4 * 60 * 1000;
+const appSurface = document.body.dataset.surface || "admin";
+const isAdminSurface = appSurface === "admin";
+const isBiSurface = appSurface === "bi";
 
 const filterGroups = [
   { id: "tiempo",     label: "Período",       fields: ["year", "month"] },
@@ -28,10 +34,138 @@ const prefilterGroups = [
   { id: "comercial", label: "Comercial", fields: ["sales_force", "route_description", "seller_name"] },
 ];
 
+const ANALYSIS_PLAYBOOK = {
+  temporal_trend: {
+    summary: "Muestra cómo evoluciona la venta en el tiempo y dónde se acelera o desacelera.",
+    when: "Usalo cuando quieras ver tendencia, estacionalidad o caída reciente.",
+    questions: [
+      "¿Cómo evolucionaron las ventas mes a mes?",
+      "¿Qué vendedor o canal cayó más en el último período?",
+      "¿La tendencia reciente mejora o empeora?",
+    ],
+  },
+  dimension_ranking: {
+    summary: "Ordena la venta por una dimensión y muestra concentración y participación.",
+    when: "Sirve para ver top clientes, top vendedores, top marcas o mix de negocio.",
+    questions: [
+      "¿Quiénes son mis clientes más importantes?",
+      "¿Qué vendedores explican la mayor parte de la venta?",
+      "¿Qué marcas o líneas pesan más en el resultado?",
+    ],
+  },
+  recurrence_churn: {
+    summary: "Detecta recurrencia, pérdida de frecuencia y clientes que dejaron de comprar.",
+    when: "Usalo para revisar cartera dormida o riesgo comercial.",
+    questions: [
+      "¿Qué clientes dejaron de comprar?",
+      "¿En qué ruta o fuerza de ventas hay más pérdida de recurrencia?",
+      "¿Dónde conviene activar recuperación de cartera?",
+    ],
+  },
+  cross_sell_mix: {
+    summary: "Mide profundidad de surtido y oportunidades de cross-sell por cartera.",
+    when: "Sirve para ver cuántas familias compra cada cliente y dónde ampliar mix.",
+    questions: [
+      "¿Qué clientes compran poco mix?",
+      "¿Qué vendedor tiene mejor profundidad de surtido?",
+      "¿Dónde hay oportunidad de vender más familias?",
+    ],
+  },
+  seller_performance: {
+    summary: "Compara desempeño comercial por vendedor con foco en productividad.",
+    when: "Usalo para revisar ticket, cartera atendida y peso relativo por vendedor.",
+    questions: [
+      "¿Qué vendedor produce más venta por cliente?",
+      "¿Quién tiene mejor ticket promedio?",
+      "¿Dónde hay desvíos entre vendedores?",
+    ],
+  },
+  geographic_coverage: {
+    summary: "Compara cobertura territorial y peso comercial por ruta.",
+    when: "Sirve para detectar rutas débiles o con potencial desaprovechado.",
+    questions: [
+      "¿Qué rutas concentran más venta?",
+      "¿Dónde hay brechas territoriales?",
+      "¿Qué rutas necesitan revisión comercial?",
+    ],
+  },
+  sales_force_breakdown: {
+    summary: "Abre la venta por fuerza comercial para ver concentración y diferencias internas.",
+    when: "Usalo si querés comparar equipos o estructuras comerciales.",
+    questions: [
+      "¿Qué fuerza de ventas lidera?",
+      "¿Qué fuerza tiene menor productividad?",
+      "¿Cómo se reparte la venta dentro de cada fuerza?",
+    ],
+  },
+  product_analysis: {
+    summary: "Analiza participación y desempeño del portafolio por producto, línea o familia.",
+    when: "Sirve para revisar mix, retracción y foco de portafolio.",
+    questions: [
+      "¿Qué familias o líneas están cayendo?",
+      "¿Qué producto empuja el crecimiento?",
+      "¿Dónde se concentra el negocio por marca?",
+    ],
+  },
+  channel_analysis: {
+    summary: "Compara la venta por canal y su peso relativo dentro del negocio.",
+    when: "Usalo para revisar concentración y oportunidades por canal.",
+    questions: [
+      "¿Qué canal aporta más venta?",
+      "¿En qué canal conviene crecer?",
+      "¿Qué canal perdió participación?",
+    ],
+  },
+  margin_analysis: {
+    summary: "Cruza ingreso y costo para revisar rentabilidad relativa.",
+    when: "Solo aplica si los datos traen costo o margen.",
+    questions: [
+      "¿Qué clientes o productos venden mucho pero dejan poco margen?",
+      "¿Dónde hay venta rentable para profundizar?",
+      "¿Qué cartera combina volumen y rentabilidad?",
+    ],
+  },
+};
+
+const COMMERCIAL_REQUEST_RECIPES = [
+  {
+    title: "Resumen general",
+    action: "Usá Actualizar informe",
+    detail: "Te devuelve KPIs, insights, rankings, semáforos y gráficos del período elegido.",
+    examples: [
+      "Cómo vendimos este mes",
+      "Quiénes fueron los mejores vendedores",
+      "Qué marcas, canales y rutas explican la venta",
+    ],
+  },
+  {
+    title: "Diagnóstico puntual",
+    action: "Usá el Motor dinámico",
+    detail: "Elegí un análisis específico cuando ya tengas una pregunta concreta.",
+    examples: [
+      "Qué clientes están en riesgo",
+      "Qué ruta cayó más",
+      "Qué canal perdió participación",
+    ],
+  },
+  {
+    title: "Recorte comercial",
+    action: "Definí Enfoque del informe",
+    detail: "Primero recortá por vendedor, ruta, fuerza, marca o proveedor; después actualizá.",
+    examples: [
+      "Solo vendedor GOLDEN",
+      "Solo fuerza de ventas AMBA",
+      "Solo línea o marca específica",
+    ],
+  },
+];
+
 let activeFilterTab = "tiempo";
 let activePrefilterTab = "producto";
 let erpKeepaliveTimer = null;
 let progressDepth = 0;
+let progressTicker = null;
+let progressContext = null;
 
 function formatDateInput(date) {
   const year = date.getFullYear();
@@ -54,9 +188,133 @@ function createErpConfig() {
   };
 }
 
-async function api(url, options) {
-  const response = await fetch(url, options);
+function preferredStoredSalesSource() {
+  if (state.clickhouseStorage?.available) {
+    return "clickhouse";
+  }
+  if (state.erpStorage?.available) {
+    return "mongo";
+  }
+  if (state.clickhouseStorage?.configured || state.clickhouseStorage?.connected) {
+    return "clickhouse";
+  }
+  return "mongo";
+}
+
+function getStoredSalesSourceLabel(sourceMode) {
+  if (sourceMode === "clickhouse") {
+    return "ClickHouse";
+  }
+  if (sourceMode === "mongo") {
+    return "MongoDB";
+  }
+  return "persistencia ERP";
+}
+
+function getStoredSalesStorage(sourceMode) {
+  return sourceMode === "clickhouse" ? (state.clickhouseStorage || {}) : (state.erpStorage || {});
+}
+
+function getCommercialStorageWindow() {
+  const windows = [state.erpStorage, state.clickhouseStorage]
+    .filter((item) => item?.available && item?.periodStart && item?.periodEnd)
+    .map((item) => ({ start: item.periodStart, end: item.periodEnd }));
+  if (!windows.length) {
+    return { available: false, periodStart: "", periodEnd: "" };
+  }
+  return {
+    available: true,
+    periodStart: windows.map((item) => item.start).sort()[0],
+    periodEnd: windows.map((item) => item.end).sort().slice(-1)[0],
+  };
+}
+
+function resolveStoredSalesRange(sourceMode, from, to) {
+  const storage = getStoredSalesStorage(sourceMode);
+  const periodStart = storage?.periodStart || "";
+  const periodEnd = storage?.periodEnd || "";
+  let nextFrom = from || periodStart;
+  let nextTo = to || periodEnd;
+
+  if (periodStart && (!nextFrom || nextFrom < periodStart || nextFrom > periodEnd)) {
+    nextFrom = periodStart;
+  }
+  if (periodEnd && (!nextTo || nextTo > periodEnd || nextTo < periodStart)) {
+    nextTo = periodEnd;
+  }
+  if (nextFrom && nextTo && nextFrom > nextTo) {
+    nextFrom = periodStart || nextFrom;
+    nextTo = periodEnd || nextTo;
+  }
+  return { from: nextFrom, to: nextTo };
+}
+
+function resolveCommercialRange(from, to) {
+  const storage = getCommercialStorageWindow();
+  if (!storage.available) {
+    return { from: from || "", to: to || "" };
+  }
+  let nextFrom = from || storage.periodStart;
+  let nextTo = to || storage.periodEnd;
+  if (storage.periodStart && (!nextFrom || nextFrom < storage.periodStart || nextFrom > storage.periodEnd)) {
+    nextFrom = storage.periodStart;
+  }
+  if (storage.periodEnd && (!nextTo || nextTo > storage.periodEnd || nextTo < storage.periodStart)) {
+    nextTo = storage.periodEnd;
+  }
+  if (nextFrom && nextTo && nextFrom > nextTo) {
+    nextFrom = storage.periodStart || nextFrom;
+    nextTo = storage.periodEnd || nextTo;
+  }
+  return { from: nextFrom, to: nextTo };
+}
+
+function getPersistedTargetsLabel() {
+  return state.clickhouseStorage?.configured || state.clickhouseStorage?.connected
+    ? "MongoDB + ClickHouse"
+    : "MongoDB";
+}
+
+function readStoredAdminToken() {
+  try {
+    return sessionStorage.getItem("appAdminToken") || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function storeAdminToken(token) {
+  state.adminAuth.token = token || "";
+  try {
+    if (state.adminAuth.token) {
+      sessionStorage.setItem("appAdminToken", state.adminAuth.token);
+    } else {
+      sessionStorage.removeItem("appAdminToken");
+    }
+  } catch (_) {
+    // Ignorar almacenamiento no disponible.
+  }
+}
+
+function requestAdminToken() {
+  const token = window.prompt("Ingresá el token de admin para continuar:");
+  if (!token) {
+    throw new Error("La operación admin requiere un token válido.");
+  }
+  storeAdminToken(token.trim());
+}
+
+async function api(url, options, retryOnAuth = true) {
+  const headers = new Headers(options?.headers || {});
+  if (isAdminSurface && state.adminAuth.token) {
+    headers.set("X-Admin-Token", state.adminAuth.token);
+  }
+  const response = await fetch(url, { ...(options || {}), headers });
   const data = await response.json();
+  if (response.status === 401 && isAdminSurface && retryOnAuth) {
+    requestAdminToken();
+    return api(url, options, false);
+  }
   if (!response.ok) {
     throw new Error(data.error || "Error inesperado");
   }
@@ -65,23 +323,42 @@ async function api(url, options) {
 
 async function boot() {
   setStatus("Preparando estructura de análisis...");
-  const [filesResponse, schemaResponse, sessionResponse, erpStatus, erpStorage, erpPrefilters] = await Promise.all([
+  const [
+    filesResponse,
+    schemaResponse,
+    sessionResponse,
+    erpStatus,
+    erpStorage,
+    clickhouseStorage,
+    erpPrefilters,
+    adminErrorsResponse,
+  ] = await Promise.all([
     api(`/api/files?scope=${encodeURIComponent(state.scope)}`),
     api("/api/datasets"),
     api("/api/session").catch(() => ({ datasets: null })),
     api("/api/erp/status").catch(() => ({ configured: false, reachable: false, message: "ChessERP no disponible." })),
     api("/api/erp/storage-status").catch(() => ({ connected: false, available: false, message: "MongoDB ERP no disponible." })),
+    api("/api/clickhouse/storage-status").catch(() => ({ connected: false, available: false, configured: false, message: "ClickHouse no disponible." })),
     api("/api/erp/prefilter-options").catch(() => ({ filters: {} })),
+    isAdminSurface ? api("/api/admin/errors?limit=20").catch(() => ({ errors: [] })) : Promise.resolve({ errors: [] }),
   ]);
   state.files = filesResponse.files || [];
   state.schema = schemaResponse.datasets || {};
   state.erpStatus = erpStatus || { configured: false, reachable: false, message: "" };
   state.erpStorage = erpStorage || { connected: false, available: false, message: "" };
+  state.clickhouseStorage = clickhouseStorage || { connected: false, available: false, configured: false, message: "" };
   state.prefilters.available = erpPrefilters?.filters || {};
   state.prefilters.selected = normalizeSelectedFilters({}, state.prefilters.available);
+  state.adminErrors = adminErrorsResponse?.errors || [];
   initializeDatasets();
 
-  if (sessionResponse.datasets) {
+  if (isBiSurface) {
+    restoreBiDefaults(sessionResponse.datasets);
+    const commercialStorage = getCommercialStorageWindow();
+    setStatus(commercialStorage.available
+      ? "Base comercial lista para analizar."
+      : "Todavía no hay histórico comercial persistido disponible. Coordiná una sync desde Admin.");
+  } else if (sessionResponse.datasets) {
     await restoreSession(sessionResponse.datasets);
     setStatus("Sesión anterior restaurada. Podés analizar directamente o cambiar los archivos.");
   } else {
@@ -92,7 +369,9 @@ async function boot() {
 
   renderFileLibrary();
   renderDatasetConfigs();
+  renderCommercialGuide();
   renderPreview();
+  renderAdminDiagnostics();
   startErpKeepalive();
 }
 
@@ -120,9 +399,17 @@ async function restoreSession(saved) {
   // Ventas (múltiples fuentes)
   const savedSales = saved.sales;
   const savedErp = savedSales?.erp || {};
+  const useAuto = savedSales?.source === "auto";
   const useErp = savedSales?.source === "erp" || savedErp.enabled;
   const useMongo = savedSales?.source === "mongo";
-  if (useMongo) {
+  const useClickHouse = savedSales?.source === "clickhouse" && (
+    state.clickhouseStorage?.available || state.clickhouseStorage?.configured || state.clickhouseStorage?.connected
+  );
+  if (useClickHouse || useAuto) {
+    state.datasets.sales.sourceMode = useAuto ? preferredStoredSalesSource() : "clickhouse";
+    state.datasets.sales.erp.fechaDesde = savedSales?.fechaDesde || savedErp.fechaDesde || state.datasets.sales.erp.fechaDesde;
+    state.datasets.sales.erp.fechaHasta = savedSales?.fechaHasta || savedErp.fechaHasta || state.datasets.sales.erp.fechaHasta;
+  } else if (useMongo) {
     state.datasets.sales.sourceMode = "mongo";
     state.datasets.sales.erp.fechaDesde = savedSales?.fechaDesde || savedErp.fechaDesde || state.datasets.sales.erp.fechaDesde;
     state.datasets.sales.erp.fechaHasta = savedSales?.fechaHasta || savedErp.fechaHasta || state.datasets.sales.erp.fechaHasta;
@@ -175,10 +462,25 @@ async function restoreSession(saved) {
   }
 }
 
+function restoreBiDefaults(saved) {
+  state.datasets.sales.sourceMode = "auto";
+  const savedSales = saved?.sales || {};
+  const savedErp = savedSales.erp || {};
+  const requestedFrom = savedSales.fechaDesde || savedErp.fechaDesde || "";
+  const requestedTo = savedSales.fechaHasta || savedErp.fechaHasta || "";
+  const { from, to } = resolveCommercialRange(requestedFrom, requestedTo);
+  if (from) {
+    state.datasets.sales.erp.fechaDesde = from;
+  }
+  if (to) {
+    state.datasets.sales.erp.fechaHasta = to;
+  }
+}
+
 function initializeDatasets() {
   state.datasets = {
     sales: {
-      sourceMode: "files",
+      sourceMode: isBiSurface ? "auto" : "files",
       sources: [createSource()],
       mapping: {},
       mappingSuggestions: {},
@@ -216,9 +518,12 @@ function createSingleDataset() {
 
 function renderFileLibrary() {
   const container = document.getElementById("fileLibrary");
+  if (!container) {
+    return;
+  }
   const sidePanel = document.querySelector(".controls-side");
   if (sidePanel) {
-    sidePanel.classList.toggle("hidden", !usesFileMode());
+    sidePanel.classList.toggle("hidden", !isAdminSurface || !usesFileMode());
   }
   if (!state.files.length) {
     container.innerHTML = "<div class='file-item muted'>No hay archivos .xlsx o .xlsm disponibles.</div>";
@@ -234,38 +539,78 @@ function renderFileLibrary() {
 }
 
 function usesFileMode() {
-  return state.datasets?.sales?.sourceMode === "files";
+  return isAdminSurface && state.datasets?.sales?.sourceMode === "files";
 }
 
 function renderDatasetConfigs() {
   const container = document.getElementById("datasetConfigs");
+  if (!container) {
+    return;
+  }
   container.innerHTML = renderSalesDatasetCard();
 
   bindDatasetEvents(container);
+  renderCommercialGuide();
+}
+
+function renderCommercialGuide() {
+  const container = document.getElementById("commercialGuide");
+  if (!container || !isBiSurface) {
+    return;
+  }
+  const storage = getCommercialStorageWindow();
+  const period = storage.periodStart && storage.periodEnd
+    ? `${storage.periodStart} a ${storage.periodEnd}`
+    : "sin histórico disponible todavía";
+  container.innerHTML = `
+    <div class="guide-callout">
+      <strong>Cómo pedir información en esta vista</strong>
+      <div class="muted">Acá no escribís una consulta libre. El flujo es: elegís período, definís el enfoque comercial y después ejecutás el informe general o un análisis puntual.</div>
+      <div class="muted">La app resuelve automáticamente la base correcta según el rango que pedís. Cobertura disponible: ${escapeHtml(period)}.</div>
+    </div>
+    <div class="guide-grid">
+      ${COMMERCIAL_REQUEST_RECIPES.map((recipe) => `
+        <article class="guide-card">
+          <div class="guide-card-title">${escapeHtml(recipe.title)}</div>
+          <div class="guide-card-action">${escapeHtml(recipe.action)}</div>
+          <div class="muted">${escapeHtml(recipe.detail)}</div>
+          <div class="guide-examples">
+            ${recipe.examples.map((item) => `<span class="guide-chip">${escapeHtml(item)}</span>`).join("")}
+          </div>
+        </article>
+      `).join("")}
+    </div>
+  `;
 }
 
 function renderSalesDatasetCard() {
+  if (isBiSurface) {
+    return renderBiSalesCard();
+  }
   const schema = state.schema.sales;
   const dataset = state.datasets.sales;
   const usingErp = dataset.sourceMode === "erp";
   const usingMongo = dataset.sourceMode === "mongo";
+  const usingClickHouse = dataset.sourceMode === "clickhouse";
+  const clickhouseReady = state.clickhouseStorage?.available || state.clickhouseStorage?.configured || state.clickhouseStorage?.connected;
   return `
     <div class="source-card ${state.preview.datasetType === "sales" ? "active" : ""}">
       <div class="subpanel-header">
         <div>
           <h3>${escapeHtml(schema.label)}</h3>
-          <div class="muted">${usingErp ? "Ventas en vivo desde ChessERP con rango de fechas." : usingMongo ? "Ventas ERP persistidas en MongoDB para trabajar sin depender del Excel." : "Podés cargar varios archivos, por ejemplo uno por año."}</div>
+          <div class="muted">${usingErp ? "Ventas en vivo desde ChessERP con rango de fechas." : usingMongo ? "Ventas ERP persistidas en MongoDB para trabajar sin depender del Excel." : usingClickHouse ? "Ventas históricas servidas desde ClickHouse para BI y consultas más pesadas." : "Podés cargar varios archivos, por ejemplo uno por año."}</div>
         </div>
-        ${usingErp || usingMongo ? `<button data-sales-preview-erp="1">${state.preview.datasetType === "sales" ? "Viendo fuente" : "Ver fuente"}</button>` : `<button data-sales-add="1">Agregar archivo</button>`}
+        ${usingErp || usingMongo || usingClickHouse ? `<button data-sales-preview-erp="1">${state.preview.datasetType === "sales" ? "Viendo fuente" : "Ver fuente"}</button>` : `<button data-sales-add="1">Agregar archivo</button>`}
       </div>
 
       <div class="segmented">
-        <button class="${!usingErp && !usingMongo ? "active" : ""}" data-sales-mode="files">Archivos</button>
+        <button class="${!usingErp && !usingMongo && !usingClickHouse ? "active" : ""}" data-sales-mode="files">Archivos</button>
         <button class="${usingErp ? "active" : ""}" data-sales-mode="erp">ChessERP</button>
         <button class="${usingMongo ? "active" : ""}" data-sales-mode="mongo">MongoDB</button>
+        <button class="${usingClickHouse ? "active" : ""}" data-sales-mode="clickhouse" ${clickhouseReady ? "" : "disabled"}>ClickHouse</button>
       </div>
 
-      ${usingErp ? renderErpSalesPanel(dataset.erp) : usingMongo ? renderMongoSalesPanel(dataset.erp) : `
+      ${usingErp ? renderErpSalesPanel(dataset.erp) : usingMongo ? renderMongoSalesPanel(dataset.erp) : usingClickHouse ? renderClickHouseSalesPanel(dataset.erp) : `
         <div class="sales-source-list">
           ${dataset.sources.map((source, index) => renderSalesSource(source, index)).join("")}
         </div>
@@ -278,9 +623,64 @@ function renderSalesDatasetCard() {
   `;
 }
 
+function renderBiSalesCard() {
+  const schema = state.schema.sales;
+  return `
+    <div class="source-card surface-bi-card">
+      <div class="subpanel-header">
+        <div>
+          <h3>${escapeHtml(schema.label)}</h3>
+          <div class="muted">Vista de solo lectura sobre la base comercial. El usuario comercial no ejecuta syncs ni cambia fuentes.</div>
+        </div>
+      </div>
+      ${renderBiSalesPanel(state.datasets.sales.erp)}
+    </div>
+  `;
+}
+
+function renderBiSalesPanel(erp) {
+  const storage = getCommercialStorageWindow();
+  const period = storage.periodStart && storage.periodEnd
+    ? `${storage.periodStart} a ${storage.periodEnd}`
+    : "todavía sin histórico disponible";
+  return `
+    <div class="erp-panel bi-panel">
+      <div class="bi-surface-note">
+        <strong>Base comercial:</strong> consulta automática según el período seleccionado
+      </div>
+      <div class="row">
+        <label>
+          Fecha desde
+          <input data-erp-from="1" type="date" value="${escapeHtml(erp.fechaDesde || "")}">
+        </label>
+        <label>
+          Fecha hasta
+          <input data-erp-to="1" type="date" value="${escapeHtml(erp.fechaHasta || "")}">
+        </label>
+      </div>
+      ${renderPrefilterPanel("Enfoque del informe")}
+      <div class="request-flow">
+        <div class="request-step">
+          <strong>1. Actualizar informe</strong>
+          <div class="muted">Usalo para obtener el tablero completo: KPIs, insights, rankings, gráficos y plan de acción.</div>
+        </div>
+        <div class="request-step">
+          <strong>2. Motor dinámico</strong>
+          <div class="muted">Usalo cuando ya tenés una pregunta puntual, por ejemplo tendencia, ranking, churn, mix, rutas o canales.</div>
+        </div>
+      </div>
+      <div class="muted">Cobertura disponible actualmente: ${escapeHtml(period)}.</div>
+    </div>
+  `;
+}
+
 function renderErpSalesPanel(erp) {
   const statusClass = state.erpStatus.reachable ? "ok" : state.erpStatus.configured ? "warn" : "danger";
-  const storage = renderMongoStorageSummary();
+  const storage = `
+    ${renderMongoStorageSummary()}
+    ${state.clickhouseStorage?.configured || state.clickhouseStorage?.connected ? renderClickHouseStorageSummary() : ""}
+  `;
+  const persistLabel = getPersistedTargetsLabel();
   return `
     <div class="erp-panel">
       <div class="erp-status ${statusClass}">${escapeHtml(state.erpStatus.message || "Estado de ChessERP desconocido.")}</div>
@@ -295,7 +695,7 @@ function renderErpSalesPanel(erp) {
         </label>
       </div>
       <div class="button-row">
-        <button class="primary" data-erp-sync="1" ${state.erpSyncPending ? "disabled" : ""}>${state.erpSyncPending ? "Sincronizando..." : "Sincronizar en MongoDB"}</button>
+        <button class="primary" data-erp-sync="1" ${state.erpSyncPending ? "disabled" : ""}>${state.erpSyncPending ? "Sincronizando..." : `Sincronizar en ${persistLabel}`}</button>
       </div>
       ${renderPrefilterPanel("Enfoque del informe")}
       ${storage}
@@ -326,12 +726,34 @@ function renderMongoSalesPanel(erp) {
   `;
 }
 
+function renderClickHouseSalesPanel(erp) {
+  const statusClass = state.clickhouseStorage.available ? "ok" : state.clickhouseStorage.connected ? "warn" : "danger";
+  return `
+    <div class="erp-panel">
+      <div class="erp-status ${statusClass}">${escapeHtml(state.clickhouseStorage.message || "Estado de ClickHouse desconocido.")}</div>
+      <div class="row">
+        <label>
+          Fecha desde
+          <input data-erp-from="1" type="date" value="${escapeHtml(erp.fechaDesde || "")}">
+        </label>
+        <label>
+          Fecha hasta
+          <input data-erp-to="1" type="date" value="${escapeHtml(erp.fechaHasta || "")}">
+        </label>
+      </div>
+      ${renderPrefilterPanel("Enfoque del informe")}
+      ${renderClickHouseStorageSummary()}
+      <div class="muted">El análisis usará ventas ERP persistidas en ClickHouse para el rango seleccionado.</div>
+    </div>
+  `;
+}
+
 function renderPrefilterPanel(title) {
   const availableGroups = prefilterGroups.filter((group) =>
     group.fields.some((field) => state.prefilters.available[field]?.options?.length)
   );
   if (!availableGroups.length) {
-    return "<div class='muted'>Sin agrupaciones ERP disponibles todavía. Sincronizá maestros al menos una vez para habilitar el enfoque por producto y comercial.</div>";
+    return "<div class='muted'>Todavía no hay agrupaciones comerciales disponibles. Pedí una actualización de maestros para habilitar el enfoque por producto y comercial.</div>";
   }
   if (!availableGroups.find((group) => group.id === activePrefilterTab)) {
     activePrefilterTab = availableGroups[0].id;
@@ -402,6 +824,65 @@ function renderMongoStorageSummary() {
   `;
 }
 
+function renderClickHouseStorageSummary() {
+  const storage = state.clickhouseStorage || {};
+  const period = storage.periodStart && storage.periodEnd ? `${storage.periodStart} a ${storage.periodEnd}` : "sin registros";
+  return `
+    <div class="mongo-summary">
+      <div><strong>Ventas persistidas:</strong> ${Number(storage.records || 0).toLocaleString("es-AR")}</div>
+      <div><strong>Período disponible:</strong> ${escapeHtml(period)}</div>
+      <div><strong>Base:</strong> ${escapeHtml(storage.database || "-")}</div>
+      <div><strong>Tabla:</strong> ${escapeHtml(storage.table || "-")}</div>
+      <div><strong>Rows activas:</strong> ${Number(storage.rows || 0).toLocaleString("es-AR")}</div>
+      <div><strong>Storage estimado:</strong> ${Number(storage.storageMB || 0).toLocaleString("es-AR")} MB</div>
+    </div>
+  `;
+}
+
+function renderAdminDiagnostics() {
+  const summary = document.getElementById("adminOpsSummary");
+  const errors = document.getElementById("adminErrors");
+  if (!summary || !errors) {
+    return;
+  }
+  const storage = state.erpStorage || {};
+  const clickhouse = state.clickhouseStorage || {};
+  const period = storage.periodStart && storage.periodEnd
+    ? `${storage.periodStart} a ${storage.periodEnd}`
+    : "sin período cargado";
+  const clickhousePeriod = clickhouse.periodStart && clickhouse.periodEnd
+    ? `${clickhouse.periodStart} a ${clickhouse.periodEnd}`
+    : "sin período cargado";
+  summary.innerHTML = [
+    `ChessERP: ${state.erpStatus.message || "Sin estado"}`,
+    `MongoDB: ${storage.message || "Sin estado"}`,
+    `ClickHouse: ${clickhouse.message || "Sin estado"}`,
+    `Cobertura disponible en Mongo: ${period}`,
+    `Cobertura disponible en ClickHouse: ${clickhousePeriod}`,
+    `Último rango sincronizado: ${storage.lastRange ? `${storage.lastRange.fechaDesde} a ${storage.lastRange.fechaHasta}` : "sin sincronizaciones"}`,
+    `Última sync con ventas: ${Number(storage.lastSyncRowsValid || 0).toLocaleString("es-AR")} filas`,
+    `Ventas persistidas en ClickHouse: ${Number(clickhouse.records || 0).toLocaleString("es-AR")} filas`,
+    "Siguiente paso recomendado: mover el backfill histórico y las syncs recurrentes a procesos backend programados.",
+  ].map((item) => `<div class="insight-item">${escapeHtml(item)}</div>`).join("");
+
+  if (!state.adminErrors.length) {
+    errors.innerHTML = "<div class='muted'>Sin errores recientes registrados.</div>";
+    return;
+  }
+  errors.innerHTML = state.adminErrors.map((item) => {
+    const extra = Object.keys(item.extra || {}).length
+      ? `<div class="muted">${escapeHtml(JSON.stringify(item.extra))}</div>`
+      : "";
+    return `
+      <div class="insight-item">
+        <strong>${escapeHtml(item.context || "error")}</strong> · ${escapeHtml(item.timestamp || "")}
+        <div>${escapeHtml(item.error || "Sin detalle")}</div>
+        ${extra}
+      </div>
+    `;
+  }).join("");
+}
+
 function renderSalesSource(source, index) {
   const fileOptions = ['<option value="">Sin archivo</option>']
     .concat(state.files.map((file) => `<option value="${escapeHtml(file.path)}" ${file.path === source.file ? "selected" : ""}>${escapeHtml(file.name)} · ${escapeHtml(file.location)}</option>`))
@@ -440,7 +921,7 @@ function renderSalesSource(source, index) {
 }
 
 function renderSalesMappingFields() {
-  if (state.datasets.sales.sourceMode === "erp" || state.datasets.sales.sourceMode === "mongo") {
+  if (state.datasets.sales.sourceMode === "erp" || state.datasets.sales.sourceMode === "mongo" || state.datasets.sales.sourceMode === "clickhouse") {
     return "";
   }
   const schema = state.schema.sales;
@@ -780,12 +1261,27 @@ async function refreshPreviewForDataset(datasetType) {
 
 async function refreshErpStorageStatus() {
   state.erpStorage = await api("/api/erp/storage-status").catch(() => ({ connected: false, available: false, message: "MongoDB ERP no disponible." }));
+  renderAdminDiagnostics();
+}
+
+async function refreshClickHouseStorageStatus() {
+  state.clickhouseStorage = await api("/api/clickhouse/storage-status").catch(() => ({ connected: false, available: false, configured: false, message: "ClickHouse no disponible." }));
+  renderAdminDiagnostics();
 }
 
 async function refreshErpPrefilterOptions() {
   const response = await api("/api/erp/prefilter-options").catch(() => ({ filters: {} }));
   state.prefilters.available = response.filters || {};
   state.prefilters.selected = normalizeSelectedFilters(state.prefilters.selected, state.prefilters.available);
+}
+
+async function refreshAdminErrors() {
+  if (!isAdminSurface) {
+    return;
+  }
+  const response = await api("/api/admin/errors?limit=20").catch(() => ({ errors: [] }));
+  state.adminErrors = response.errors || [];
+  renderAdminDiagnostics();
 }
 
 async function syncErpToMongo() {
@@ -799,14 +1295,16 @@ async function syncErpToMongo() {
   }
   state.erpSyncPending = true;
   renderDatasetConfigs();
+  const persistLabel = getPersistedTargetsLabel();
   try {
-    setStatus(`Sincronizando ChessERP en MongoDB para ${fechaDesde} a ${fechaHasta}...`);
-    const data = await withProgress(`Sincronizando ChessERP en MongoDB para ${fechaDesde} a ${fechaHasta}...`, () => api("/api/erp/sync", {
+    setStatus(`Sincronizando ChessERP en ${persistLabel} para ${fechaDesde} a ${fechaHasta}...`);
+    const data = await withProgress(`Sincronizando ChessERP en ${persistLabel} para ${fechaDesde} a ${fechaHasta}...`, () => api("/api/erp/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ fechaDesde, fechaHasta, refreshMasters: false }),
-    }));
+    }), { operationType: "sync", fechaDesde, fechaHasta, sourceMode: "erp" });
     state.erpStorage = data.storage || state.erpStorage;
+    state.clickhouseStorage = data.clickhouseStorage || state.clickhouseStorage;
     await refreshErpPrefilterOptions();
     if (data.warning) {
       state.preview = { datasetType: "sales", sourceIndex: 0 };
@@ -815,7 +1313,7 @@ async function syncErpToMongo() {
       setStatus(`Sincronización completa sin ventas nuevas para ${fechaDesde} a ${fechaHasta}. ${data.warning}`);
       return;
     }
-    state.datasets.sales.sourceMode = "mongo";
+    state.datasets.sales.sourceMode = preferredStoredSalesSource();
     state.preview = { datasetType: "sales", sourceIndex: 0 };
     renderDatasetConfigs();
     renderPreview();
@@ -825,7 +1323,12 @@ async function syncErpToMongo() {
     const chunkMessage = Number(data.sync?.chunkCount || 0) > 1
       ? ` La app dividió el rango en ${data.sync.chunkCount} tramos internos.`
       : "";
-    setStatus(`Sincronización completa: ${data.rowsValid} líneas de venta. ${mastersMessage}.${chunkMessage}`);
+    const storageBreakdown = [
+      `base operativa ${Number(data.mongoStored || 0).toLocaleString("es-AR")} filas`,
+      data.clickhouseStorage?.configured ? `base histórica ${Number(data.clickhouseStored || 0).toLocaleString("es-AR")} filas` : "",
+    ].filter(Boolean).join(" · ");
+    setStatus(`Sincronización completa: ${data.rowsValid} líneas de venta. ${storageBreakdown}. ${mastersMessage}.${chunkMessage}`);
+    renderAdminDiagnostics();
   } finally {
     state.erpSyncPending = false;
     renderDatasetConfigs();
@@ -835,6 +1338,9 @@ async function syncErpToMongo() {
 function renderPreview() {
   const meta = document.getElementById("previewMeta");
   const container = document.getElementById("previewContainer");
+  if (!meta || !container) {
+    return;
+  }
   const target = getPreviewTarget();
 
   if (!target) {
@@ -883,15 +1389,19 @@ function renderPreview() {
 
 function getPreviewTarget() {
   if (state.preview.datasetType === "sales") {
-    if (state.datasets.sales.sourceMode === "erp" || state.datasets.sales.sourceMode === "mongo") {
+    if (state.datasets.sales.sourceMode === "erp" || state.datasets.sales.sourceMode === "mongo" || state.datasets.sales.sourceMode === "clickhouse" || state.datasets.sales.sourceMode === "auto") {
       const erp = state.datasets.sales.erp;
       return {
-        meta: `${state.schema.sales.label} · ${state.datasets.sales.sourceMode === "mongo" ? "MongoDB" : "ChessERP"} · ${erp.fechaDesde || "sin fecha"} a ${erp.fechaHasta || "sin fecha"}`,
-        message: state.datasets.sales.sourceMode === "mongo"
-          ? "La fuente de ventas será MongoDB con datos sincronizados desde ChessERP."
-          : state.erpStatus.reachable
-            ? "ChessERP no ofrece preview tabular en esta pantalla. El análisis tomará ventas históricas del rango seleccionado."
-            : "La conexión con ChessERP no está disponible. Revisá el estado antes de analizar.",
+        meta: `${state.schema.sales.label} · ${erp.fechaDesde || "sin fecha"} a ${erp.fechaHasta || "sin fecha"}`,
+        message: isBiSurface
+          ? "La base comercial se resolverá automáticamente según el período seleccionado."
+          : state.datasets.sales.sourceMode === "mongo"
+            ? "La fuente de ventas será MongoDB con datos sincronizados desde ChessERP."
+            : state.datasets.sales.sourceMode === "clickhouse"
+              ? "La fuente de ventas será ClickHouse con datos persistidos y compactados desde ChessERP."
+              : state.erpStatus.reachable
+                ? "ChessERP no ofrece preview tabular en esta pantalla. El análisis tomará ventas históricas del rango seleccionado."
+                : "La conexión con ChessERP no está disponible. Revisá el estado antes de analizar.",
       };
     }
     const source = getSalesPreviewSource();
@@ -959,10 +1469,10 @@ async function analyze() {
     filters: serializeFilters(),
   };
 
-  if (state.datasets.sales.sourceMode === "erp" || state.datasets.sales.sourceMode === "mongo") {
+  if (state.datasets.sales.sourceMode === "erp" || state.datasets.sales.sourceMode === "mongo" || state.datasets.sales.sourceMode === "clickhouse" || state.datasets.sales.sourceMode === "auto") {
     const { fechaDesde, fechaHasta } = state.datasets.sales.erp;
     if (!fechaDesde || !fechaHasta) {
-      setStatus("Elegí fecha desde y fecha hasta para consultar ventas ERP.");
+      setStatus(isBiSurface ? "Elegí fecha desde y fecha hasta para consultar la base comercial." : "Elegí fecha desde y fecha hasta para consultar ventas ERP.");
       return;
     }
     payload.datasets.sales = {
@@ -1004,17 +1514,26 @@ async function analyze() {
   }
 
   setStatus(
-    state.datasets.sales.sourceMode === "erp"
-      ? "Consultando ChessERP, relacionando ventas con maestros y recalculando el informe..."
-      : state.datasets.sales.sourceMode === "mongo"
-        ? "Leyendo ventas ERP persistidas en MongoDB, relacionando datos y recalculando el informe..."
-        : "Relacionando ventas con maestros y recalculando el informe..."
+    isBiSurface
+      ? "Consultando la base comercial, relacionando ventas con maestros y recalculando el informe..."
+      : state.datasets.sales.sourceMode === "erp"
+        ? "Consultando ChessERP, relacionando ventas con maestros y recalculando el informe..."
+        : state.datasets.sales.sourceMode === "mongo"
+          ? "Leyendo ventas ERP persistidas en MongoDB, relacionando datos y recalculando el informe..."
+          : state.datasets.sales.sourceMode === "clickhouse"
+            ? "Leyendo ventas ERP persistidas en ClickHouse, relacionando datos y recalculando el informe..."
+            : "Relacionando ventas con maestros y recalculando el informe..."
   );
   const data = await withProgress(document.getElementById("status").textContent || "Procesando análisis...", () => api("/api/analyze", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
-  }));
+  }), {
+    operationType: "analyze",
+    fechaDesde: state.datasets.sales.erp?.fechaDesde,
+    fechaHasta: state.datasets.sales.erp?.fechaHasta,
+    sourceMode: state.datasets.sales.sourceMode,
+  });
   renderResults(data);
   setStatus(`Análisis completo: ${data.meta.rowsAnalyzed} registros analizados entre ${data.meta.periodStart} y ${data.meta.periodEnd}.`);
 }
@@ -1031,7 +1550,7 @@ function renderResults(data) {
   renderActionPlan(data.actionPlan);
   renderRatios(data.ratios, data.opportunities);
   renderForecast(data.forecast);
-  renderCharts(data.charts);
+  renderCharts(data.charts, data.summary?.volumeModeActive);
   renderRankings(data.rankings);
   renderDynamicPanel(data);
 }
@@ -1137,7 +1656,17 @@ function renderSelectableField(kind, field, config, selectedValues) {
 }
 
 function renderSummaryCards(summary) {
-  const cards = [
+  const volumeMode = !!summary.volumeModeActive;
+  const cards = volumeMode ? [
+    ["Bultos 90 días", decimalNumber(summary.unitsCurrent), `vs previo ${summary.unitsGrowthPct}% · base ${decimalNumber(summary.unitsPrevious || 0)}`],
+    ["Pedidos", intNumber(summary.ordersCurrent), `${decimalNumber(summary.avgUnitsPerOrder)} bultos por pedido`],
+    ["Venta 90 días", money(summary.salesCurrent), `base ${money(summary.salesPrevious || 0)} · ${summary.salesGrowthPct}%`],
+    ["Precio promedio / bulto", money(summary.avgUnitPrice), `${money(summary.avgTicket)} ticket cliente`],
+    ["Clientes activos", intNumber(summary.activeClients), `${summary.activeRatioPct}% del padrón`],
+    ["Bultos por vendedor", decimalNumber(summary.unitsPerActiveSeller), `${summary.sellerCount} vendedores · ${summary.salesForceCount} fuerzas`],
+    ["Mix activo", `${summary.brandCount} marcas`, `${summary.businessUnitCount} unidades negocio · ${summary.channelCount} canales`],
+    ["Cobertura BI", `${summary.articleCoveragePct}%`, `${summary.routeCoveragePct}% rutas · ${summary.sellerCoveragePct}% vendedores`],
+  ] : [
     ["Venta 90 días", money(summary.salesCurrent), `vs previo ${summary.salesGrowthPct}% · base ${money(summary.salesPrevious || 0)}`],
     ["Pedidos", intNumber(summary.ordersCurrent), `${money(summary.avgOrderValue)} por pedido`],
     ["Unidades", decimalNumber(summary.unitsCurrent), `${decimalNumber(summary.avgUnitsPerOrder)} por pedido`],
@@ -1203,7 +1732,28 @@ function renderActionPlan(items) {
 }
 
 function renderRatios(ratios, opportunities) {
-  const items = [
+  const volumeMode = !!ratios.volumeModeActive;
+  const items = volumeMode ? [
+    `Bultos por cliente: ${decimalNumber(ratios.unitsPerClient)}`,
+    `Bultos por vendedor: ${decimalNumber(ratios.unitsPerSeller)}`,
+    `Clientes por vendedor: ${ratios.clientsPerSeller}`,
+    `Pedidos por vendedor: ${ratios.ordersPerSeller}`,
+    `Bultos por pedido: ${decimalNumber(ratios.avgUnitsPerOrder)}`,
+    `Precio promedio por bulto: ${money(ratios.avgUnitPrice)}`,
+    `Venta por cliente: ${money(ratios.salesPerClient)}`,
+    `Venta por vendedor: ${money(ratios.salesPerSeller)}`,
+    `Top 3 fuerzas de ventas: ${ratios.top3SalesForcesSharePct}% de la venta`,
+    `Top 3 vendedores: ${ratios.top3SellersSharePct}% de la venta`,
+    `Marca líder: ${ratios.topBrandSharePct}% de la venta`,
+    `Unidad de negocio líder: ${ratios.topBusinessUnitSharePct}% de la venta`,
+    `Canal líder: ${ratios.topChannelSharePct}% de la venta`,
+    `Profundidad media: ${ratios.familyBreadthPerClient} familias por cliente`,
+    `Potencial recuperación de cartera: ${money(opportunities.recoverDormantSales)}`,
+    `Potencial cross-sell: ${money(opportunities.crossSellPotential)}`,
+    `Potencial optimización de rutas: ${money(opportunities.routeOptimizationPotential)}`,
+    `Potencial foco en mix: ${money(opportunities.familyFocusPotential)}`,
+    `Potencial total estimado: ${money(opportunities.totalPotential)}`,
+  ] : [
     `Venta por cliente: ${money(ratios.salesPerClient)}`,
     `Venta por vendedor: ${money(ratios.salesPerSeller)}`,
     `Clientes por vendedor: ${ratios.clientsPerSeller}`,
@@ -1227,7 +1777,13 @@ function renderRatios(ratios, opportunities) {
 }
 
 function renderForecast(forecast) {
-  const items = [
+  const volumeMode = !!forecast.volumeModeActive;
+  const items = volumeMode ? [
+    `Base mensual reciente: ${decimalNumber(forecast.baseMonthlyUnits)} bultos`,
+    `Tendencia reciente: ${forecast.unitsTrendPct}%`,
+    `Proyección próximo trimestre: ${decimalNumber(forecast.projectedQuarterUnits)} bultos`,
+    `Referencia monetaria: ${money(forecast.projectedQuarterSales)}`,
+  ] : [
     `Base mensual reciente: ${money(forecast.baseMonthlySales)}`,
     `Tendencia reciente: ${forecast.trendPct}%`,
     `Proyección próximo trimestre: ${money(forecast.projectedQuarterSales)}`,
@@ -1235,30 +1791,32 @@ function renderForecast(forecast) {
   document.getElementById("forecastCards").innerHTML = items.map((item) => `<div class="insight-item">${item}</div>`).join("");
 }
 
-function renderCharts(charts) {
-  document.getElementById("chartSalesByMonth").innerHTML = renderLineChart(charts.salesByMonth || [], money);
-  document.getElementById("chartForecast").innerHTML = renderBars(charts.salesForecast || [], money);
-  document.getElementById("chartZoneSales").innerHTML = renderBars(charts.salesForceSales || [], money);
-  document.getElementById("chartSellerSales").innerHTML = renderBars(charts.sellerProductivity || [], money);
-  document.getElementById("chartFamilyMomentum").innerHTML = renderBars(charts.brandSales || [], money);
-  document.getElementById("chartCoverage").innerHTML = renderBars(charts.channelSales || [], money);
+function renderCharts(charts, volumeMode = false) {
+  const formatter = volumeMode ? decimalNumber : money;
+  document.getElementById("chartSalesByMonth").innerHTML = renderLineChart(charts.salesByMonth || [], formatter);
+  document.getElementById("chartForecast").innerHTML = renderBars(charts.salesForecast || [], formatter);
+  document.getElementById("chartZoneSales").innerHTML = renderBars(charts.salesForceSales || [], formatter);
+  document.getElementById("chartSellerSales").innerHTML = renderBars(charts.sellerProductivity || [], formatter);
+  document.getElementById("chartFamilyMomentum").innerHTML = renderBars(charts.brandSales || [], formatter);
+  document.getElementById("chartCoverage").innerHTML = renderBars(charts.channelSales || [], formatter);
 }
 
 function renderRankings(rankings) {
+  const volumeMode = !!rankings.volumeModeActive;
   renderRankingGroup("clientsRankings", [
-    { title: "Clientes más valiosos", items: rankings.positiveClients, formatter: clientLine },
+    { title: volumeMode ? "Clientes con más volumen" : "Clientes más valiosos", items: rankings.positiveClients, formatter: (item) => clientLine(item, volumeMode) },
     { title: "Clientes en riesgo", items: rankings.riskClients, formatter: clientRiskLine },
   ]);
   renderRankingGroup("commercialRankings", [
-    { title: "Vendedores destacados", items: rankings.topSellers, formatter: sellerLine },
-    { title: "Vendedores más rentables", items: rankings.productiveSellers, formatter: productiveSellerLine },
-    { title: "Fuerzas de ventas principales", items: rankings.topSalesForces, formatter: salesForceLine },
-    { title: "Rutas principales", items: rankings.topRoutes, formatter: routeLine },
+    { title: volumeMode ? "Vendedores con más volumen" : "Vendedores destacados", items: rankings.topSellers, formatter: (item) => sellerLine(item, volumeMode) },
+    { title: volumeMode ? "Mejor volumen por pedido" : "Vendedores más rentables", items: rankings.productiveSellers, formatter: (item) => productiveSellerLine(item, volumeMode) },
+    { title: "Fuerzas de ventas principales", items: rankings.topSalesForces, formatter: (item) => salesForceLine(item, volumeMode) },
+    { title: "Rutas principales", items: rankings.topRoutes, formatter: (item) => routeLine(item, volumeMode) },
   ]);
   renderRankingGroup("mixRankings", [
-    { title: "Marcas líderes", items: rankings.topBrands, formatter: brandLine },
-    { title: "Unidades de negocio", items: rankings.topBusinessUnits, formatter: businessUnitLine },
-    { title: "Canales principales", items: rankings.topChannels, formatter: channelLine },
+    { title: "Marcas líderes", items: rankings.topBrands, formatter: (item) => brandLine(item, volumeMode) },
+    { title: "Unidades de negocio", items: rankings.topBusinessUnits, formatter: (item) => businessUnitLine(item, volumeMode) },
+    { title: "Canales principales", items: rankings.topChannels, formatter: (item) => channelLine(item, volumeMode) },
     { title: "Potencial", items: [{ text: rankings.opportunityHeadline }], formatter: genericLine },
   ]);
 }
@@ -1419,40 +1977,40 @@ function renderBars(items, formatter, forceNegative = false, diverging = false) 
   `;
 }
 
-function clientLine(item) {
-  return `<strong>${escapeHtml(item.client)}</strong><br><span class="muted">${money(item.sales12m)} · ${item.families} familias · ${item.sales_force}</span>`;
+function clientLine(item, volumeMode = false) {
+  return `<strong>${escapeHtml(item.client)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.quantity12m || 0)} bultos` : money(item.sales12m)} · ${item.families} familias · ${item.sales_force}</span>`;
 }
 
 function clientRiskLine(item) {
   return `<strong>${escapeHtml(item.client)}</strong><br><span class="muted">${item.status} · ${money(item.salesHistory)} histórico · ${item.recencyDays} días sin compra</span>`;
 }
 
-function sellerLine(item) {
-  return `<strong>${escapeHtml(item.seller)}</strong><br><span class="muted">${money(item.sales)} · ${item.clients} clientes · ${money(item.avgOrderValue || 0)} ticket</span>`;
+function sellerLine(item, volumeMode = false) {
+  return `<strong>${escapeHtml(item.seller)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.quantity || 0)} bultos` : money(item.sales)} · ${item.clients} clientes · ${volumeMode ? `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido` : `${money(item.avgOrderValue || 0)} ticket`}</span>`;
 }
 
-function productiveSellerLine(item) {
-  return `<strong>${escapeHtml(item.seller)}</strong><br><span class="muted">${money(item.avgOrderValue || 0)} por pedido · ${item.orders} pedidos · ${money(item.sales)}</span>`;
+function productiveSellerLine(item, volumeMode = false) {
+  return `<strong>${escapeHtml(item.seller)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.avgUnitsPerOrder || 0)} bultos por pedido` : `${money(item.avgOrderValue || 0)} por pedido`} · ${item.orders} pedidos · ${volumeMode ? `${decimalNumber(item.quantity || 0)} bultos` : money(item.sales)}</span>`;
 }
 
-function salesForceLine(item) {
-  return `<strong>${escapeHtml(item.sales_force)}</strong><br><span class="muted">${money(item.sales)} · ${item.clients} clientes</span>`;
+function salesForceLine(item, volumeMode = false) {
+  return `<strong>${escapeHtml(item.sales_force)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.quantity || 0)} bultos` : money(item.sales)} · ${item.clients} clientes</span>`;
 }
 
-function routeLine(item) {
-  return `<strong>${escapeHtml(item.route_description)}</strong><br><span class="muted">${money(item.sales)} · ${item.clients} clientes · ${money(item.avgOrderValue || 0)} ticket</span>`;
+function routeLine(item, volumeMode = false) {
+  return `<strong>${escapeHtml(item.route_description)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.quantity || 0)} bultos` : money(item.sales)} · ${item.clients} clientes · ${volumeMode ? `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido` : `${money(item.avgOrderValue || 0)} ticket`}</span>`;
 }
 
-function brandLine(item) {
-  return `<strong>${escapeHtml(item.brand)}</strong><br><span class="muted">${money(item.sales)} · ${item.clients} clientes · ${money(item.avgOrderValue || 0)} ticket</span>`;
+function brandLine(item, volumeMode = false) {
+  return `<strong>${escapeHtml(item.brand)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.quantity || 0)} bultos` : money(item.sales)} · ${item.clients} clientes · ${volumeMode ? `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido` : `${money(item.avgOrderValue || 0)} ticket`}</span>`;
 }
 
-function businessUnitLine(item) {
-  return `<strong>${escapeHtml(item.business_unit)}</strong><br><span class="muted">${money(item.sales)} · ${item.orders} pedidos</span>`;
+function businessUnitLine(item, volumeMode = false) {
+  return `<strong>${escapeHtml(item.business_unit)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.quantity || 0)} bultos` : money(item.sales)} · ${item.orders} pedidos</span>`;
 }
 
-function channelLine(item) {
-  return `<strong>${escapeHtml(item.channel)}</strong><br><span class="muted">${money(item.sales)} · ${item.clients} clientes · ${money(item.avgOrderValue || 0)} ticket</span>`;
+function channelLine(item, volumeMode = false) {
+  return `<strong>${escapeHtml(item.channel)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.quantity || 0)} bultos` : money(item.sales)} · ${item.clients} clientes · ${volumeMode ? `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido` : `${money(item.avgOrderValue || 0)} ticket`}</span>`;
 }
 
 function genericLine(item) {
@@ -1570,14 +2128,141 @@ function decimalNumber(value) {
   return new Intl.NumberFormat("es-AR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value || 0);
 }
 
+function rangeDays(fechaDesde, fechaHasta) {
+  if (!fechaDesde || !fechaHasta) {
+    return 0;
+  }
+  const start = new Date(`${fechaDesde}T00:00:00`);
+  const end = new Date(`${fechaHasta}T00:00:00`);
+  const diff = end.getTime() - start.getTime();
+  if (!Number.isFinite(diff) || diff < 0) {
+    return 0;
+  }
+  return Math.floor(diff / 86400000) + 1;
+}
+
+function progressBucket(days) {
+  if (days <= 0) return "generic";
+  if (days <= 31) return "short";
+  if (days <= 120) return "medium";
+  if (days <= 365) return "long";
+  return "xlong";
+}
+
+function buildProgressKey(options = {}) {
+  const operation = options.operationType || "generic";
+  const bucket = progressBucket(rangeDays(options.fechaDesde, options.fechaHasta));
+  const mode = options.sourceMode || "generic";
+  return `${operation}:${mode}:${bucket}`;
+}
+
+function readProgressHistory() {
+  try {
+    return JSON.parse(localStorage.getItem("progressHistory") || "{}");
+  } catch (_) {
+    return {};
+  }
+}
+
+function writeProgressHistory(history) {
+  try {
+    localStorage.setItem("progressHistory", JSON.stringify(history));
+  } catch (_) {
+    // Ignorar si no hay storage disponible.
+  }
+}
+
+function estimateProgressSeconds(options = {}) {
+  const history = readProgressHistory();
+  const key = buildProgressKey(options);
+  const saved = history[key];
+  if (saved?.avgSeconds) {
+    return Math.max(3, Math.round(saved.avgSeconds));
+  }
+  const days = rangeDays(options.fechaDesde, options.fechaHasta);
+  if ((options.operationType || "") === "sync") {
+    if (days <= 31) return 18;
+    if (days <= 90) return 45;
+    if (days <= 180) return 80;
+    if (days <= 365) return 150;
+    return 240;
+  }
+  if ((options.operationType || "") === "dynamic") {
+    if (days <= 31) return 8;
+    if (days <= 90) return 14;
+    if (days <= 180) return 22;
+    if (days <= 365) return 35;
+    return 55;
+  }
+  if ((options.operationType || "") === "analyze") {
+    if (days <= 31) return 10;
+    if (days <= 90) return 18;
+    if (days <= 180) return 28;
+    if (days <= 365) return 45;
+    return 70;
+  }
+  return 8;
+}
+
+function recordProgressDuration(options = {}, elapsedSeconds = 0) {
+  if (!elapsedSeconds || elapsedSeconds < 1) {
+    return;
+  }
+  const history = readProgressHistory();
+  const key = buildProgressKey(options);
+  const current = history[key] || { avgSeconds: 0, samples: 0 };
+  const samples = Math.min((current.samples || 0) + 1, 8);
+  const avgSeconds = current.avgSeconds
+    ? ((current.avgSeconds * Math.max((current.samples || 0), 1)) + elapsedSeconds) / Math.max(samples, 1)
+    : elapsedSeconds;
+  history[key] = { avgSeconds: Math.round(avgSeconds), samples };
+  writeProgressHistory(history);
+}
+
+function formatElapsed(seconds) {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return mins > 0 ? `${mins}m ${String(secs).padStart(2, "0")}s` : `${secs}s`;
+}
+
 function setStatus(text) {
   document.getElementById("status").textContent = text;
 }
 
-function showProgressModal(text) {
+function updateProgressMeta() {
+  const meta = document.getElementById("progressMeta");
+  if (!meta || !progressContext) {
+    return;
+  }
+  const elapsedSeconds = Math.max(0, Math.round((Date.now() - progressContext.startedAt) / 1000));
+  const estimateSeconds = progressContext.estimateSeconds || 0;
+  if (!estimateSeconds) {
+    meta.textContent = `Tiempo transcurrido: ${formatElapsed(elapsedSeconds)}.`;
+    return;
+  }
+  const remainingSeconds = Math.max(0, estimateSeconds - elapsedSeconds);
+  if (elapsedSeconds > estimateSeconds * 1.2) {
+    meta.textContent = `Tiempo transcurrido: ${formatElapsed(elapsedSeconds)}. Está demorando más de lo habitual, pero puede seguir procesando en segundo plano.`;
+    return;
+  }
+  meta.textContent = `Tiempo transcurrido: ${formatElapsed(elapsedSeconds)} · restante aprox.: ${formatElapsed(remainingSeconds)}.`;
+}
+
+function showProgressModal(text, options = {}) {
   const modal = document.getElementById("progressModal");
   const message = document.getElementById("progressMessage");
+  const estimateSeconds = estimateProgressSeconds(options);
+  progressContext = {
+    startedAt: Date.now(),
+    estimateSeconds,
+    options,
+  };
   message.textContent = text || "Procesando...";
+  updateProgressMeta();
+  if (progressTicker) {
+    clearInterval(progressTicker);
+  }
+  progressTicker = setInterval(updateProgressMeta, 1000);
   modal.classList.remove("hidden");
   modal.setAttribute("aria-hidden", "false");
   document.body.classList.add("modal-open");
@@ -1585,14 +2270,23 @@ function showProgressModal(text) {
 
 function hideProgressModal() {
   const modal = document.getElementById("progressModal");
+  if (progressTicker) {
+    clearInterval(progressTicker);
+    progressTicker = null;
+  }
+  if (progressContext) {
+    const elapsedSeconds = Math.max(1, Math.round((Date.now() - progressContext.startedAt) / 1000));
+    recordProgressDuration(progressContext.options, elapsedSeconds);
+    progressContext = null;
+  }
   modal.classList.add("hidden");
   modal.setAttribute("aria-hidden", "true");
   document.body.classList.remove("modal-open");
 }
 
-async function withProgress(message, runner) {
+async function withProgress(message, runner, options = {}) {
   progressDepth += 1;
-  showProgressModal(message);
+  showProgressModal(message, options);
   try {
     return await runner();
   } finally {
@@ -1648,6 +2342,20 @@ function handleScrollAction(action) {
   }
 }
 
+function bindClick(id, handler) {
+  const element = document.getElementById(id);
+  if (element) {
+    element.addEventListener("click", handler);
+  }
+}
+
+function bindChange(id, handler) {
+  const element = document.getElementById(id);
+  if (element) {
+    element.addEventListener("change", handler);
+  }
+}
+
 // ─── Fase 6: Motor dinámico de análisis ─────────────────────────────────────
 
 function renderDynamicPanel(data) {
@@ -1656,6 +2364,7 @@ function renderDynamicPanel(data) {
   const sum = data.insightsSummary || {};
   document.getElementById("dynSummaryLine").textContent =
     `${sum.total || 0} insights detectados — ${state.dynamic.tasks.length} tipos de análisis disponibles`;
+  renderDynTaskHelper();
   renderDynTaskSelector();
   renderDynKpis(data.kpiSet || {});
   renderDynInsights(data.dynamicInsights || [], sum);
@@ -1669,6 +2378,7 @@ function renderDynTaskSelector() {
   const tasks = state.dynamic.tasks;
   if (!tasks.length) {
     container.innerHTML = "<div class='muted'>No hay análisis disponibles para los datos actuales.</div>";
+    renderDynTaskHelper();
     return;
   }
   const domainOrder = ["tiempo","cartera","territorio","producto","canal","margen","fuerza","general"];
@@ -1701,6 +2411,7 @@ function renderDynTaskSelector() {
 function onSelectDynTask(taskId) {
   state.dynamic.selectedTaskId = taskId;
   renderDynTaskSelector();
+  renderDynTaskHelper(taskId);
   const task = state.dynamic.tasks.find((t) => t.id === taskId);
   if (!task) return;
   const comboRow    = document.getElementById("dynComboRow");
@@ -1717,6 +2428,52 @@ function onSelectDynTask(taskId) {
   }
 }
 
+function renderDynTaskHelper(taskId = state.dynamic.selectedTaskId) {
+  const container = document.getElementById("dynTaskHelp");
+  if (!container) {
+    return;
+  }
+  const task = state.dynamic.tasks.find((item) => item.id === taskId);
+  if (!task) {
+    container.innerHTML = `
+      <div class="dyn-help-card">
+        <strong>Cómo elegir un análisis puntual</strong>
+        <div class="muted">Primero corré "Actualizar informe". Después elegí una pastilla según la pregunta de negocio que quieras responder. Si no sabés cuál usar, empezá por evolución temporal, ranking o recurrencia/churn.</div>
+      </div>
+    `;
+    return;
+  }
+  const playbook = ANALYSIS_PLAYBOOK[task.id] || {};
+  const combos = (task.combos || []).slice(0, 4).map((combo) => combo.label).filter(Boolean);
+  container.innerHTML = `
+    <div class="dyn-help-card">
+      <div class="dyn-help-header">
+        <strong>${escapeHtml(task.label)}</strong>
+        <span class="pill">Prioridad ${task.priority || "-"}</span>
+      </div>
+      <div class="muted">${escapeHtml(playbook.summary || "Análisis puntual sobre el recorte actual del informe.")}</div>
+      <div class="dyn-help-grid">
+        <div>
+          <div class="dyn-help-title">Cuándo usarlo</div>
+          <div class="muted">${escapeHtml(playbook.when || "Cuando quieras profundizar una dimensión concreta del negocio.")}</div>
+        </div>
+        <div>
+          <div class="dyn-help-title">Preguntas que responde</div>
+          <div class="guide-examples">
+            ${(playbook.questions || ["¿Qué está pasando en esta dimensión del negocio?"]).map((item) => `<span class="guide-chip">${escapeHtml(item)}</span>`).join("")}
+          </div>
+        </div>
+        <div>
+          <div class="dyn-help-title">Aperturas disponibles</div>
+          <div class="guide-examples">
+            ${(combos.length ? combos : ["Sin apertura adicional"]).map((item) => `<span class="guide-chip">${escapeHtml(item)}</span>`).join("")}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 async function runDynamicTask() {
   const taskId = state.dynamic.selectedTaskId;
   if (!taskId) { setStatus("Seleccioná un tipo de análisis primero."); return; }
@@ -1726,10 +2483,10 @@ async function runDynamicTask() {
   const combo = (task?.combos || [])[comboIdx] || null;
 
   const datasetsPayload = {};
-  if (state.datasets.sales.sourceMode === "erp" || state.datasets.sales.sourceMode === "mongo") {
+  if (state.datasets.sales.sourceMode === "erp" || state.datasets.sales.sourceMode === "mongo" || state.datasets.sales.sourceMode === "clickhouse" || state.datasets.sales.sourceMode === "auto") {
     const { fechaDesde, fechaHasta } = state.datasets.sales.erp;
     if (!fechaDesde || !fechaHasta) {
-      setStatus("Elegí fecha desde y fecha hasta para consultar ventas ERP.");
+      setStatus(isBiSurface ? "Elegí fecha desde y fecha hasta para consultar la base comercial." : "Elegí fecha desde y fecha hasta para consultar ventas ERP.");
       return;
     }
     datasetsPayload.sales = {
@@ -1761,7 +2518,12 @@ async function runDynamicTask() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ datasets: datasetsPayload, filters: serializeFilters(), task_id: taskId, combo }),
-    }));
+    }), {
+      operationType: "dynamic",
+      fechaDesde: state.datasets.sales.erp?.fechaDesde,
+      fechaHasta: state.datasets.sales.erp?.fechaHasta,
+      sourceMode: state.datasets.sales.sourceMode,
+    });
     renderDynKpis(data.kpiSet || {});
     renderDynInsights(data.insights || [], data.insightsSummary || {});
     document.getElementById("dynSemaphores").innerHTML = renderDynSemaphoresHtml(data.kpiSet?.semaphores || []);
@@ -1911,12 +2673,13 @@ function renderScatterSVG(data, axes) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-document.getElementById("uploadBtn").addEventListener("click", () => uploadFiles().catch(showError));
-document.getElementById("clearUploadsBtn").addEventListener("click", () => clearUploads().catch(showError));
-document.getElementById("refreshFiles").addEventListener("click", () => boot().catch(showError));
-document.getElementById("analyzeBtn").addEventListener("click", () => analyze().catch(showError));
-document.getElementById("dynRunBtn").addEventListener("click", () => runDynamicTask().catch(showError));
-document.getElementById("libraryScope").addEventListener("change", async (event) => {
+bindClick("uploadBtn", () => uploadFiles().catch(showError));
+bindClick("clearUploadsBtn", () => clearUploads().catch(showError));
+bindClick("refreshFiles", () => boot().catch(showError));
+bindClick("analyzeBtn", () => analyze().catch(showError));
+bindClick("dynRunBtn", () => runDynamicTask().catch(showError));
+bindClick("refreshAdminErrors", () => refreshAdminErrors().catch(showError));
+bindChange("libraryScope", async (event) => {
   state.scope = event.target.value;
   await boot().catch(showError);
 });

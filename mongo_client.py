@@ -5,6 +5,7 @@ import time
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from pymongo import ASCENDING, DESCENDING, MongoClient, UpdateOne
@@ -24,7 +25,23 @@ ERP_SYNC_COLLECTION = "erp_sync_runs"
 DEFAULT_MONGO_WRITE_BATCH_SIZE = 400
 DEFAULT_MONGO_WRITE_RETRIES = 4
 DEFAULT_MONGO_WRITE_RETRY_DELAY = 0.75
+DEFAULT_MONGO_SALES_RETENTION_DAYS = 0
+COMPACT_SALE_FIELDS = (
+    "date",
+    "year",
+    "month",
+    "client_key",
+    "client_name",
+    "route_description",
+    "seller_key",
+    "product_key",
+    "invoice",
+    "channel",
+    "amount",
+    "quantity",
+)
 _client = None
+_indexes_ready = False
 
 
 def get_db():
@@ -39,13 +56,14 @@ def get_db():
 
 
 def _reset_client():
-    global _client
+    global _client, _indexes_ready
     if _client is not None:
         try:
             _client.close()
         except Exception:
             pass
     _client = None
+    _indexes_ready = False
 
 
 def _mongo_write_batch_size():
@@ -70,6 +88,27 @@ def _mongo_write_retry_delay():
     except (TypeError, ValueError):
         value = DEFAULT_MONGO_WRITE_RETRY_DELAY
     return max(0.1, value)
+
+
+def _mongo_sales_retention_days():
+    try:
+        value = int(os.getenv("MONGO_SALES_RETENTION_DAYS") or DEFAULT_MONGO_SALES_RETENTION_DAYS)
+    except (TypeError, ValueError):
+        value = DEFAULT_MONGO_SALES_RETENTION_DAYS
+    return max(0, value)
+
+
+def _mongo_sales_retention_cutoff(reference_date: date | None = None) -> str | None:
+    retention_days = _mongo_sales_retention_days()
+    if retention_days <= 0:
+        return None
+    current_date = reference_date or datetime.now(timezone.utc).date()
+    cutoff = current_date - timedelta(days=max(retention_days - 1, 0))
+    return cutoff.isoformat()
+
+
+def get_mongo_sales_retention_cutoff(reference_date: date | None = None) -> str | None:
+    return _mongo_sales_retention_cutoff(reference_date)
 
 
 def _run_mongo_write(operation):
@@ -98,10 +137,18 @@ def _iter_batches(items, size):
 
 
 def _ensure_erp_indexes(db):
+    global _indexes_ready
+    if _indexes_ready:
+        return
     db[ERP_SALES_COLLECTION].create_index([("date", ASCENDING)])
-    _ensure_non_unique_index(db[ERP_SALES_COLLECTION], "row_version_1", [("row_version", ASCENDING)], sparse=True)
-    db[ERP_SALES_COLLECTION].create_index([("line_key", ASCENDING)], sparse=True)
-    db[ERP_SALES_COLLECTION].create_index([("invoice", ASCENDING)])
+    if _sales_compact_mode():
+        _drop_index_if_exists(db[ERP_SALES_COLLECTION], "row_version_1")
+        _drop_index_if_exists(db[ERP_SALES_COLLECTION], "line_key_1")
+        _drop_index_if_exists(db[ERP_SALES_COLLECTION], "invoice_1")
+    else:
+        _ensure_non_unique_index(db[ERP_SALES_COLLECTION], "row_version_1", [("row_version", ASCENDING)], sparse=True)
+        db[ERP_SALES_COLLECTION].create_index([("line_key", ASCENDING)], sparse=True)
+        db[ERP_SALES_COLLECTION].create_index([("invoice", ASCENDING)])
     db[ERP_ARTICLES_COLLECTION].create_index([("product_key", ASCENDING)], unique=True)
     db[ERP_ARTICLES_COLLECTION].create_index([("row_version", ASCENDING)], sparse=True)
     db[ERP_SELLERS_COLLECTION].create_index([("seller_key", ASCENDING)], sparse=True)
@@ -114,7 +161,10 @@ def _ensure_erp_indexes(db):
     db[ERP_MARKETING_COLLECTION].create_index([("marketing_key", ASCENDING)], unique=True)
     db[ERP_MARKETING_COLLECTION].create_index([("segment_name", ASCENDING)])
     db[ERP_MARKETING_COLLECTION].create_index([("channel_name", ASCENDING)])
-    db[ERP_SYNC_COLLECTION].create_index([("timestamp", DESCENDING)])
+    db[ERP_SYNC_COLLECTION].create_index([("entity", ASCENDING), ("timestamp", DESCENDING)])
+    db[ERP_SYNC_COLLECTION].create_index([("entity", ASCENDING), ("status", ASCENDING), ("range.fechaDesde", ASCENDING), ("range.fechaHasta", ASCENDING)])
+    db["registros"].create_index([("timestamp", DESCENDING)])
+    _indexes_ready = True
 
 
 def _fallback_sale_id(record: dict) -> str:
@@ -132,8 +182,20 @@ def _fallback_sale_id(record: dict) -> str:
 
 
 def _sale_document_id(record: dict) -> str:
+    if _sales_compact_mode():
+        return "|".join(
+            [
+                str(record.get("date") or ""),
+                str(record.get("client_key") or ""),
+                str(record.get("invoice") or record.get("document_key") or ""),
+                str(record.get("product_key") or ""),
+                str(record.get("seller_key") or ""),
+                str(record.get("route_description") or ""),
+                str(record.get("channel") or ""),
+            ]
+        )
     line_key = record.get("line_key")
-    if line_key:
+    if line_key and not _sales_compact_mode():
         return "|".join(
             [
                 str(record.get("date") or ""),
@@ -152,7 +214,8 @@ def _serialize_sale_record(record: dict) -> dict:
     if isinstance(sale_date, date):
         document["date"] = sale_date.isoformat()
     document["_id"] = _sale_document_id(document)
-    document["storedAt"] = datetime.now(timezone.utc)
+    if not _sales_compact_mode():
+        document["storedAt"] = datetime.now(timezone.utc)
     return document
 
 
@@ -160,30 +223,108 @@ def _deserialize_sale_record(document: dict) -> dict:
     record = dict(document)
     record.pop("_id", None)
     record.pop("storedAt", None)
+    record.pop("syncRunId", None)
     sale_date = record.get("date")
     if isinstance(sale_date, str):
         record["date"] = date.fromisoformat(sale_date)
     return record
 
 
-def sync_erp_sales(records: list[dict], fecha_desde: str, fecha_hasta: str, origin: str = "manual") -> dict:
-    operations = []
+def _empty_sales_confirmed(warning: str | None) -> bool:
+    if not warning:
+        return False
+    text = str(warning).strip().lower()
+    return "no devolvió ventas" in text or "no generó lotes" in text
+
+
+def _sales_compact_mode() -> bool:
+    mode = (os.getenv("ERP_SALES_STORAGE_MODE") or "compact").strip().lower()
+    return mode != "full"
+
+
+def _compact_sale_record(record: dict) -> dict:
+    compact = {}
+    sale_date = record.get("date")
+    compact["date"] = sale_date
+    if sale_date and record.get("year") is None:
+        compact["year"] = sale_date.year
+    else:
+        compact["year"] = record.get("year")
+    if sale_date and record.get("month") is None:
+        compact["month"] = sale_date.month
+    else:
+        compact["month"] = record.get("month")
+
+    for field in COMPACT_SALE_FIELDS:
+        if field in {"date", "year", "month"}:
+            continue
+        value = record.get(field)
+        if field in {"amount", "quantity"}:
+            compact[field] = value or 0
+        elif value not in (None, ""):
+            compact[field] = value
+    return compact
+
+
+def sync_erp_sales(
+    records: list[dict],
+    fecha_desde: str,
+    fecha_hasta: str,
+    origin: str = "manual",
+    rows_read: int = 0,
+    warning: str | None = None,
+    empty_confirmed: bool = False,
+) -> dict:
+    documents_by_id = {}
     row_versions = 0
+    sync_run_id = uuid4().hex
     for record in records:
-        document = _serialize_sale_record(record)
+        prepared = _compact_sale_record(record) if _sales_compact_mode() else dict(record)
+        document = _serialize_sale_record(prepared)
+        document["syncRunId"] = sync_run_id
         if record.get("row_version") is not None:
             row_versions += 1
-        operations.append(
-            UpdateOne(
-                {"_id": document["_id"]},
-                {"$set": document},
-                upsert=True,
-            )
-        )
+        current = documents_by_id.get(document["_id"])
+        if current is None:
+            documents_by_id[document["_id"]] = document
+            continue
+        current["amount"] = round((current.get("amount") or 0) + (document.get("amount") or 0), 6)
+        current["quantity"] = round((current.get("quantity") or 0) + (document.get("quantity") or 0), 6)
+        for field, value in document.items():
+            if field not in current or current.get(field) in (None, ""):
+                current[field] = value
 
-    delete_result = _run_mongo_write(
-        lambda db: db[ERP_SALES_COLLECTION].delete_many({"date": {"$gte": fecha_desde, "$lte": fecha_hasta}})
-    )
+    operations = [
+        UpdateOne(
+            {"_id": document["_id"]},
+            {"$set": document},
+            upsert=True,
+        )
+        for document in documents_by_id.values()
+    ]
+
+    confirmed_empty = empty_confirmed or _empty_sales_confirmed(warning)
+    if not operations and not confirmed_empty:
+        payload = {
+            "entity": "sales",
+            "range": {"fechaDesde": fecha_desde, "fechaHasta": fecha_hasta},
+            "recordsReceived": len(records),
+            "rowsRead": rows_read,
+            "rowVersions": row_versions,
+            "deleted": 0,
+            "upserted": 0,
+            "modified": 0,
+            "matched": 0,
+            "warning": warning,
+            "emptyConfirmed": False,
+            "status": "aborted_empty_response",
+            "timestamp": datetime.now(timezone.utc),
+            "origin": origin,
+        }
+        _run_mongo_write(lambda db: db[ERP_SYNC_COLLECTION].insert_one(payload))
+        raise RuntimeError(
+            f"Sync abortada para {fecha_desde} a {fecha_hasta}: ChessERP devolvió 0 filas válidas y no se eliminaron datos existentes."
+        )
 
     upserted = 0
     modified = 0
@@ -198,18 +339,45 @@ def sync_erp_sales(records: list[dict], fecha_desde: str, fecha_hasta: str, orig
             modified += result.modified_count
             matched += result.matched_count
 
+    delete_result = _run_mongo_write(
+        lambda db: db[ERP_SALES_COLLECTION].delete_many(
+            {
+                "date": {"$gte": fecha_desde, "$lte": fecha_hasta},
+                "syncRunId": {"$ne": sync_run_id},
+            }
+        )
+        if operations
+        else db[ERP_SALES_COLLECTION].delete_many({"date": {"$gte": fecha_desde, "$lte": fecha_hasta}})
+    )
+    if operations:
+        _run_mongo_write(
+            lambda db: db[ERP_SALES_COLLECTION].update_many(
+                {"syncRunId": sync_run_id},
+                {"$unset": {"syncRunId": ""}},
+            )
+        )
+
     summary = {
         "range": {"fechaDesde": fecha_desde, "fechaHasta": fecha_hasta},
-        "recordsReceived": len(records),
+        "recordsReceived": len(documents_by_id),
+        "recordsStored": len(documents_by_id),
+        "recordsInput": len(records),
+        "rowsRead": rows_read,
         "rowVersions": row_versions,
         "deleted": delete_result.deleted_count,
         "upserted": upserted,
         "modified": modified,
         "matched": matched,
+        "warning": warning,
+        "emptyConfirmed": confirmed_empty,
+        "status": "success",
         "timestamp": datetime.now(timezone.utc),
         "origin": origin,
     }
     _run_mongo_write(lambda db: db[ERP_SYNC_COLLECTION].insert_one({**summary, "entity": "sales"}))
+    retention_summary = enforce_erp_sales_retention(origin=f"{origin}_retention")
+    if retention_summary:
+        summary["retention"] = retention_summary
     summary["timestamp"] = summary["timestamp"].isoformat()
     return summary
 
@@ -226,38 +394,87 @@ def record_erp_sync_summary(entity: str, summary: dict) -> dict:
     return response
 
 
-def load_erp_sales_dataset(fecha_desde: str, fecha_hasta: str) -> dict:
+def prune_erp_sales_history(cutoff_date: str, rebuild: bool = False, origin: str = "manual_retention") -> dict:
+    db = get_db()
+    if db is None:
+        raise RuntimeError("MongoDB no está configurado")
+
+    collection = db[ERP_SALES_COLLECTION]
+    before_count = collection.count_documents({})
+    older_filter = {"date": {"$lt": cutoff_date}}
+    deleted_candidates = collection.count_documents(older_filter)
+
+    if rebuild:
+        keep_filter = {"date": {"$gte": cutoff_date}}
+        documents_to_keep = list(collection.find(keep_filter))
+        collection.drop()
+        global _indexes_ready
+        _indexes_ready = False
+        _ensure_erp_indexes(db)
+        if documents_to_keep:
+            batch_size = _mongo_write_batch_size()
+            for batch in _iter_batches(documents_to_keep, batch_size):
+                collection.insert_many(batch, ordered=False)
+        deleted = deleted_candidates
+    else:
+        deleted = collection.delete_many(older_filter).deleted_count
+
+    after_count = collection.count_documents({})
+    summary = {
+        "entity": "sales_retention",
+        "cutoffDate": cutoff_date,
+        "beforeCount": before_count,
+        "deleted": deleted,
+        "afterCount": after_count,
+        "rebuild": rebuild,
+        "origin": origin,
+        "timestamp": datetime.now(timezone.utc),
+    }
+    db[ERP_SYNC_COLLECTION].insert_one(summary)
+    summary["timestamp"] = summary["timestamp"].isoformat()
+    return summary
+
+
+def enforce_erp_sales_retention(origin: str = "auto_retention") -> dict | None:
+    cutoff_date = _mongo_sales_retention_cutoff()
+    if not cutoff_date:
+        return None
+    return prune_erp_sales_history(cutoff_date, rebuild=False, origin=origin)
+
+
+def load_erp_sales_dataset(fecha_desde: str, fecha_hasta: str, require_coverage: bool = True) -> dict:
     db = get_db()
     if db is None:
         raise RuntimeError("MongoDB no está configurado")
     _ensure_erp_indexes(db)
 
-    covered, missing_start, missing_end = _sales_range_covered(db, fecha_desde, fecha_hasta)
-    if not covered:
-        if missing_start and missing_end:
+    if require_coverage:
+        covered, missing_start, missing_end = _sales_range_covered(db, fecha_desde, fecha_hasta)
+        if not covered:
+            if missing_start and missing_end:
+                raise ValueError(
+                    f"MongoDB no tiene sincronizado completamente el rango {fecha_desde} a {fecha_hasta}. "
+                    f"Falta cubrir desde {missing_start} hasta {missing_end}. Sincronizá ese tramo desde ChessERP o analizá en modo ChessERP."
+                )
             raise ValueError(
                 f"MongoDB no tiene sincronizado completamente el rango {fecha_desde} a {fecha_hasta}. "
-                f"Falta cubrir desde {missing_start} hasta {missing_end}. Sincronizá ese tramo desde ChessERP o analizá en modo ChessERP."
+                "Sincronizá ese tramo desde ChessERP o analizá en modo ChessERP."
             )
-        raise ValueError(
-            f"MongoDB no tiene sincronizado completamente el rango {fecha_desde} a {fecha_hasta}. "
-            "Sincronizá ese tramo desde ChessERP o analizá en modo ChessERP."
-        )
 
     cursor = db[ERP_SALES_COLLECTION].find(
         {"date": {"$gte": fecha_desde, "$lte": fecha_hasta}},
-        {"storedAt": 0},
+        {"storedAt": 0, "syncRunId": 0},
     ).sort("date", ASCENDING)
     records = [_deserialize_sale_record(item) for item in cursor]
     if not records:
         raise ValueError("MongoDB no tiene ventas ERP para el rango seleccionado")
 
-    source_label = f"MongoDB ERP ventas {fecha_desde} a {fecha_hasta}"
+    source_label = f"Base comercial {fecha_desde} a {fecha_hasta}"
     return {
         "datasetType": "sales",
         "sourceKind": "mongo",
         "file": source_label,
-        "sheet": "MongoDB erp_sales",
+        "sheet": "Ventas comerciales",
         "headerRow": 0,
         "rowsRead": len(records),
         "rowsValid": len(records),
@@ -268,7 +485,7 @@ def load_erp_sales_dataset(fecha_desde: str, fecha_hasta: str) -> dict:
         "sources": [
             {
                 "file": source_label,
-                "sheet": "MongoDB erp_sales",
+                "sheet": "Ventas comerciales",
                 "headerRow": 0,
                 "rowsRead": len(records),
                 "rowsValid": len(records),
@@ -285,15 +502,18 @@ def _sales_range_covered(db, fecha_desde: str, fecha_hasta: str) -> tuple[bool, 
         db[ERP_SYNC_COLLECTION].find(
             {
                 "entity": "sales",
+                "status": "success",
                 "range.fechaDesde": {"$lte": fecha_hasta},
                 "range.fechaHasta": {"$gte": fecha_desde},
             },
-            {"_id": 0, "range": 1},
+            {"_id": 0, "range": 1, "recordsReceived": 1, "emptyConfirmed": 1},
         )
     )
     intervals = []
     for run in sync_runs:
         current_range = run.get("range") or {}
+        if not run.get("recordsReceived") and not run.get("emptyConfirmed"):
+            continue
         range_start = current_range.get("fechaDesde")
         range_end = current_range.get("fechaHasta")
         if not range_start or not range_end:
@@ -534,7 +754,7 @@ def load_erp_articles_dataset() -> dict:
         record.pop("_id", None)
 
     return {
-        **build_dataset("articles", "MongoDB ERP artículos", "MongoDB erp_articles", records, source_kind="mongo"),
+        **build_dataset("articles", "Maestro comercial de artículos", "Artículos", records, source_kind="mongo"),
     }
 
 
@@ -543,8 +763,8 @@ def load_erp_sellers_dataset() -> dict:
         ERP_SELLERS_COLLECTION,
         "seller_name",
         "sellers",
-        "MongoDB ERP vendedores",
-        "MongoDB erp_sellers",
+        "Maestro comercial de vendedores",
+        "Vendedores",
     )
 
 
@@ -553,8 +773,8 @@ def load_erp_routes_dataset() -> dict:
         ERP_ROUTES_COLLECTION,
         "route_description",
         "routes",
-        "MongoDB ERP rutas",
-        "MongoDB erp_routes",
+        "Maestro comercial de rutas",
+        "Rutas",
     )
 
 
@@ -574,8 +794,8 @@ def load_erp_marketing_dataset() -> dict:
     return {
         "datasetType": "marketing",
         "sourceKind": "mongo",
-        "file": "MongoDB ERP marketing",
-        "sheet": "MongoDB erp_marketing",
+        "file": "Jerarquía comercial",
+        "sheet": "Marketing",
         "headerRow": 0,
         "rowsRead": len(records),
         "rowsValid": len(records),
@@ -674,6 +894,13 @@ def _ensure_non_unique_index(collection, name: str, keys, sparse: bool = False):
     except Exception:
         pass
     collection.create_index(keys, sparse=sparse, name=name)
+
+
+def _drop_index_if_exists(collection, name: str):
+    try:
+        collection.drop_index(name)
+    except Exception:
+        pass
 
 
 def save_session(datasets: dict) -> bool:

@@ -2,9 +2,11 @@ import cgi
 import json
 import os
 import traceback
+from collections import defaultdict, deque
 from datetime import date, datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Lock
 from urllib.parse import parse_qs, urlparse
 
 from analyzer import DATASET_DEFINITIONS, analyze_datasets, suggest_mappings
@@ -14,10 +16,16 @@ from analysis_engine import AnalysisEngine
 from kpi_generator import generate_kpis
 from viz_selector import build_all_viz, build_viz
 from insight_writer import write_insights, insights_summary
+from clickhouse_client import (
+    get_clickhouse_storage_status,
+    load_erp_sales_dataset_clickhouse,
+    sync_erp_sales_clickhouse,
+)
 from mongo_client import (
     get_db,
     get_erp_prefilter_options,
     get_erp_storage_status,
+    get_mongo_sales_retention_cutoff,
     load_erp_articles_dataset,
     load_erp_routes_dataset,
     load_erp_sales_dataset,
@@ -57,9 +65,15 @@ ALLOWED_EXTENSIONS = {".xlsx", ".xlsm"}
 ALLOWED_ROOTS = (BASE_DIR, PARENT_DIR)
 MAX_SCAN_DEPTH = 2
 DEFAULT_ERP_SYNC_CHUNK_DAYS = 31
+DEFAULT_MAX_JSON_BODY_BYTES = 512 * 1024
+DEFAULT_MAX_UPLOAD_BODY_BYTES = 25 * 1024 * 1024
+DEFAULT_ADMIN_RATE_LIMIT_WINDOW_SECONDS = 60
+DEFAULT_ADMIN_RATE_LIMIT_MAX_REQUESTS = 20
+_RATE_LIMIT_LOCK = Lock()
+_RATE_LIMIT_BUCKETS = defaultdict(deque)
 
 
-class ReusableHTTPServer(HTTPServer):
+class ReusableHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
@@ -76,6 +90,70 @@ def _parse_iso_date(value, field_name):
         return date.fromisoformat(str(value))
     except (TypeError, ValueError):
         raise ValueError(f"{field_name} debe tener formato YYYY-MM-DD")
+
+
+def _parse_int_env(name, default_value, minimum=None):
+    try:
+        value = int(os.getenv(name) or default_value)
+    except (TypeError, ValueError):
+        value = default_value
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
+def _max_json_body_bytes():
+    return _parse_int_env("APP_MAX_JSON_BODY_BYTES", DEFAULT_MAX_JSON_BODY_BYTES, minimum=1024)
+
+
+def _max_upload_body_bytes():
+    return _parse_int_env("APP_MAX_UPLOAD_BODY_BYTES", DEFAULT_MAX_UPLOAD_BODY_BYTES, minimum=1024 * 1024)
+
+
+def _admin_rate_limit_window_seconds():
+    return _parse_int_env(
+        "APP_ADMIN_RATE_LIMIT_WINDOW_SECONDS",
+        DEFAULT_ADMIN_RATE_LIMIT_WINDOW_SECONDS,
+        minimum=1,
+    )
+
+
+def _admin_rate_limit_max_requests():
+    return _parse_int_env(
+        "APP_ADMIN_RATE_LIMIT_MAX_REQUESTS",
+        DEFAULT_ADMIN_RATE_LIMIT_MAX_REQUESTS,
+        minimum=1,
+    )
+
+
+def _admin_token():
+    return (os.getenv("APP_ADMIN_TOKEN") or os.getenv("ADMIN_TOKEN") or "").strip()
+
+
+def _admin_auth_enabled():
+    return bool(_admin_token())
+
+
+def _client_ip(handler):
+    forwarded = (handler.headers.get("X-Forwarded-For") or "").split(",", 1)[0].strip()
+    if forwarded:
+        return forwarded
+    return handler.client_address[0]
+
+
+def _check_rate_limit(client_ip, scope):
+    window = _admin_rate_limit_window_seconds()
+    limit = _admin_rate_limit_max_requests()
+    now = datetime.now(timezone.utc).timestamp()
+    bucket_key = f"{client_ip}:{scope}"
+    with _RATE_LIMIT_LOCK:
+        bucket = _RATE_LIMIT_BUCKETS[bucket_key]
+        while bucket and now - bucket[0] > window:
+            bucket.popleft()
+        if len(bucket) >= limit:
+            return False
+        bucket.append(now)
+    return True
 
 
 def _iter_date_chunks(fecha_desde, fecha_hasta, chunk_days=None):
@@ -150,6 +228,19 @@ def _fetch_sales_dataset_chunked(fecha_desde, fecha_hasta, detailed=True, cookie
     }
 
 
+def _mongo_sync_overlap(fecha_desde: str, fecha_hasta: str):
+    cutoff = get_mongo_sales_retention_cutoff()
+    if not cutoff:
+        return fecha_desde, fecha_hasta
+    start = _parse_iso_date(fecha_desde, "fechaDesde")
+    end = _parse_iso_date(fecha_hasta, "fechaHasta")
+    cutoff_date = date.fromisoformat(cutoff)
+    if end < cutoff_date:
+        return None
+    overlap_start = max(start, cutoff_date)
+    return overlap_start.isoformat(), end.isoformat()
+
+
 def _sync_sales_range_chunked(fecha_desde, fecha_hasta, cookie=None):
     chunk_summaries = []
     warnings = []
@@ -160,10 +251,49 @@ def _sync_sales_range_chunked(fecha_desde, fecha_hasta, cookie=None):
     total_modified = 0
     total_matched = 0
     total_row_versions = 0
+    total_clickhouse_stored = 0
+    total_mongo_stored = 0
+    mongo_chunk_count = 0
 
     for index, (chunk_start, chunk_end) in enumerate(_iter_date_chunks(fecha_desde, fecha_hasta), start=1):
         dataset = fetch_sales_dataset(chunk_start, chunk_end, detailed=True, cookie=cookie)
-        sync_summary = sync_erp_sales(dataset["records"], chunk_start, chunk_end, origin="api_sync_chunk")
+        mongo_overlap = _mongo_sync_overlap(chunk_start, chunk_end)
+        if mongo_overlap:
+            mongo_start, mongo_end = mongo_overlap
+            mongo_records = [
+                record for record in dataset["records"]
+                if record.get("date") and mongo_start <= record.get("date").isoformat() <= mongo_end
+            ]
+            sync_summary = sync_erp_sales(
+                mongo_records,
+                mongo_start,
+                mongo_end,
+                origin="api_sync_chunk",
+                rows_read=dataset.get("rowsRead", 0),
+                warning=dataset.get("warning"),
+                empty_confirmed=not mongo_records,
+            )
+            mongo_chunk_count += 1
+            total_mongo_stored += sync_summary.get("recordsStored", 0)
+        else:
+            sync_summary = {
+                "range": {"fechaDesde": chunk_start, "fechaHasta": chunk_end},
+                "deleted": 0,
+                "upserted": 0,
+                "modified": 0,
+                "matched": 0,
+                "recordsStored": 0,
+                "recordsReceived": 0,
+                "storageMode": "clickhouse_only",
+            }
+        clickhouse_summary = sync_erp_sales_clickhouse(
+            dataset["records"],
+            chunk_start,
+            chunk_end,
+            origin="api_sync_chunk",
+            rows_read=dataset.get("rowsRead", 0),
+            warning=dataset.get("warning"),
+        )
         chunk_summary = {
             "index": index,
             "range": {"fechaDesde": chunk_start, "fechaHasta": chunk_end},
@@ -173,6 +303,9 @@ def _sync_sales_range_chunked(fecha_desde, fecha_hasta, cookie=None):
             "upserted": sync_summary.get("upserted", 0),
             "modified": sync_summary.get("modified", 0),
             "matched": sync_summary.get("matched", 0),
+            "mongoStored": sync_summary.get("recordsStored", 0),
+            "clickhouseStored": clickhouse_summary.get("recordsStored", 0) if clickhouse_summary.get("configured") else 0,
+            "storageMode": "mongo_and_clickhouse" if mongo_overlap else "clickhouse_only",
         }
         if dataset.get("warning"):
             chunk_summary["warning"] = dataset["warning"]
@@ -185,6 +318,7 @@ def _sync_sales_range_chunked(fecha_desde, fecha_hasta, cookie=None):
         total_modified += sync_summary.get("modified", 0)
         total_matched += sync_summary.get("matched", 0)
         total_row_versions += sync_summary.get("rowVersions", 0)
+        total_clickhouse_stored += clickhouse_summary.get("recordsStored", 0) if clickhouse_summary.get("configured") else 0
 
     summary = {
         "range": {"fechaDesde": fecha_desde, "fechaHasta": fecha_hasta},
@@ -196,6 +330,9 @@ def _sync_sales_range_chunked(fecha_desde, fecha_hasta, cookie=None):
         "upserted": total_upserted,
         "modified": total_modified,
         "matched": total_matched,
+        "mongoStored": total_mongo_stored,
+        "clickhouseStored": total_clickhouse_stored,
+        "mongoChunkCount": mongo_chunk_count,
         "chunkCount": len(chunk_summaries),
         "chunkDays": _erp_sales_chunk_days(),
         "warning": " | ".join(warnings) if warnings and not total_rows_valid else None,
@@ -207,14 +344,69 @@ def _sync_sales_range_chunked(fecha_desde, fecha_hasta, cookie=None):
 
 
 class AppHandler(BaseHTTPRequestHandler):
+    def _send_security_headers(self):
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'",
+        )
+
+    def _send_json_error(self, message, status):
+        payload = json.dumps({"error": message}, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self._send_security_headers()
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _read_json_body(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except (TypeError, ValueError):
+            raise ValueError("Content-Length inválido")
+        if length < 0:
+            raise ValueError("Content-Length inválido")
+        if length > _max_json_body_bytes():
+            raise ValueError("Payload demasiado grande")
+        payload = self.rfile.read(length).decode("utf-8") if length else ""
+        try:
+            return json.loads(payload or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValueError("JSON inválido") from exc
+
+    def _ensure_admin_access(self, scope="admin"):
+        client_ip = _client_ip(self)
+        if not _check_rate_limit(client_ip, scope):
+            self._send_json_error("Demasiadas solicitudes. Reintentá en unos segundos.", 429)
+            return False
+        if not _admin_auth_enabled():
+            return True
+        provided = (
+            self.headers.get("X-Admin-Token")
+            or self.headers.get("X-App-Admin-Token")
+            or self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+        )
+        if provided and provided == _admin_token():
+            return True
+        self._send_json_error("Autenticación requerida para la superficie admin.", 401)
+        return False
+
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/favicon.ico":
             self.send_response(204)
+            self._send_security_headers()
             self.end_headers()
             return
-        if parsed.path == "/":
+        if parsed.path in {"/", "/bi"}:
             self.serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+            return
+        if parsed.path == "/admin":
+            self.serve_file(STATIC_DIR / "admin.html", "text/html; charset=utf-8")
             return
         if parsed.path == "/app.css":
             self.serve_file(STATIC_DIR / "app.css", "text/css; charset=utf-8")
@@ -228,6 +420,8 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/files":
             query = parse_qs(parsed.query)
             scope = query.get("scope", ["uploads"])[0]
+            if scope != "uploads" and not self._ensure_admin_access(scope="files"):
+                return
             self.send_json({"files": list_available_files(scope=scope)})
             return
         if parsed.path == "/api/datasets":
@@ -240,6 +434,8 @@ class AppHandler(BaseHTTPRequestHandler):
             self.handle_possible_analyses(parsed)
             return
         if parsed.path == "/api/analyses":
+            if not self._ensure_admin_access(scope="analyses"):
+                return
             self.handle_list_analyses(parsed)
             return
         if parsed.path == "/api/workbook":
@@ -254,17 +450,29 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/erp/storage-status":
             self.handle_erp_storage_status()
             return
+        if parsed.path == "/api/clickhouse/storage-status":
+            self.handle_clickhouse_storage_status()
+            return
         if parsed.path == "/api/erp/prefilter-options":
             self.handle_erp_prefilter_options()
+            return
+        if parsed.path == "/api/admin/errors":
+            if not self._ensure_admin_access(scope="admin_errors"):
+                return
+            self.handle_admin_errors(parsed)
             return
         self.send_error(404, "Ruta no encontrada")
 
     def do_POST(self):
         parsed = urlparse(self.path)
         if parsed.path == "/api/upload":
+            if not self._ensure_admin_access(scope="upload"):
+                return
             self.handle_upload()
             return
         if parsed.path == "/api/clear-uploads":
+            if not self._ensure_admin_access(scope="clear_uploads"):
+                return
             self.handle_clear_uploads()
             return
         if parsed.path == "/api/analyze":
@@ -280,6 +488,8 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json({"connected": ping()})
             return
         if parsed.path == "/api/erp/sync":
+            if not self._ensure_admin_access(scope="erp_sync"):
+                return
             self.handle_erp_sync()
             return
         self.send_error(404, "Ruta no encontrada")
@@ -398,13 +608,26 @@ class AppHandler(BaseHTTPRequestHandler):
     def handle_erp_storage_status(self):
         self.send_json(get_erp_storage_status())
 
+    def handle_clickhouse_storage_status(self):
+        self.send_json(get_clickhouse_storage_status())
+
     def handle_erp_prefilter_options(self):
         self.send_json({"filters": get_erp_prefilter_options()})
 
+    def handle_admin_errors(self, parsed):
+        query = parse_qs(parsed.query)
+        try:
+            limit = min(max(int(query.get("limit", ["20"])[0]), 1), 100)
+        except (TypeError, ValueError):
+            limit = 20
+        self.send_json({"errors": _read_recent_errors(limit=limit)})
+
     def handle_erp_sync(self):
-        length = int(self.headers.get("Content-Length", "0"))
-        payload = self.rfile.read(length).decode("utf-8")
-        data = json.loads(payload or "{}")
+        try:
+            data = self._read_json_body()
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=400)
+            return
         fecha_desde = data.get("fechaDesde")
         fecha_hasta = data.get("fechaHasta")
         refresh_masters = bool(data.get("refreshMasters"))
@@ -437,8 +660,11 @@ class AppHandler(BaseHTTPRequestHandler):
                     "routesSync": route_summary,
                     "marketingSync": marketing_summary,
                     "storage": storage,
+                    "clickhouseStorage": get_clickhouse_storage_status(),
                     "rowsRead": sync_summary.get("rowsRead", 0),
                     "rowsValid": sync_summary.get("rowsValid", 0),
+                    "mongoStored": sync_summary.get("mongoStored", 0),
+                    "clickhouseStored": sync_summary.get("clickhouseStored", 0),
                     "warning": sync_summary.get("warning"),
                     "warnings": sync_summary.get("warnings") or [],
                     "mastersSynced": should_sync_masters,
@@ -462,6 +688,14 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json({"error": str(exc)}, status=500)
 
     def handle_upload(self):
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except (TypeError, ValueError):
+            self.send_json({"error": "Content-Length inválido"}, status=400)
+            return
+        if content_length > _max_upload_body_bytes():
+            self.send_json({"error": "Upload demasiado grande"}, status=413)
+            return
         ctype, _ = cgi.parse_header(self.headers.get("content-type", ""))
         if ctype != "multipart/form-data":
             self.send_json({"error": "El upload debe enviarse como multipart/form-data"}, status=400)
@@ -522,9 +756,11 @@ class AppHandler(BaseHTTPRequestHandler):
         from schema_detector import detect_schema
         from rule_engine import resolve_tasks
 
-        length  = int(self.headers.get("Content-Length", "0"))
-        payload = self.rfile.read(length).decode("utf-8")
-        data    = json.loads(payload or "{}")
+        try:
+            data = self._read_json_body()
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=400)
+            return
 
         task_id = data.get("task_id")
         combo   = data.get("combo")
@@ -595,9 +831,11 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json({"error": str(exc)}, status=500)
 
     def handle_analyze(self):
-        length = int(self.headers.get("Content-Length", "0"))
-        payload = self.rfile.read(length).decode("utf-8")
-        data = json.loads(payload or "{}")
+        try:
+            data = self._read_json_body()
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=400)
+            return
         datasets = data.get("datasets", {})
         if not datasets:
             self.send_json({"error": "No llegaron datasets para analizar"}, status=400)
@@ -621,7 +859,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 db["registros"].insert_one({
                     "timestamp": datetime.now(timezone.utc),
                     "filters": data.get("filters", {}),
-                    "result": result,
+                    "meta": result.get("meta", {}),
+                    "summary": result.get("summary", {}),
+                    "insightsSummary": result.get("insightsSummary"),
                 })
             except Exception:
                 pass  # No bloquear la respuesta si falla MongoDB
@@ -641,9 +881,11 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def handle_save_session(self):
         """POST /api/session — persiste la configuración de datasets."""
-        length  = int(self.headers.get("Content-Length", "0"))
-        payload = self.rfile.read(length).decode("utf-8")
-        data    = json.loads(payload or "{}")
+        try:
+            data = self._read_json_body()
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=400)
+            return
         ok = save_session(data.get("datasets", {}))
         self.send_json({"saved": ok})
 
@@ -663,6 +905,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         data = path.read_bytes()
         self.send_response(200)
+        self._send_security_headers()
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
@@ -674,6 +917,7 @@ class AppHandler(BaseHTTPRequestHandler):
     def send_json(self, payload, status=200):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
+        self._send_security_headers()
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -798,20 +1042,29 @@ def _resolve_datasets(datasets):
             continue
         if dataset_type == "sales":
             erp_config = config.get("erp") if isinstance(config.get("erp"), dict) else {}
+            use_auto = config.get("source") == "auto"
             use_mongo = config.get("source") == "mongo"
-            use_erp = not use_mongo and (config.get("source") == "erp" or erp_config.get("enabled"))
+            use_clickhouse = config.get("source") == "clickhouse"
+            use_erp = not use_mongo and not use_clickhouse and (
+                config.get("source") == "erp" or erp_config.get("enabled")
+            )
+            fecha_desde = config.get("fechaDesde") or erp_config.get("fechaDesde")
+            fecha_hasta = config.get("fechaHasta") or erp_config.get("fechaHasta")
+            if use_auto:
+                resolved[dataset_type], sales_source = _load_commercial_sales_dataset(fecha_desde, fecha_hasta)
+                continue
             if use_erp:
-                fecha_desde = config.get("fechaDesde") or erp_config.get("fechaDesde")
-                fecha_hasta = config.get("fechaHasta") or erp_config.get("fechaHasta")
                 erp_cookie = erp_cookie or erp_login().get("cookie")
                 resolved[dataset_type] = _fetch_sales_dataset_chunked(fecha_desde, fecha_hasta, detailed=True, cookie=erp_cookie)
                 sales_source = "erp"
                 continue
             if use_mongo:
-                fecha_desde = config.get("fechaDesde") or erp_config.get("fechaDesde")
-                fecha_hasta = config.get("fechaHasta") or erp_config.get("fechaHasta")
                 resolved[dataset_type] = load_erp_sales_dataset(fecha_desde, fecha_hasta)
                 sales_source = "mongo"
+                continue
+            if use_clickhouse:
+                resolved[dataset_type] = load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta)
+                sales_source = "clickhouse"
                 continue
             sources = []
             for source in config.get("sources", []):
@@ -850,7 +1103,7 @@ def _resolve_datasets(datasets):
                 "headerRow": int(config.get("headerRow", 0)),
                 "mapping":   config.get("mapping", {}),
             }
-    if "articles" not in resolved and sales_source in {"erp", "mongo"}:
+    if "articles" not in resolved and sales_source in {"erp", "mongo", "clickhouse"}:
         try:
             if sales_source == "erp":
                 erp_cookie = erp_cookie or erp_login().get("cookie")
@@ -859,7 +1112,7 @@ def _resolve_datasets(datasets):
                 resolved["articles"] = load_erp_articles_dataset()
         except Exception:
             pass
-    if "sellers" not in resolved and sales_source in {"erp", "mongo"}:
+    if "sellers" not in resolved and sales_source in {"erp", "mongo", "clickhouse"}:
         try:
             if sales_source == "erp":
                 erp_cookie = erp_cookie or erp_login().get("cookie")
@@ -873,7 +1126,7 @@ def _resolve_datasets(datasets):
                     resolved["sellers"] = build_dataset("sellers", "ChessERP vendedores derivados", "Ventas ERP", records, source_kind="erp")
                 except Exception:
                     pass
-    if "routes" not in resolved and sales_source in {"erp", "mongo"}:
+    if "routes" not in resolved and sales_source in {"erp", "mongo", "clickhouse"}:
         try:
             if sales_source == "erp":
                 erp_cookie = erp_cookie or erp_login().get("cookie")
@@ -888,6 +1141,39 @@ def _resolve_datasets(datasets):
                 except Exception:
                     pass
     return resolved
+
+
+def _load_commercial_sales_dataset(fecha_desde: str, fecha_hasta: str):
+    if not fecha_desde or not fecha_hasta:
+        raise ValueError("Elegí fecha desde y fecha hasta para consultar la base comercial.")
+
+    mongo_error = None
+    clickhouse_error = None
+    mongo_storage = get_erp_storage_status()
+
+    try:
+        require_coverage = True
+        if mongo_storage.get("available"):
+            period_start = mongo_storage.get("periodStart")
+            period_end = mongo_storage.get("periodEnd")
+            if period_start and period_end and period_start <= fecha_desde <= fecha_hasta <= period_end:
+                require_coverage = False
+        return load_erp_sales_dataset(fecha_desde, fecha_hasta, require_coverage=require_coverage), "mongo"
+    except Exception as exc:
+        mongo_error = exc
+
+    try:
+        return load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta), "clickhouse"
+    except Exception as exc:
+        clickhouse_error = exc
+
+    if mongo_error and not clickhouse_error:
+        raise ValueError(str(mongo_error))
+    if clickhouse_error and not mongo_error:
+        raise ValueError(str(clickhouse_error))
+    raise ValueError(
+        f"La base comercial no tiene información disponible para el rango {fecha_desde} a {fecha_hasta}."
+    )
 
 
 def safe_file_path(filename):
@@ -925,6 +1211,33 @@ def _log_error(context, exc, extra=None):
             handle.write("\n")
     except Exception:
         pass
+
+
+def _read_recent_errors(limit=20):
+    if not ERROR_LOG.exists():
+        return []
+    items = []
+    try:
+        with ERROR_LOG.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                items.append(
+                    {
+                        "timestamp": payload.get("timestamp"),
+                        "context": payload.get("context"),
+                        "error": payload.get("error"),
+                        "extra": payload.get("extra") or {},
+                    }
+                )
+    except Exception:
+        return []
+    return list(reversed(items[-limit:]))
 
 
 if __name__ == "__main__":
