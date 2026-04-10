@@ -1,7 +1,8 @@
 import cgi
 import json
 import os
-from datetime import datetime, timezone
+import traceback
+from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -13,7 +14,34 @@ from analysis_engine import AnalysisEngine
 from kpi_generator import generate_kpis
 from viz_selector import build_all_viz, build_viz
 from insight_writer import write_insights, insights_summary
-from mongo_client import get_db, ping, save_session, load_session
+from mongo_client import (
+    get_db,
+    get_erp_prefilter_options,
+    get_erp_storage_status,
+    load_erp_articles_dataset,
+    load_erp_routes_dataset,
+    load_erp_sales_dataset,
+    load_erp_sellers_dataset,
+    ping,
+    record_erp_sync_summary,
+    save_session,
+    load_session,
+    sync_erp_articles,
+    sync_erp_marketing,
+    sync_erp_routes,
+    sync_erp_sales,
+    sync_erp_sellers,
+)
+from erp_client import (
+    fetch_articles_dataset,
+    fetch_marketing_dataset,
+    fetch_routes_dataset,
+    fetch_sales_dataset,
+    fetch_staff_dataset,
+    get_erp_status,
+    erp_login,
+)
+from erp_master_builder import build_dataset, derive_routes_records, derive_sellers_records
 from xlsx_reader import preview_sheet, read_sheet_names
 
 
@@ -21,16 +49,170 @@ BASE_DIR = Path(__file__).resolve().parent
 PARENT_DIR = BASE_DIR.parent
 STATIC_DIR = BASE_DIR / "static"
 UPLOAD_DIR = BASE_DIR / "uploads"
+LOG_DIR = BASE_DIR / "logs"
+ERROR_LOG = LOG_DIR / "app_errors.log"
 HOST = "127.0.0.1"
 PORT = 8765
 ALLOWED_EXTENSIONS = {".xlsx", ".xlsm"}
 ALLOWED_ROOTS = (BASE_DIR, PARENT_DIR)
 MAX_SCAN_DEPTH = 2
+DEFAULT_ERP_SYNC_CHUNK_DAYS = 31
+
+
+class ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
+
+def _erp_sales_chunk_days():
+    try:
+        value = int(os.getenv("CHESS_ERP_SALES_CHUNK_DAYS") or DEFAULT_ERP_SYNC_CHUNK_DAYS)
+    except (TypeError, ValueError):
+        value = DEFAULT_ERP_SYNC_CHUNK_DAYS
+    return max(1, value)
+
+
+def _parse_iso_date(value, field_name):
+    try:
+        return date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        raise ValueError(f"{field_name} debe tener formato YYYY-MM-DD")
+
+
+def _iter_date_chunks(fecha_desde, fecha_hasta, chunk_days=None):
+    start = _parse_iso_date(fecha_desde, "fechaDesde")
+    end = _parse_iso_date(fecha_hasta, "fechaHasta")
+    if start > end:
+        raise ValueError("fechaDesde no puede ser mayor que fechaHasta")
+    window = max(1, chunk_days or _erp_sales_chunk_days())
+    cursor = start
+    while cursor <= end:
+        chunk_end = min(cursor + timedelta(days=window - 1), end)
+        yield cursor.isoformat(), chunk_end.isoformat()
+        cursor = chunk_end + timedelta(days=1)
+
+
+def _fetch_sales_dataset_chunked(fecha_desde, fecha_hasta, detailed=True, cookie=None):
+    records = []
+    headers = []
+    rows_read = 0
+    warnings = []
+    chunks = []
+    for index, (chunk_start, chunk_end) in enumerate(_iter_date_chunks(fecha_desde, fecha_hasta), start=1):
+        dataset = fetch_sales_dataset(chunk_start, chunk_end, detailed=detailed, cookie=cookie)
+        if dataset.get("headers") and not headers:
+            headers = dataset["headers"]
+        rows_read += dataset.get("rowsRead", 0)
+        records.extend(dataset.get("records", []))
+        chunk_warning = dataset.get("warning")
+        chunk_summary = {
+            "index": index,
+            "fechaDesde": chunk_start,
+            "fechaHasta": chunk_end,
+            "rowsRead": dataset.get("rowsRead", 0),
+            "rowsValid": dataset.get("rowsValid", 0),
+        }
+        if chunk_warning:
+            chunk_summary["warning"] = chunk_warning
+            warnings.append(f"{chunk_start} a {chunk_end}: {chunk_warning}")
+        chunks.append(chunk_summary)
+
+    detail_label = "detalladas" if detailed else "resumen"
+    source_label = f"ChessERP ventas {detail_label} {fecha_desde} a {fecha_hasta}"
+    warning = None
+    if not records and warnings:
+        warning = " | ".join(warnings)
+    return {
+        "datasetType": "sales",
+        "sourceKind": "erp",
+        "file": source_label,
+        "sheet": "API ventas detalladas" if detailed else "API ventas",
+        "headerRow": 0,
+        "rowsRead": rows_read,
+        "rowsValid": len(records),
+        "headers": headers,
+        "mapping": {},
+        "records": records,
+        "warning": warning,
+        "warnings": warnings,
+        "chunkCount": len(chunks),
+        "chunks": chunks,
+        "sourceCount": 1,
+        "sources": [
+            {
+                "file": source_label,
+                "sheet": "API ventas detalladas" if detailed else "API ventas",
+                "headerRow": 0,
+                "rowsRead": rows_read,
+                "rowsValid": len(records),
+                "sourceKind": "erp",
+            }
+        ],
+    }
+
+
+def _sync_sales_range_chunked(fecha_desde, fecha_hasta, cookie=None):
+    chunk_summaries = []
+    warnings = []
+    total_rows_read = 0
+    total_rows_valid = 0
+    total_deleted = 0
+    total_upserted = 0
+    total_modified = 0
+    total_matched = 0
+    total_row_versions = 0
+
+    for index, (chunk_start, chunk_end) in enumerate(_iter_date_chunks(fecha_desde, fecha_hasta), start=1):
+        dataset = fetch_sales_dataset(chunk_start, chunk_end, detailed=True, cookie=cookie)
+        sync_summary = sync_erp_sales(dataset["records"], chunk_start, chunk_end, origin="api_sync_chunk")
+        chunk_summary = {
+            "index": index,
+            "range": {"fechaDesde": chunk_start, "fechaHasta": chunk_end},
+            "rowsRead": dataset.get("rowsRead", 0),
+            "rowsValid": dataset.get("rowsValid", 0),
+            "deleted": sync_summary.get("deleted", 0),
+            "upserted": sync_summary.get("upserted", 0),
+            "modified": sync_summary.get("modified", 0),
+            "matched": sync_summary.get("matched", 0),
+        }
+        if dataset.get("warning"):
+            chunk_summary["warning"] = dataset["warning"]
+            warnings.append(f"{chunk_start} a {chunk_end}: {dataset['warning']}")
+        chunk_summaries.append(chunk_summary)
+        total_rows_read += dataset.get("rowsRead", 0)
+        total_rows_valid += dataset.get("rowsValid", 0)
+        total_deleted += sync_summary.get("deleted", 0)
+        total_upserted += sync_summary.get("upserted", 0)
+        total_modified += sync_summary.get("modified", 0)
+        total_matched += sync_summary.get("matched", 0)
+        total_row_versions += sync_summary.get("rowVersions", 0)
+
+    summary = {
+        "range": {"fechaDesde": fecha_desde, "fechaHasta": fecha_hasta},
+        "rowsRead": total_rows_read,
+        "rowsValid": total_rows_valid,
+        "recordsReceived": total_rows_valid,
+        "rowVersions": total_row_versions,
+        "deleted": total_deleted,
+        "upserted": total_upserted,
+        "modified": total_modified,
+        "matched": total_matched,
+        "chunkCount": len(chunk_summaries),
+        "chunkDays": _erp_sales_chunk_days(),
+        "warning": " | ".join(warnings) if warnings and not total_rows_valid else None,
+        "warnings": warnings,
+        "chunks": chunk_summaries,
+        "origin": "api_sync_batch",
+    }
+    return record_erp_sync_summary("sales_batch", summary)
 
 
 class AppHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/favicon.ico":
+            self.send_response(204)
+            self.end_headers()
+            return
         if parsed.path == "/":
             self.serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
             return
@@ -66,6 +248,15 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/preview":
             self.handle_preview(parsed)
             return
+        if parsed.path == "/api/erp/status":
+            self.handle_erp_status()
+            return
+        if parsed.path == "/api/erp/storage-status":
+            self.handle_erp_storage_status()
+            return
+        if parsed.path == "/api/erp/prefilter-options":
+            self.handle_erp_prefilter_options()
+            return
         self.send_error(404, "Ruta no encontrada")
 
     def do_POST(self):
@@ -87,6 +278,9 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/db-status":
             self.send_json({"connected": ping()})
+            return
+        if parsed.path == "/api/erp/sync":
+            self.handle_erp_sync()
             return
         self.send_error(404, "Ruta no encontrada")
 
@@ -197,6 +391,75 @@ class AppHandler(BaseHTTPRequestHandler):
                 "mappingSuggestions": suggest_mappings(preview["headers"], dataset_type),
             }
         )
+
+    def handle_erp_status(self):
+        self.send_json(get_erp_status())
+
+    def handle_erp_storage_status(self):
+        self.send_json(get_erp_storage_status())
+
+    def handle_erp_prefilter_options(self):
+        self.send_json({"filters": get_erp_prefilter_options()})
+
+    def handle_erp_sync(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = self.rfile.read(length).decode("utf-8")
+        data = json.loads(payload or "{}")
+        fecha_desde = data.get("fechaDesde")
+        fecha_hasta = data.get("fechaHasta")
+        refresh_masters = bool(data.get("refreshMasters"))
+        if not fecha_desde or not fecha_hasta:
+            self.send_json({"error": "Faltan fechaDesde o fechaHasta"}, status=400)
+            return
+        try:
+            erp_session = erp_login()
+            erp_cookie = erp_session.get("cookie")
+            sync_summary = _sync_sales_range_chunked(fecha_desde, fecha_hasta, cookie=erp_cookie)
+            storage = get_erp_storage_status()
+            should_sync_masters = refresh_masters or not _erp_masters_available(storage)
+            articles = sellers_dataset = routes_dataset = marketing_dataset = None
+            article_summary = seller_summary = route_summary = marketing_summary = None
+            if should_sync_masters:
+                articles = fetch_articles_dataset(cookie=erp_cookie)
+                sellers_dataset = fetch_staff_dataset(cookie=erp_cookie)
+                routes_dataset = fetch_routes_dataset(cookie=erp_cookie)
+                marketing_dataset = fetch_marketing_dataset(cookie=erp_cookie)
+                article_summary = sync_erp_articles(articles["records"], origin="api_sync")
+                seller_summary = sync_erp_sellers(sellers_dataset["records"], origin="api_sync")
+                route_summary = sync_erp_routes(routes_dataset["records"], origin="api_sync")
+                marketing_summary = sync_erp_marketing(marketing_dataset["records"], origin="api_sync")
+                storage = get_erp_storage_status()
+            self.send_json(
+                {
+                    "sync": sync_summary,
+                    "articlesSync": article_summary,
+                    "sellersSync": seller_summary,
+                    "routesSync": route_summary,
+                    "marketingSync": marketing_summary,
+                    "storage": storage,
+                    "rowsRead": sync_summary.get("rowsRead", 0),
+                    "rowsValid": sync_summary.get("rowsValid", 0),
+                    "warning": sync_summary.get("warning"),
+                    "warnings": sync_summary.get("warnings") or [],
+                    "mastersSynced": should_sync_masters,
+                    "articleRowsRead": articles["rowsRead"] if articles else 0,
+                    "articleRowsValid": articles["rowsValid"] if articles else 0,
+                    "sellerRowsValid": sellers_dataset["rowsValid"] if sellers_dataset else 0,
+                    "routeRowsValid": routes_dataset["rowsValid"] if routes_dataset else 0,
+                    "marketingRowsValid": marketing_dataset["rowsValid"] if marketing_dataset else 0,
+                }
+            )
+        except Exception as exc:
+            _log_error(
+                "erp_sync",
+                exc,
+                {
+                    "fechaDesde": fecha_desde,
+                    "fechaHasta": fecha_hasta,
+                    "refreshMasters": refresh_masters,
+                },
+            )
+            self.send_json({"error": str(exc)}, status=500)
 
     def handle_upload(self):
         ctype, _ = cgi.parse_header(self.headers.get("content-type", ""))
@@ -325,7 +588,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 "insights": dyn_ins,
                 "insightsSummary": insights_summary(dyn_ins),
             })
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=422)
         except Exception as exc:
+            _log_error("analyze_dynamic", exc, {"task_id": task_id, "combo": combo})
             self.send_json({"error": str(exc)}, status=500)
 
     def handle_analyze(self):
@@ -338,51 +604,13 @@ class AppHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            resolved = {}
-            for dataset_type, config in datasets.items():
-                if dataset_type not in DATASET_DEFINITIONS:
-                    continue
-                if dataset_type == "sales":
-                    sources = []
-                    for source in config.get("sources", []):
-                        filename = source.get("file")
-                        sheet_name = source.get("sheet")
-                        if not filename or not sheet_name:
-                            continue
-                        target = safe_file_path(filename)
-                        if not target.exists():
-                            raise FileNotFoundError(f"No se encontró {filename}")
-                        sources.append(
-                            {
-                                "file": filename,
-                                "path": target,
-                                "sheet": sheet_name,
-                                "headerRow": int(source.get("headerRow", 0)),
-                            }
-                        )
-                    if not sources:
-                        continue
-                    resolved[dataset_type] = {
-                        "sources": sources,
-                        "mapping": config.get("mapping", {}),
-                    }
-                    continue
-                filename = config.get("file")
-                sheet_name = config.get("sheet")
-                if not filename or not sheet_name:
-                    continue
-                target = safe_file_path(filename)
-                if not target.exists():
-                    raise FileNotFoundError(f"No se encontró {filename}")
-                resolved[dataset_type] = {
-                    "file": filename,
-                    "path": target,
-                    "sheet": sheet_name,
-                    "headerRow": int(config.get("headerRow", 0)),
-                    "mapping": config.get("mapping", {}),
-                }
+            resolved = _resolve_datasets(datasets)
             result = analyze_datasets(resolved, filters=data.get("filters", {}))
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=422)
+            return
         except Exception as exc:
+            _log_error("analyze", exc, {"filters": data.get("filters", {}), "datasets": list(datasets.keys())})
             self.send_json({"error": str(exc)}, status=500)
             return
 
@@ -437,6 +665,9 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(data)
 
@@ -560,10 +791,28 @@ def _resolve_datasets(datasets):
     """
     from analyzer import DATASET_DEFINITIONS
     resolved = {}
+    sales_source = None
+    erp_cookie = None
     for dataset_type, config in datasets.items():
         if dataset_type not in DATASET_DEFINITIONS:
             continue
         if dataset_type == "sales":
+            erp_config = config.get("erp") if isinstance(config.get("erp"), dict) else {}
+            use_mongo = config.get("source") == "mongo"
+            use_erp = not use_mongo and (config.get("source") == "erp" or erp_config.get("enabled"))
+            if use_erp:
+                fecha_desde = config.get("fechaDesde") or erp_config.get("fechaDesde")
+                fecha_hasta = config.get("fechaHasta") or erp_config.get("fechaHasta")
+                erp_cookie = erp_cookie or erp_login().get("cookie")
+                resolved[dataset_type] = _fetch_sales_dataset_chunked(fecha_desde, fecha_hasta, detailed=True, cookie=erp_cookie)
+                sales_source = "erp"
+                continue
+            if use_mongo:
+                fecha_desde = config.get("fechaDesde") or erp_config.get("fechaDesde")
+                fecha_hasta = config.get("fechaHasta") or erp_config.get("fechaHasta")
+                resolved[dataset_type] = load_erp_sales_dataset(fecha_desde, fecha_hasta)
+                sales_source = "mongo"
+                continue
             sources = []
             for source in config.get("sources", []):
                 filename  = source.get("file")
@@ -585,6 +834,7 @@ def _resolve_datasets(datasets):
                 "sources": sources,
                 "mapping": config.get("mapping", {}),
             }
+            sales_source = "files"
         else:
             filename  = config.get("file")
             sheet_name = config.get("sheet")
@@ -600,6 +850,43 @@ def _resolve_datasets(datasets):
                 "headerRow": int(config.get("headerRow", 0)),
                 "mapping":   config.get("mapping", {}),
             }
+    if "articles" not in resolved and sales_source in {"erp", "mongo"}:
+        try:
+            if sales_source == "erp":
+                erp_cookie = erp_cookie or erp_login().get("cookie")
+                resolved["articles"] = fetch_articles_dataset(cookie=erp_cookie)
+            else:
+                resolved["articles"] = load_erp_articles_dataset()
+        except Exception:
+            pass
+    if "sellers" not in resolved and sales_source in {"erp", "mongo"}:
+        try:
+            if sales_source == "erp":
+                erp_cookie = erp_cookie or erp_login().get("cookie")
+                resolved["sellers"] = fetch_staff_dataset(cookie=erp_cookie)
+            else:
+                resolved["sellers"] = load_erp_sellers_dataset()
+        except Exception:
+            if sales_source == "erp":
+                try:
+                    records = derive_sellers_records(resolved["sales"].get("records", []))
+                    resolved["sellers"] = build_dataset("sellers", "ChessERP vendedores derivados", "Ventas ERP", records, source_kind="erp")
+                except Exception:
+                    pass
+    if "routes" not in resolved and sales_source in {"erp", "mongo"}:
+        try:
+            if sales_source == "erp":
+                erp_cookie = erp_cookie or erp_login().get("cookie")
+                resolved["routes"] = fetch_routes_dataset(cookie=erp_cookie)
+            else:
+                resolved["routes"] = load_erp_routes_dataset()
+        except Exception:
+            if sales_source == "erp":
+                try:
+                    records = derive_routes_records(resolved["sales"].get("records", []))
+                    resolved["routes"] = build_dataset("routes", "ChessERP rutas derivadas", "Ventas ERP", records, source_kind="erp")
+                except Exception:
+                    pass
     return resolved
 
 
@@ -608,6 +895,36 @@ def safe_file_path(filename):
     if not any(root == candidate or root in candidate.parents for root in ALLOWED_ROOTS):
         raise ValueError("Ruta inválida")
     return candidate
+
+
+def _erp_masters_available(storage):
+    return bool(
+        storage.get("articleRecords")
+        and storage.get("sellerRecords")
+        and storage.get("routeRecords")
+        and storage.get("marketingRecords")
+    )
+
+
+def _log_error(context, exc, extra=None):
+    try:
+        LOG_DIR.mkdir(exist_ok=True)
+        with ERROR_LOG.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "context": context,
+                        "error": str(exc),
+                        "extra": extra or {},
+                        "traceback": traceback.format_exc(),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            handle.write("\n")
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
@@ -619,4 +936,9 @@ if __name__ == "__main__":
         print("MongoDB Atlas conectado — DB: Intel-Comercial")
     else:
         print("MongoDB no conectado (revisá MONGO_URI en .env)")
-    HTTPServer((HOST, PORT), AppHandler).serve_forever()
+    try:
+        ReusableHTTPServer((HOST, PORT), AppHandler).serve_forever()
+    except OSError as exc:
+        if exc.errno == 48:
+            print(f"El puerto {PORT} ya está en uso. Cerrá la otra instancia de la app o reutilizá la que ya está corriendo en http://{HOST}:{PORT}.")
+        raise

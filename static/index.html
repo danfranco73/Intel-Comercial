@@ -11,16 +11,16 @@
       <section class="hero">
         <div>
           <p class="eyebrow">Distribuidora - Modelo Comercial</p>
-          <h1>Ventas históricas enriquecidas con maestros</h1>
-          <p class="lead">Cargá la venta por cliente, el maestro de artículos, el maestro de rutas y el maestro de vendedores para relacionar la operación completa y generar ratios, proyecciones y oportunidades de mejora.</p>
+          <h1>Ventas históricas con enfoque comercial</h1>
+          <p class="lead">Trabajá con un único dataset visible de ventas, traelo desde ChessERP o MongoDB, y filtrá el informe por familia, línea, marca, unidad de negocio, proveedor, fuerza de ventas, ruta y vendedor sin depender de maestros cargados a mano.</p>
         </div>
         <div class="hero-note">
-          <p>Modelo de carga</p>
+          <p>Flujo recomendado</p>
           <ol>
-            <li>Venta por cliente: hecho principal.</li>
-            <li>Maestro de artículos: familia, línea, proveedor, sabor, UxB y calibre.</li>
-            <li>Maestro de rutas: fuerza de ventas, vendedor y descripción de ruta.</li>
-            <li>Maestro de vendedores: vendedor, fuerza de ventas y ruta.</li>
+            <li>Elegí ventas desde Archivos, ChessERP o MongoDB.</li>
+            <li>Definí el período a analizar.</li>
+            <li>Usá el enfoque comercial por agrupaciones ERP.</li>
+            <li>Corré el BI y refiná el informe con filtros.</li>
           </ol>
         </div>
       </section>
@@ -31,15 +31,23 @@
             Subir archivos
             <input id="uploadInput" type="file" accept=".xlsx,.xlsm" multiple>
           </label>
-          <button id="uploadBtn">Subir a la app</button>
-          <button id="clearUploadsBtn">Limpiar subidos</button>
-          <button id="refreshFiles">Actualizar lista</button>
+          <button id="uploadBtn">Subir archivos</button>
+          <button id="clearUploadsBtn">Limpiar biblioteca</button>
+          <button id="refreshFiles">Actualizar biblioteca</button>
           <button id="analyzeBtn" class="primary">Relacionar y analizar</button>
         </div>
       </div>
 
       <section class="panel controls">
-        <div class="subpanel">
+        <div class="subpanel controls-main">
+          <div class="subpanel-header">
+            <h2>Fuente principal del análisis</h2>
+            <p class="muted">La app trabaja sobre ventas. El resto del contexto comercial llega desde los maestros ERP persistidos.</p>
+          </div>
+          <div id="datasetConfigs" class="dataset-grid"></div>
+        </div>
+
+        <div class="subpanel controls-side">
           <div class="subpanel-header">
             <h2>Biblioteca de archivos</h2>
             <label>
@@ -51,14 +59,6 @@
             </label>
           </div>
           <div id="fileLibrary" class="file-library"></div>
-        </div>
-
-        <div class="subpanel">
-          <div class="subpanel-header">
-            <h2>Datasets de análisis</h2>
-            <p class="muted">Cada bloque tiene su propio archivo, hoja, encabezado y mapeo.</p>
-          </div>
-          <div id="datasetConfigs" class="dataset-grid"></div>
         </div>
 
         <p id="status" class="status"></p>
@@ -126,15 +126,15 @@
             <div id="chartZoneSales"></div>
           </div>
           <div class="panel inner-panel">
-            <h2>Ventas por vendedor</h2>
+            <h2>Ticket por vendedor</h2>
             <div id="chartSellerSales"></div>
           </div>
           <div class="panel inner-panel">
-            <h2>Momentum de familias</h2>
+            <h2>Ventas por marca</h2>
             <div id="chartFamilyMomentum"></div>
           </div>
           <div class="panel inner-panel">
-            <h2>Cobertura de maestros</h2>
+            <h2>Ventas por canal</h2>
             <div id="chartCoverage"></div>
           </div>
         </div>
@@ -145,11 +145,11 @@
             <div id="clientsRankings"></div>
           </div>
           <div class="panel inner-panel">
-            <h2>Territorio y vendedores</h2>
+            <h2>Comercial</h2>
             <div id="commercialRankings"></div>
           </div>
           <div class="panel inner-panel">
-            <h2>Mix</h2>
+            <h2>Mix y canal</h2>
             <div id="mixRankings"></div>
           </div>
         </div>
@@ -186,6 +186,21 @@
         </div>
       </section>
     </main>
+    <div id="progressModal" class="progress-modal hidden" aria-live="polite" aria-hidden="true">
+      <div class="progress-card">
+        <div class="progress-spinner" aria-hidden="true"></div>
+        <div>
+          <h3>Procesando</h3>
+          <p id="progressMessage" class="muted">Esperando la próxima tarea.</p>
+        </div>
+      </div>
+    </div>
+    <div class="floating-nav" aria-label="Navegación de página">
+      <button type="button" data-scroll-action="page-up" title="Subir una pantalla">↑</button>
+      <button type="button" data-scroll-action="page-down" title="Bajar una pantalla">↓</button>
+      <button type="button" data-scroll-action="top" title="Ir al inicio">⇡</button>
+      <button type="button" data-scroll-action="bottom" title="Ir al final">⇣</button>
+    </div>
     <script src="/app.js"></script>
     <div class="watermark">@DanFran</div>
   </body>

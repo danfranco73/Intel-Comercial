@@ -4,21 +4,55 @@ const state = {
   datasets: {},
   preview: { datasetType: "sales", sourceIndex: 0 },
   scope: "uploads",
+  erpStatus: { configured: false, reachable: false, message: "" },
+  erpStorage: { connected: false, available: false, message: "" },
+  prefilters: { available: {}, selected: {} },
+  filterSearch: {},
+  erpSyncPending: false,
   filters: { available: {}, selected: {} },
   dynamic: { tasks: [], selectedTaskId: null },
 };
 
-const datasetOrder = ["sales", "articles", "routes", "sellers"];
-const filterOrder = ["year", "month", "family", "line", "supplier", "sales_force", "route_description", "seller_name", "channel"];
+const datasetOrder = ["sales"];
+const filterOrder = ["year", "month", "family", "line", "brand", "business_unit", "supplier", "sales_force", "route_description", "seller_name", "channel"];
+const ERP_KEEPALIVE_MS = 4 * 60 * 1000;
 
 const filterGroups = [
   { id: "tiempo",     label: "Período",       fields: ["year", "month"] },
-  { id: "producto",   label: "Producto",      fields: ["family", "line", "supplier"] },
+  { id: "producto",   label: "Producto",      fields: ["family", "line", "brand", "business_unit", "supplier"] },
   { id: "comercial",  label: "Comercial",     fields: ["sales_force", "route_description", "seller_name"] },
   { id: "canal",      label: "Canal",         fields: ["channel"] },
 ];
+const prefilterGroups = [
+  { id: "producto", label: "Producto", fields: ["family", "line", "brand", "business_unit", "supplier"] },
+  { id: "comercial", label: "Comercial", fields: ["sales_force", "route_description", "seller_name"] },
+];
 
 let activeFilterTab = "tiempo";
+let activePrefilterTab = "producto";
+let erpKeepaliveTimer = null;
+let progressDepth = 0;
+
+function formatDateInput(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function createErpConfig() {
+  const today = new Date();
+  return {
+    fechaDesde: formatDateInput(addDays(today, -89)),
+    fechaHasta: formatDateInput(today),
+  };
+}
 
 async function api(url, options) {
   const response = await fetch(url, options);
@@ -31,31 +65,72 @@ async function api(url, options) {
 
 async function boot() {
   setStatus("Preparando estructura de análisis...");
-  const [filesResponse, schemaResponse, sessionResponse] = await Promise.all([
+  const [filesResponse, schemaResponse, sessionResponse, erpStatus, erpStorage, erpPrefilters] = await Promise.all([
     api(`/api/files?scope=${encodeURIComponent(state.scope)}`),
     api("/api/datasets"),
     api("/api/session").catch(() => ({ datasets: null })),
+    api("/api/erp/status").catch(() => ({ configured: false, reachable: false, message: "ChessERP no disponible." })),
+    api("/api/erp/storage-status").catch(() => ({ connected: false, available: false, message: "MongoDB ERP no disponible." })),
+    api("/api/erp/prefilter-options").catch(() => ({ filters: {} })),
   ]);
   state.files = filesResponse.files || [];
   state.schema = schemaResponse.datasets || {};
+  state.erpStatus = erpStatus || { configured: false, reachable: false, message: "" };
+  state.erpStorage = erpStorage || { connected: false, available: false, message: "" };
+  state.prefilters.available = erpPrefilters?.filters || {};
+  state.prefilters.selected = normalizeSelectedFilters({}, state.prefilters.available);
   initializeDatasets();
 
   if (sessionResponse.datasets) {
     await restoreSession(sessionResponse.datasets);
     setStatus("Sesión anterior restaurada. Podés analizar directamente o cambiar los archivos.");
   } else {
-    setStatus("Cargá uno o más archivos de venta por cliente y luego los maestros.");
+    setStatus(state.erpStatus.reachable
+      ? "Podés usar ChessERP para ventas o cargar archivos Excel."
+      : "Cargá uno o más archivos de venta por cliente y luego los maestros.");
   }
 
   renderFileLibrary();
   renderDatasetConfigs();
   renderPreview();
+  startErpKeepalive();
+}
+
+function startErpKeepalive() {
+  if (erpKeepaliveTimer) {
+    clearInterval(erpKeepaliveTimer);
+  }
+  if (!state.erpStatus.configured) {
+    return;
+  }
+  erpKeepaliveTimer = setInterval(async () => {
+    if (progressDepth > 0 || state.erpSyncPending) {
+      return;
+    }
+    try {
+      const status = await api("/api/erp/status");
+      state.erpStatus = status || state.erpStatus;
+    } catch (_) {
+      // Mantener silencioso el keepalive para no interrumpir la UI.
+    }
+  }, ERP_KEEPALIVE_MS);
 }
 
 async function restoreSession(saved) {
   // Ventas (múltiples fuentes)
   const savedSales = saved.sales;
-  if (savedSales?.sources?.length) {
+  const savedErp = savedSales?.erp || {};
+  const useErp = savedSales?.source === "erp" || savedErp.enabled;
+  const useMongo = savedSales?.source === "mongo";
+  if (useMongo) {
+    state.datasets.sales.sourceMode = "mongo";
+    state.datasets.sales.erp.fechaDesde = savedSales?.fechaDesde || savedErp.fechaDesde || state.datasets.sales.erp.fechaDesde;
+    state.datasets.sales.erp.fechaHasta = savedSales?.fechaHasta || savedErp.fechaHasta || state.datasets.sales.erp.fechaHasta;
+  } else if (useErp) {
+    state.datasets.sales.sourceMode = "erp";
+    state.datasets.sales.erp.fechaDesde = savedSales?.fechaDesde || savedErp.fechaDesde || state.datasets.sales.erp.fechaDesde;
+    state.datasets.sales.erp.fechaHasta = savedSales?.fechaHasta || savedErp.fechaHasta || state.datasets.sales.erp.fechaHasta;
+  } else if (savedSales?.sources?.length) {
     state.datasets.sales.mapping = savedSales.mapping || {};
     const restoredSources = [];
     for (const src of savedSales.sources) {
@@ -103,9 +178,11 @@ async function restoreSession(saved) {
 function initializeDatasets() {
   state.datasets = {
     sales: {
+      sourceMode: "files",
       sources: [createSource()],
       mapping: {},
       mappingSuggestions: {},
+      erp: createErpConfig(),
     },
     articles: createSingleDataset(),
     routes: createSingleDataset(),
@@ -139,6 +216,10 @@ function createSingleDataset() {
 
 function renderFileLibrary() {
   const container = document.getElementById("fileLibrary");
+  const sidePanel = document.querySelector(".controls-side");
+  if (sidePanel) {
+    sidePanel.classList.toggle("hidden", !usesFileMode());
+  }
   if (!state.files.length) {
     container.innerHTML = "<div class='file-item muted'>No hay archivos .xlsx o .xlsm disponibles.</div>";
     return;
@@ -152,13 +233,13 @@ function renderFileLibrary() {
   `).join("");
 }
 
+function usesFileMode() {
+  return state.datasets?.sales?.sourceMode === "files";
+}
+
 function renderDatasetConfigs() {
   const container = document.getElementById("datasetConfigs");
-  container.innerHTML = datasetOrder.map((datasetType) => {
-    return datasetType === "sales"
-      ? renderSalesDatasetCard()
-      : renderSingleDatasetCard(datasetType);
-  }).join("");
+  container.innerHTML = renderSalesDatasetCard();
 
   bindDatasetEvents(container);
 }
@@ -166,23 +247,157 @@ function renderDatasetConfigs() {
 function renderSalesDatasetCard() {
   const schema = state.schema.sales;
   const dataset = state.datasets.sales;
+  const usingErp = dataset.sourceMode === "erp";
+  const usingMongo = dataset.sourceMode === "mongo";
   return `
     <div class="source-card ${state.preview.datasetType === "sales" ? "active" : ""}">
       <div class="subpanel-header">
         <div>
           <h3>${escapeHtml(schema.label)}</h3>
-          <div class="muted">Podés cargar varios archivos, por ejemplo uno por año.</div>
+          <div class="muted">${usingErp ? "Ventas en vivo desde ChessERP con rango de fechas." : usingMongo ? "Ventas ERP persistidas en MongoDB para trabajar sin depender del Excel." : "Podés cargar varios archivos, por ejemplo uno por año."}</div>
         </div>
-        <button data-sales-add="1">Agregar archivo</button>
+        ${usingErp || usingMongo ? `<button data-sales-preview-erp="1">${state.preview.datasetType === "sales" ? "Viendo fuente" : "Ver fuente"}</button>` : `<button data-sales-add="1">Agregar archivo</button>`}
       </div>
 
-      <div class="sales-source-list">
-        ${dataset.sources.map((source, index) => renderSalesSource(source, index)).join("")}
+      <div class="segmented">
+        <button class="${!usingErp && !usingMongo ? "active" : ""}" data-sales-mode="files">Archivos</button>
+        <button class="${usingErp ? "active" : ""}" data-sales-mode="erp">ChessERP</button>
+        <button class="${usingMongo ? "active" : ""}" data-sales-mode="mongo">MongoDB</button>
       </div>
 
-      <div class="mapping-grid compact">
-        ${renderSalesMappingFields()}
+      ${usingErp ? renderErpSalesPanel(dataset.erp) : usingMongo ? renderMongoSalesPanel(dataset.erp) : `
+        <div class="sales-source-list">
+          ${dataset.sources.map((source, index) => renderSalesSource(source, index)).join("")}
+        </div>
+
+        <div class="mapping-grid compact">
+          ${renderSalesMappingFields()}
+        </div>
+      `}
+    </div>
+  `;
+}
+
+function renderErpSalesPanel(erp) {
+  const statusClass = state.erpStatus.reachable ? "ok" : state.erpStatus.configured ? "warn" : "danger";
+  const storage = renderMongoStorageSummary();
+  return `
+    <div class="erp-panel">
+      <div class="erp-status ${statusClass}">${escapeHtml(state.erpStatus.message || "Estado de ChessERP desconocido.")}</div>
+      <div class="row">
+        <label>
+          Fecha desde
+          <input data-erp-from="1" type="date" value="${escapeHtml(erp.fechaDesde || "")}">
+        </label>
+        <label>
+          Fecha hasta
+          <input data-erp-to="1" type="date" value="${escapeHtml(erp.fechaHasta || "")}">
+        </label>
       </div>
+      <div class="button-row">
+        <button class="primary" data-erp-sync="1" ${state.erpSyncPending ? "disabled" : ""}>${state.erpSyncPending ? "Sincronizando..." : "Sincronizar en MongoDB"}</button>
+      </div>
+      ${renderPrefilterPanel("Enfoque del informe")}
+      ${storage}
+      <div class="muted">Podés definir el enfoque comercial antes de analizar. Por limitación actual de ChessERP, la extracción de ventas sigue yendo por fecha; estas pestañas segmentan el informe dentro de la app usando los maestros persistidos.</div>
+    </div>
+  `;
+}
+
+function renderMongoSalesPanel(erp) {
+  const statusClass = state.erpStorage.available ? "ok" : state.erpStorage.connected ? "warn" : "danger";
+  return `
+    <div class="erp-panel">
+      <div class="erp-status ${statusClass}">${escapeHtml(state.erpStorage.message || "Estado de MongoDB desconocido.")}</div>
+      <div class="row">
+        <label>
+          Fecha desde
+          <input data-erp-from="1" type="date" value="${escapeHtml(erp.fechaDesde || "")}">
+        </label>
+        <label>
+          Fecha hasta
+          <input data-erp-to="1" type="date" value="${escapeHtml(erp.fechaHasta || "")}">
+        </label>
+      </div>
+      ${renderPrefilterPanel("Enfoque del informe")}
+      ${renderMongoStorageSummary()}
+      <div class="muted">El análisis usará únicamente ventas ERP persistidas en MongoDB para el rango seleccionado.</div>
+    </div>
+  `;
+}
+
+function renderPrefilterPanel(title) {
+  const availableGroups = prefilterGroups.filter((group) =>
+    group.fields.some((field) => state.prefilters.available[field]?.options?.length)
+  );
+  if (!availableGroups.length) {
+    return "<div class='muted'>Sin agrupaciones ERP disponibles todavía. Sincronizá maestros al menos una vez para habilitar el enfoque por producto y comercial.</div>";
+  }
+  if (!availableGroups.find((group) => group.id === activePrefilterTab)) {
+    activePrefilterTab = availableGroups[0].id;
+  }
+  const tabsHtml = availableGroups.map((group) => {
+    const activeInGroup = group.fields.filter((field) => isFieldConstrained(field, state.prefilters.selected, state.prefilters.available)).length;
+    const badge = activeInGroup ? `<span class="filter-tab-badge">${activeInGroup}</span>` : "";
+    return `<button class="filter-tab${group.id === activePrefilterTab ? " active" : ""}" data-prefilter-tab="${group.id}">${escapeHtml(group.label)}${badge}</button>`;
+  }).join("");
+  const activeGroup = availableGroups.find((group) => group.id === activePrefilterTab);
+  const fieldsHtml = activeGroup
+    ? activeGroup.fields
+        .filter((field) => state.prefilters.available[field]?.options?.length)
+        .map((field) => renderSelectableField("prefilter", field, state.prefilters.available[field], state.prefilters.selected[field] || []))
+        .join("")
+    : "<div class='muted'>No hay agrupaciones disponibles.</div>";
+  return `
+    <div class="filter-grid">
+      <div class="subpanel-header">
+        <div>
+          <strong>${escapeHtml(title)}</strong>
+          <div class="muted">Elegí segmentos comerciales antes de ejecutar el análisis.</div>
+        </div>
+        <div class="button-row">
+          <button data-prefilter-clear="1">Limpiar enfoque</button>
+        </div>
+      </div>
+      <div class="filter-tabs">${tabsHtml}</div>
+      <div class="filter-tab-body">
+        <div class="filter-tab-hint muted">Marcá las opciones que quieras incluir o usá Todos / Ninguno.</div>
+        <div class="filter-fields-row">${fieldsHtml}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderMongoStorageSummary() {
+  const storage = state.erpStorage || {};
+  const range = storage.lastRange ? `${storage.lastRange.fechaDesde} a ${storage.lastRange.fechaHasta}` : "sin sincronizaciones";
+  const period = storage.periodStart && storage.periodEnd ? `${storage.periodStart} a ${storage.periodEnd}` : "sin registros";
+  const chunkInfo = Number(storage.lastChunkCount || 0) > 1
+    ? `<div><strong>Última sync resuelta en:</strong> ${Number(storage.lastChunkCount).toLocaleString("es-AR")} tramos internos</div>`
+    : "";
+  const lastSyncRows = Number.isFinite(Number(storage.lastSyncRowsValid))
+    ? `<div><strong>Ventas incorporadas en la última sync:</strong> ${Number(storage.lastSyncRowsValid || 0).toLocaleString("es-AR")}</div>`
+    : "";
+  const warningInfo = storage.lastSyncWarning
+    ? `<div><strong>Advertencia última sync:</strong> ${escapeHtml(storage.lastSyncWarning)}</div>`
+    : "";
+  return `
+    <div class="mongo-summary">
+      <div><strong>Ventas persistidas:</strong> ${Number(storage.records || 0).toLocaleString("es-AR")}</div>
+      <div><strong>Artículos persistidos:</strong> ${Number(storage.articleRecords || 0).toLocaleString("es-AR")}</div>
+      <div><strong>Vendedores persistidos:</strong> ${Number(storage.sellerRecords || 0).toLocaleString("es-AR")}</div>
+      <div><strong>Rutas persistidas:</strong> ${Number(storage.routeRecords || 0).toLocaleString("es-AR")}</div>
+      <div><strong>Jerarquía MKT persistida:</strong> ${Number(storage.marketingRecords || 0).toLocaleString("es-AR")}</div>
+      <div><strong>Período disponible:</strong> ${escapeHtml(period)}</div>
+      <div><strong>Última sincronización:</strong> ${escapeHtml(storage.lastSyncAt || "nunca")}</div>
+      <div><strong>Última sync de artículos:</strong> ${escapeHtml(storage.articlesLastSyncAt || "nunca")}</div>
+      <div><strong>Última sync de vendedores:</strong> ${escapeHtml(storage.sellersLastSyncAt || "nunca")}</div>
+      <div><strong>Última sync de rutas:</strong> ${escapeHtml(storage.routesLastSyncAt || "nunca")}</div>
+      <div><strong>Última sync de jerarquía MKT:</strong> ${escapeHtml(storage.marketingLastSyncAt || "nunca")}</div>
+      <div><strong>Último rango sincronizado:</strong> ${escapeHtml(range)}</div>
+      ${chunkInfo}
+      ${lastSyncRows}
+      ${warningInfo}
     </div>
   `;
 }
@@ -225,6 +440,9 @@ function renderSalesSource(source, index) {
 }
 
 function renderSalesMappingFields() {
+  if (state.datasets.sales.sourceMode === "erp" || state.datasets.sales.sourceMode === "mongo") {
+    return "";
+  }
   const schema = state.schema.sales;
   const previewSource = getSalesPreviewSource();
   const headers = previewSource?.preview?.headers || [];
@@ -308,6 +526,15 @@ function renderMappingFields(datasetType) {
 }
 
 function bindDatasetEvents(container) {
+  container.querySelectorAll("[data-sales-mode]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.datasets.sales.sourceMode = button.dataset.salesMode;
+      state.preview = { datasetType: "sales", sourceIndex: 0 };
+      renderDatasetConfigs();
+      renderPreview();
+    });
+  });
+
   container.querySelectorAll("[data-sales-add]").forEach((button) => {
     button.addEventListener("click", () => {
       state.datasets.sales.sources.push(createSource());
@@ -337,6 +564,45 @@ function bindDatasetEvents(container) {
     });
   });
 
+  container.querySelectorAll("[data-sales-preview-erp]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.preview = { datasetType: "sales", sourceIndex: 0 };
+      renderDatasetConfigs();
+      renderPreview();
+    });
+  });
+
+  container.querySelectorAll("[data-erp-sync]").forEach((button) => {
+    button.addEventListener("click", () => syncErpToMongo().catch(showError));
+  });
+
+  container.querySelectorAll("[data-prefilter-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      activePrefilterTab = button.dataset.prefilterTab;
+      renderDatasetConfigs();
+    });
+  });
+
+  container.querySelectorAll("[data-selectable-kind='prefilter'][data-selectable-role='option']").forEach((input) => {
+    input.addEventListener("change", () => {
+      toggleSelectableValue("prefilter", input.dataset.selectableField, input.value, input.checked);
+    });
+  });
+
+  container.querySelectorAll("[data-selectable-kind='prefilter'][data-selectable-role='action']").forEach((button) => {
+    button.addEventListener("click", () => {
+      applySelectableAction("prefilter", button.dataset.selectableField, button.dataset.selectableAction);
+      renderDatasetConfigs();
+    });
+  });
+
+  container.querySelectorAll("[data-prefilter-clear]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.prefilters.selected = normalizeSelectedFilters({}, state.prefilters.available);
+      renderDatasetConfigs();
+    });
+  });
+
   container.querySelectorAll("[data-sales-file]").forEach((select) => {
     select.addEventListener("change", async () => {
       await onSalesFileChange(Number(select.dataset.salesFile), select.value);
@@ -360,6 +626,24 @@ function bindDatasetEvents(container) {
       const index = Number(input.dataset.salesHeader);
       state.datasets.sales.sources[index].headerRow = Number(input.value || 0);
       if (state.preview.datasetType === "sales" && state.preview.sourceIndex === index) {
+        renderPreview();
+      }
+    });
+  });
+
+  container.querySelectorAll("[data-erp-from]").forEach((input) => {
+    input.addEventListener("change", () => {
+      state.datasets.sales.erp.fechaDesde = input.value;
+      if (state.preview.datasetType === "sales") {
+        renderPreview();
+      }
+    });
+  });
+
+  container.querySelectorAll("[data-erp-to]").forEach((input) => {
+    input.addEventListener("change", () => {
+      state.datasets.sales.erp.fechaHasta = input.value;
+      if (state.preview.datasetType === "sales") {
         renderPreview();
       }
     });
@@ -494,12 +778,78 @@ async function refreshPreviewForDataset(datasetType) {
   dataset.mapping = { ...dataset.mappingSuggestions };
 }
 
+async function refreshErpStorageStatus() {
+  state.erpStorage = await api("/api/erp/storage-status").catch(() => ({ connected: false, available: false, message: "MongoDB ERP no disponible." }));
+}
+
+async function refreshErpPrefilterOptions() {
+  const response = await api("/api/erp/prefilter-options").catch(() => ({ filters: {} }));
+  state.prefilters.available = response.filters || {};
+  state.prefilters.selected = normalizeSelectedFilters(state.prefilters.selected, state.prefilters.available);
+}
+
+async function syncErpToMongo() {
+  if (state.erpSyncPending) {
+    return;
+  }
+  const { fechaDesde, fechaHasta } = state.datasets.sales.erp;
+  if (!fechaDesde || !fechaHasta) {
+    setStatus("Elegí fecha desde y fecha hasta para sincronizar.");
+    return;
+  }
+  state.erpSyncPending = true;
+  renderDatasetConfigs();
+  try {
+    setStatus(`Sincronizando ChessERP en MongoDB para ${fechaDesde} a ${fechaHasta}...`);
+    const data = await withProgress(`Sincronizando ChessERP en MongoDB para ${fechaDesde} a ${fechaHasta}...`, () => api("/api/erp/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fechaDesde, fechaHasta, refreshMasters: false }),
+    }));
+    state.erpStorage = data.storage || state.erpStorage;
+    await refreshErpPrefilterOptions();
+    if (data.warning) {
+      state.preview = { datasetType: "sales", sourceIndex: 0 };
+      renderDatasetConfigs();
+      renderPreview();
+      setStatus(`Sincronización completa sin ventas nuevas para ${fechaDesde} a ${fechaHasta}. ${data.warning}`);
+      return;
+    }
+    state.datasets.sales.sourceMode = "mongo";
+    state.preview = { datasetType: "sales", sourceIndex: 0 };
+    renderDatasetConfigs();
+    renderPreview();
+    const mastersMessage = data.mastersSynced
+      ? `${data.articleRowsValid || 0} artículos, ${data.sellerRowsValid || 0} vendedores, ${data.routeRowsValid || 0} rutas y ${data.marketingRowsValid || 0} nodos MKT`
+      : "maestros reutilizados desde MongoDB";
+    const chunkMessage = Number(data.sync?.chunkCount || 0) > 1
+      ? ` La app dividió el rango en ${data.sync.chunkCount} tramos internos.`
+      : "";
+    setStatus(`Sincronización completa: ${data.rowsValid} líneas de venta. ${mastersMessage}.${chunkMessage}`);
+  } finally {
+    state.erpSyncPending = false;
+    renderDatasetConfigs();
+  }
+}
+
 function renderPreview() {
   const meta = document.getElementById("previewMeta");
   const container = document.getElementById("previewContainer");
   const target = getPreviewTarget();
 
-  if (!target || !target.preview) {
+  if (!target) {
+    meta.textContent = "Elegí un dataset para ver su preview.";
+    container.innerHTML = "<div class='muted'>Todavía no hay vista previa disponible.</div>";
+    return;
+  }
+
+  if (target.message) {
+    meta.textContent = target.meta;
+    container.innerHTML = `<div class='muted'>${escapeHtml(target.message)}</div>`;
+    return;
+  }
+
+  if (!target.preview) {
     meta.textContent = "Elegí un dataset para ver su preview.";
     container.innerHTML = "<div class='muted'>Todavía no hay vista previa disponible.</div>";
     return;
@@ -533,6 +883,17 @@ function renderPreview() {
 
 function getPreviewTarget() {
   if (state.preview.datasetType === "sales") {
+    if (state.datasets.sales.sourceMode === "erp" || state.datasets.sales.sourceMode === "mongo") {
+      const erp = state.datasets.sales.erp;
+      return {
+        meta: `${state.schema.sales.label} · ${state.datasets.sales.sourceMode === "mongo" ? "MongoDB" : "ChessERP"} · ${erp.fechaDesde || "sin fecha"} a ${erp.fechaHasta || "sin fecha"}`,
+        message: state.datasets.sales.sourceMode === "mongo"
+          ? "La fuente de ventas será MongoDB con datos sincronizados desde ChessERP."
+          : state.erpStatus.reachable
+            ? "ChessERP no ofrece preview tabular en esta pantalla. El análisis tomará ventas históricas del rango seleccionado."
+            : "La conexión con ChessERP no está disponible. Revisá el estado antes de analizar.",
+      };
+    }
     const source = getSalesPreviewSource();
     if (!source) {
       return null;
@@ -568,7 +929,7 @@ async function uploadFiles() {
   const form = new FormData();
   files.forEach((file) => form.append("files", file));
   setStatus("Subiendo archivos...");
-  const response = await api("/api/upload", { method: "POST", body: form });
+  const response = await withProgress("Subiendo archivos a la biblioteca...", () => api("/api/upload", { method: "POST", body: form }));
   state.scope = "uploads";
   state.files = response.files || [];
   renderFileLibrary();
@@ -580,7 +941,7 @@ async function uploadFiles() {
 
 async function clearUploads() {
   setStatus("Limpiando archivos subidos...");
-  const response = await api("/api/clear-uploads", { method: "POST" });
+  const response = await withProgress("Limpiando archivos subidos...", () => api("/api/clear-uploads", { method: "POST" }));
   state.scope = "uploads";
   state.files = response.files || [];
   initializeDatasets();
@@ -593,27 +954,41 @@ async function clearUploads() {
 }
 
 async function analyze() {
-  const salesSources = state.datasets.sales.sources
-    .filter((source) => source.file && source.sheet)
-    .map((source) => ({
-      file: source.file,
-      sheet: source.sheet,
-      headerRow: Number(source.headerRow || 0),
-    }));
-  if (!salesSources.length) {
-    setStatus("Cargá al menos un archivo en Venta por cliente.");
-    return;
-  }
-
   const payload = {
-    datasets: {
-      sales: {
-        sources: salesSources,
-        mapping: state.datasets.sales.mapping,
-      },
-    },
+    datasets: {},
     filters: serializeFilters(),
   };
+
+  if (state.datasets.sales.sourceMode === "erp" || state.datasets.sales.sourceMode === "mongo") {
+    const { fechaDesde, fechaHasta } = state.datasets.sales.erp;
+    if (!fechaDesde || !fechaHasta) {
+      setStatus("Elegí fecha desde y fecha hasta para consultar ventas ERP.");
+      return;
+    }
+    payload.datasets.sales = {
+      source: state.datasets.sales.sourceMode,
+      fechaDesde,
+      fechaHasta,
+      erp: { enabled: state.datasets.sales.sourceMode === "erp", fechaDesde, fechaHasta },
+    };
+  } else {
+    const salesSources = state.datasets.sales.sources
+      .filter((source) => source.file && source.sheet)
+      .map((source) => ({
+        file: source.file,
+        sheet: source.sheet,
+        headerRow: Number(source.headerRow || 0),
+      }));
+    if (!salesSources.length) {
+      setStatus("Cargá al menos un archivo en Venta por cliente.");
+      return;
+    }
+    payload.datasets.sales = {
+      source: "files",
+      sources: salesSources,
+      mapping: state.datasets.sales.mapping,
+    };
+  }
 
   for (const datasetType of datasetOrder.filter((item) => item !== "sales")) {
     const dataset = state.datasets[datasetType];
@@ -628,12 +1003,18 @@ async function analyze() {
     };
   }
 
-  setStatus("Relacionando ventas con maestros y recalculando el informe...");
-  const data = await api("/api/analyze", {
+  setStatus(
+    state.datasets.sales.sourceMode === "erp"
+      ? "Consultando ChessERP, relacionando ventas con maestros y recalculando el informe..."
+      : state.datasets.sales.sourceMode === "mongo"
+        ? "Leyendo ventas ERP persistidas en MongoDB, relacionando datos y recalculando el informe..."
+        : "Relacionando ventas con maestros y recalculando el informe..."
+  );
+  const data = await withProgress(document.getElementById("status").textContent || "Procesando análisis...", () => api("/api/analyze", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
-  });
+  }));
   renderResults(data);
   setStatus(`Análisis completo: ${data.meta.rowsAnalyzed} registros analizados entre ${data.meta.periodStart} y ${data.meta.periodEnd}.`);
 }
@@ -658,7 +1039,7 @@ function renderResults(data) {
 function renderFilterPanel(meta) {
   const container = document.getElementById("resultsFilters");
   container._lastMeta = meta;  // guardado para re-render al cambiar tab
-  const activeCount = Object.keys(state.filters.selected || {}).length;
+  const activeCount = countConstrainedFields(state.filters.selected, state.filters.available);
   const summary = activeCount
     ? `${meta.activeFilterSummary}. ${meta.rowsAnalyzed} registros analizados de ${meta.rowsUniverse} disponibles.`
     : `Sin filtros aplicados. ${meta.rowsAnalyzed} registros disponibles.`;
@@ -675,7 +1056,7 @@ function renderFilterPanel(meta) {
 
   // Badges con conteo de filtros activos por grupo
   const tabsHtml = availableGroups.map((g) => {
-    const activeInGroup = g.fields.filter((f) => state.filters.selected[f]?.length).length;
+    const activeInGroup = g.fields.filter((f) => isFieldConstrained(f, state.filters.selected, state.filters.available)).length;
     const badge = activeInGroup ? `<span class="filter-tab-badge">${activeInGroup}</span>` : "";
     return `<button class="filter-tab${g.id === activeFilterTab ? " active" : ""}" data-filter-tab="${g.id}">${escapeHtml(g.label)}${badge}</button>`;
   }).join("");
@@ -702,7 +1083,7 @@ function renderFilterPanel(meta) {
     </div>
     <div class="filter-tabs">${tabsHtml}</div>
     <div class="filter-tab-body">
-      <div class="filter-tab-hint muted">Ctrl/Cmd + clic para selección múltiple</div>
+      <div class="filter-tab-hint muted">Marcá las opciones que quieras incluir o usá Todos / Ninguno.</div>
       <div class="filter-fields-row">${fieldsHtml}</div>
     </div>
   `;
@@ -710,31 +1091,61 @@ function renderFilterPanel(meta) {
 }
 
 function renderFilterField(field, config, selectedValues) {
-  const size = Math.min(Math.max(config.options.length, 4), 8);
+  return renderSelectableField("filter", field, config, selectedValues);
+}
+
+function renderSelectableField(kind, field, config, selectedValues) {
+  const searchKey = buildSelectableKey(kind, field);
+  const searchValue = state.filterSearch[searchKey] || "";
+  const visibleOptions = filterSelectableOptions(config.options, searchValue);
   return `
-    <label>
-      ${escapeHtml(config.label)}
-      <select class="filter-select" data-filter-field="${field}" multiple size="${size}">
-        ${config.options.map((option) => `
-          <option value="${escapeHtml(option.value)}" ${isSelectedFilterValue(field, selectedValues, option.value) ? "selected" : ""}>
-            ${escapeHtml(option.label)} (${option.count})
-          </option>
-        `).join("")}
-      </select>
-    </label>
+    <div class="filter-box">
+      <div class="filter-box-header">
+        <div class="filter-box-title">${escapeHtml(config.label)}</div>
+        <div class="filter-box-actions">
+          <button type="button" data-selectable-kind="${kind}" data-selectable-role="action" data-selectable-action="all" data-selectable-field="${field}">Todos</button>
+          <button type="button" data-selectable-kind="${kind}" data-selectable-role="action" data-selectable-action="none" data-selectable-field="${field}">Ninguno</button>
+        </div>
+      </div>
+      <input
+        class="filter-search"
+        type="search"
+        placeholder="Buscar..."
+        value="${escapeHtml(searchValue)}"
+        data-selectable-kind="${kind}"
+        data-selectable-role="search"
+        data-selectable-field="${field}"
+      >
+      <div class="filter-box-list">
+        ${visibleOptions.length ? visibleOptions.map((option) => `
+          <label class="check-option">
+            <input
+              type="checkbox"
+              data-selectable-kind="${kind}"
+              data-selectable-role="option"
+              data-selectable-field="${field}"
+              value="${escapeHtml(option.value)}"
+              ${isSelectedFilterValue(field, selectedValues, option.value) ? "checked" : ""}
+            >
+            <span>${escapeHtml(option.label)}</span>
+            <span class="check-option-count">${option.count}</span>
+          </label>
+        `).join("") : `<div class="muted">No hay coincidencias para "${escapeHtml(searchValue)}".</div>`}
+      </div>
+    </div>
   `;
 }
 
 function renderSummaryCards(summary) {
   const cards = [
-    ["Venta 90 días", money(summary.salesCurrent), `vs período previo ${summary.salesGrowthPct}%`],
-    ["Clientes activos", `${summary.activeClients}`, `${summary.activeRatioPct}% del padrón`],
-    ["Ticket promedio", money(summary.avgTicket), `${summary.recurringRatioPct}% recurrencia`],
-    ["Cobertura rutas", `${summary.routeCoveragePct}%`, `${summary.salesForceCount} fuerzas de ventas · ${summary.routeCount} rutas`],
-    ["Cobertura artículos", `${summary.articleCoveragePct}%`, `${summary.familyCount} familias activas`],
-    ["Cobertura vendedores", `${summary.sellerCoveragePct}%`, `${summary.sellerCount} vendedores`],
-    ["Dormidos", `${summary.dormantClients}`, `${summary.reactivableClients} reactivables · ${summary.lostClients} perdidos`],
-    ["Concentración top 10", `${summary.top10SharePct}%`, "sobre venta 12 meses"],
+    ["Venta 90 días", money(summary.salesCurrent), `vs previo ${summary.salesGrowthPct}% · base ${money(summary.salesPrevious || 0)}`],
+    ["Pedidos", intNumber(summary.ordersCurrent), `${money(summary.avgOrderValue)} por pedido`],
+    ["Unidades", decimalNumber(summary.unitsCurrent), `${decimalNumber(summary.avgUnitsPerOrder)} por pedido`],
+    ["Precio promedio / unidad", money(summary.avgUnitPrice), `${money(summary.avgTicket)} ticket cliente`],
+    ["Clientes activos", intNumber(summary.activeClients), `${summary.activeRatioPct}% del padrón`],
+    ["Productividad vendedor", money(summary.salesPerActiveSeller), `${summary.sellerCount} vendedores · ${summary.salesForceCount} fuerzas`],
+    ["Mix activo", `${summary.brandCount} marcas`, `${summary.businessUnitCount} unidades negocio · ${summary.channelCount} canales`],
+    ["Cobertura BI", `${summary.articleCoveragePct}%`, `${summary.routeCoveragePct}% rutas · ${summary.sellerCoveragePct}% vendedores`],
   ];
   document.getElementById("summaryCards").innerHTML = cards.map(([label, value, sub]) => `
     <article class="card">
@@ -796,8 +1207,15 @@ function renderRatios(ratios, opportunities) {
     `Venta por cliente: ${money(ratios.salesPerClient)}`,
     `Venta por vendedor: ${money(ratios.salesPerSeller)}`,
     `Clientes por vendedor: ${ratios.clientsPerSeller}`,
+    `Pedidos por vendedor: ${ratios.ordersPerSeller}`,
+    `Ticket promedio: ${money(ratios.avgOrderValue)}`,
+    `Unidades por pedido: ${decimalNumber(ratios.avgUnitsPerOrder)}`,
+    `Precio promedio por unidad: ${money(ratios.avgUnitPrice)}`,
     `Top 3 fuerzas de ventas: ${ratios.top3SalesForcesSharePct}% de la venta`,
     `Top 3 vendedores: ${ratios.top3SellersSharePct}% de la venta`,
+    `Marca líder: ${ratios.topBrandSharePct}% de la venta`,
+    `Unidad de negocio líder: ${ratios.topBusinessUnitSharePct}% de la venta`,
+    `Canal líder: ${ratios.topChannelSharePct}% de la venta`,
     `Profundidad media: ${ratios.familyBreadthPerClient} familias por cliente`,
     `Potencial recuperación de cartera: ${money(opportunities.recoverDormantSales)}`,
     `Potencial cross-sell: ${money(opportunities.crossSellPotential)}`,
@@ -821,9 +1239,9 @@ function renderCharts(charts) {
   document.getElementById("chartSalesByMonth").innerHTML = renderLineChart(charts.salesByMonth || [], money);
   document.getElementById("chartForecast").innerHTML = renderBars(charts.salesForecast || [], money);
   document.getElementById("chartZoneSales").innerHTML = renderBars(charts.salesForceSales || [], money);
-  document.getElementById("chartSellerSales").innerHTML = renderBars(charts.sellerSales || [], money);
-  document.getElementById("chartFamilyMomentum").innerHTML = renderBars(charts.familyMomentum || [], (value) => `${value}%`, false, true);
-  document.getElementById("chartCoverage").innerHTML = renderBars(charts.coverage || [], (value) => `${value}%`);
+  document.getElementById("chartSellerSales").innerHTML = renderBars(charts.sellerProductivity || [], money);
+  document.getElementById("chartFamilyMomentum").innerHTML = renderBars(charts.brandSales || [], money);
+  document.getElementById("chartCoverage").innerHTML = renderBars(charts.channelSales || [], money);
 }
 
 function renderRankings(rankings) {
@@ -833,12 +1251,14 @@ function renderRankings(rankings) {
   ]);
   renderRankingGroup("commercialRankings", [
     { title: "Vendedores destacados", items: rankings.topSellers, formatter: sellerLine },
+    { title: "Vendedores más rentables", items: rankings.productiveSellers, formatter: productiveSellerLine },
     { title: "Fuerzas de ventas principales", items: rankings.topSalesForces, formatter: salesForceLine },
-    { title: "Rutas débiles", items: rankings.weakRoutes, formatter: routeLine },
+    { title: "Rutas principales", items: rankings.topRoutes, formatter: routeLine },
   ]);
   renderRankingGroup("mixRankings", [
-    { title: "Familias en expansión", items: rankings.expandingFamilies, formatter: familyLine },
-    { title: "Familias en retracción", items: rankings.contractingFamilies, formatter: familyLine },
+    { title: "Marcas líderes", items: rankings.topBrands, formatter: brandLine },
+    { title: "Unidades de negocio", items: rankings.topBusinessUnits, formatter: businessUnitLine },
+    { title: "Canales principales", items: rankings.topChannels, formatter: channelLine },
     { title: "Potencial", items: [{ text: rankings.opportunityHeadline }], formatter: genericLine },
   ]);
 }
@@ -853,14 +1273,32 @@ function bindFilterEvents() {
       if (meta) renderFilterPanel(meta);
     });
   });
-  document.querySelectorAll("[data-filter-field]").forEach((select) => {
-    select.addEventListener("change", () => {
-      const field = select.dataset.filterField;
-      const values = Array.from(select.selectedOptions).map((option) => parseFilterValue(field, option.value));
-      if (values.length) {
-        state.filters.selected[field] = values;
-      } else {
-        delete state.filters.selected[field];
+  document.querySelectorAll("[data-selectable-kind='filter'][data-selectable-role='option']").forEach((input) => {
+    input.addEventListener("change", () => {
+      toggleSelectableValue("filter", input.dataset.selectableField, input.value, input.checked);
+    });
+  });
+
+  document.querySelectorAll("[data-selectable-kind='filter'][data-selectable-role='action']").forEach((button) => {
+    button.addEventListener("click", () => {
+      applySelectableAction("filter", button.dataset.selectableField, button.dataset.selectableAction);
+      const meta = document.getElementById("resultsFilters")._lastMeta;
+      if (meta) {
+        renderFilterPanel(meta);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-selectable-role='search']").forEach((input) => {
+    input.addEventListener("input", () => {
+      state.filterSearch[buildSelectableKey(input.dataset.selectableKind, input.dataset.selectableField)] = input.value || "";
+      if (input.dataset.selectableKind === "prefilter") {
+        renderDatasetConfigs();
+        return;
+      }
+      const meta = document.getElementById("resultsFilters")._lastMeta;
+      if (meta) {
+        renderFilterPanel(meta);
       }
     });
   });
@@ -873,7 +1311,7 @@ function bindFilterEvents() {
   const clearButton = document.getElementById("clearFiltersBtn");
   if (clearButton) {
     clearButton.addEventListener("click", () => {
-      state.filters.selected = {};
+      state.filters.selected = normalizeSelectedFilters({}, state.filters.available);
       analyze().catch(showError);
     });
   }
@@ -886,6 +1324,39 @@ function renderRankingGroup(targetId, groups) {
       ${(group.items || []).slice(0, 8).map((item) => `<div class="ranking-item">${group.formatter(item)}</div>`).join("")}
     </div>
   `).join("");
+}
+
+function toggleSelectableValue(kind, field, rawValue, checked) {
+  const selected = kind === "prefilter" ? state.prefilters.selected : state.filters.selected;
+  const available = kind === "prefilter" ? state.prefilters.available : state.filters.available;
+  const parsedValue = parseFilterValue(field, rawValue);
+  const current = [...getSelectedValuesForField(field, selected, available)];
+  const next = checked
+    ? current.some((value) => isSameFilterValue(field, value, parsedValue)) ? current : [...current, parsedValue]
+    : current.filter((value) => !isSameFilterValue(field, value, parsedValue));
+  selected[field] = next;
+}
+
+function applySelectableAction(kind, field, action) {
+  const selected = kind === "prefilter" ? state.prefilters.selected : state.filters.selected;
+  const available = kind === "prefilter" ? state.prefilters.available : state.filters.available;
+  if (action === "all") {
+    selected[field] = getAllFieldValues(field, available);
+    return;
+  }
+  selected[field] = [];
+}
+
+function buildSelectableKey(kind, field) {
+  return `${kind}:${field}`;
+}
+
+function filterSelectableOptions(options, searchValue) {
+  const query = normalizeText(searchValue || "");
+  if (!query) {
+    return options || [];
+  }
+  return (options || []).filter((option) => normalizeText(`${option.label} ${option.value}`).includes(query));
 }
 
 function renderLineChart(items, formatter) {
@@ -957,7 +1428,11 @@ function clientRiskLine(item) {
 }
 
 function sellerLine(item) {
-  return `<strong>${escapeHtml(item.seller)}</strong><br><span class="muted">${money(item.sales)} · ${item.clients} clientes</span>`;
+  return `<strong>${escapeHtml(item.seller)}</strong><br><span class="muted">${money(item.sales)} · ${item.clients} clientes · ${money(item.avgOrderValue || 0)} ticket</span>`;
+}
+
+function productiveSellerLine(item) {
+  return `<strong>${escapeHtml(item.seller)}</strong><br><span class="muted">${money(item.avgOrderValue || 0)} por pedido · ${item.orders} pedidos · ${money(item.sales)}</span>`;
 }
 
 function salesForceLine(item) {
@@ -965,11 +1440,19 @@ function salesForceLine(item) {
 }
 
 function routeLine(item) {
-  return `<strong>${escapeHtml(item.route_description)}</strong><br><span class="muted">${money(item.sales)} · ${item.clients} clientes</span>`;
+  return `<strong>${escapeHtml(item.route_description)}</strong><br><span class="muted">${money(item.sales)} · ${item.clients} clientes · ${money(item.avgOrderValue || 0)} ticket</span>`;
 }
 
-function familyLine(item) {
-  return `<strong>${escapeHtml(item.family)}</strong><br><span class="muted">${item.growthPct}% · ${money(item.sales)}</span>`;
+function brandLine(item) {
+  return `<strong>${escapeHtml(item.brand)}</strong><br><span class="muted">${money(item.sales)} · ${item.clients} clientes · ${money(item.avgOrderValue || 0)} ticket</span>`;
+}
+
+function businessUnitLine(item) {
+  return `<strong>${escapeHtml(item.business_unit)}</strong><br><span class="muted">${money(item.sales)} · ${item.orders} pedidos</span>`;
+}
+
+function channelLine(item) {
+  return `<strong>${escapeHtml(item.channel)}</strong><br><span class="muted">${money(item.sales)} · ${item.clients} clientes · ${money(item.avgOrderValue || 0)} ticket</span>`;
 }
 
 function genericLine(item) {
@@ -978,8 +1461,15 @@ function genericLine(item) {
 
 function serializeFilters() {
   const filters = {};
+  if (state.datasets.sales.sourceMode !== "files") {
+    Object.entries(state.prefilters.selected || {}).forEach(([field, values]) => {
+      if (!isAllSelectedForField(field, values, state.prefilters.available)) {
+        filters[field] = values;
+      }
+    });
+  }
   Object.entries(state.filters.selected || {}).forEach(([field, values]) => {
-    if (values?.length) {
+    if (!isAllSelectedForField(field, values, state.filters.available)) {
       filters[field] = values;
     }
   });
@@ -988,14 +1478,62 @@ function serializeFilters() {
 
 function normalizeSelectedFilters(selected, available) {
   const normalized = {};
-  Object.entries(selected || {}).forEach(([field, values]) => {
-    const options = available[field]?.options || [];
-    const validValues = values.filter((value) => options.some((option) => isSameFilterValue(field, option.value, value)));
-    if (validValues.length) {
-      normalized[field] = validValues.map((value) => parseFilterValue(field, value));
+  Object.entries(available || {}).forEach(([field, config]) => {
+    const options = config?.options || [];
+    const fallback = options.map((option) => parseFilterValue(field, option.value));
+    if (!Object.prototype.hasOwnProperty.call(selected || {}, field)) {
+      normalized[field] = fallback;
+      return;
     }
+    const rawValues = Array.isArray(selected[field]) ? selected[field] : [selected[field]];
+    const validValues = rawValues
+      .filter((value) => options.some((option) => isSameFilterValue(field, option.value, value)))
+      .map((value) => parseFilterValue(field, value));
+    normalized[field] = dedupeFilterValues(field, validValues);
   });
   return normalized;
+}
+
+function getAllFieldValues(field, available) {
+  return (available?.[field]?.options || []).map((option) => parseFilterValue(field, option.value));
+}
+
+function getSelectedValuesForField(field, selected, available) {
+  if (Object.prototype.hasOwnProperty.call(selected || {}, field)) {
+    return Array.isArray(selected[field]) ? selected[field] : [selected[field]];
+  }
+  return getAllFieldValues(field, available);
+}
+
+function dedupeFilterValues(field, values) {
+  const deduped = [];
+  (values || []).forEach((value) => {
+    if (!deduped.some((current) => isSameFilterValue(field, current, value))) {
+      deduped.push(parseFilterValue(field, value));
+    }
+  });
+  return deduped;
+}
+
+function isAllSelectedForField(field, values, available) {
+  const selectedValues = Array.isArray(values) ? values : [];
+  const allValues = getAllFieldValues(field, available);
+  if (!allValues.length) {
+    return false;
+  }
+  if (selectedValues.length !== allValues.length) {
+    return false;
+  }
+  return allValues.every((value) => selectedValues.some((selected) => isSameFilterValue(field, selected, value)));
+}
+
+function isFieldConstrained(field, selected, available) {
+  const values = getSelectedValuesForField(field, selected, available);
+  return !isAllSelectedForField(field, values, available);
+}
+
+function countConstrainedFields(selected, available) {
+  return Object.keys(available || {}).filter((field) => isFieldConstrained(field, selected, available)).length;
 }
 
 function parseFilterValue(field, value) {
@@ -1024,8 +1562,45 @@ function money(value) {
   return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(value || 0);
 }
 
+function intNumber(value) {
+  return new Intl.NumberFormat("es-AR", { maximumFractionDigits: 0 }).format(value || 0);
+}
+
+function decimalNumber(value) {
+  return new Intl.NumberFormat("es-AR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value || 0);
+}
+
 function setStatus(text) {
   document.getElementById("status").textContent = text;
+}
+
+function showProgressModal(text) {
+  const modal = document.getElementById("progressModal");
+  const message = document.getElementById("progressMessage");
+  message.textContent = text || "Procesando...";
+  modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+}
+
+function hideProgressModal() {
+  const modal = document.getElementById("progressModal");
+  modal.classList.add("hidden");
+  modal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("modal-open");
+}
+
+async function withProgress(message, runner) {
+  progressDepth += 1;
+  showProgressModal(message);
+  try {
+    return await runner();
+  } finally {
+    progressDepth = Math.max(0, progressDepth - 1);
+    if (!progressDepth) {
+      hideProgressModal();
+    }
+  }
 }
 
 function escapeHtml(text) {
@@ -1036,12 +1611,41 @@ function escapeHtml(text) {
     .replaceAll('"', "&quot;");
 }
 
+function normalizeText(value) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
 function isEmptyMapping(mapping) {
   return !Object.values(mapping || {}).some((value) => value !== null && value !== undefined && value !== "");
 }
 
 function showError(error) {
+  progressDepth = 0;
+  hideProgressModal();
   setStatus(error.message || "Error inesperado");
+}
+
+function handleScrollAction(action) {
+  const step = Math.max(window.innerHeight * 0.82, 320);
+  if (action === "top") {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
+  if (action === "bottom") {
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+    return;
+  }
+  if (action === "page-up") {
+    window.scrollBy({ top: -step, behavior: "smooth" });
+    return;
+  }
+  if (action === "page-down") {
+    window.scrollBy({ top: step, behavior: "smooth" });
+  }
 }
 
 // ─── Fase 6: Motor dinámico de análisis ─────────────────────────────────────
@@ -1121,12 +1725,27 @@ async function runDynamicTask() {
   const comboIdx = Number(comboSelect.value || 0);
   const combo = (task?.combos || [])[comboIdx] || null;
 
-  const salesSources = state.datasets.sales.sources
-    .filter((s) => s.file && s.sheet)
-    .map((s) => ({ file: s.file, sheet: s.sheet, headerRow: Number(s.headerRow || 0) }));
-  if (!salesSources.length) { setStatus("No hay datos cargados para analizar."); return; }
+  const datasetsPayload = {};
+  if (state.datasets.sales.sourceMode === "erp" || state.datasets.sales.sourceMode === "mongo") {
+    const { fechaDesde, fechaHasta } = state.datasets.sales.erp;
+    if (!fechaDesde || !fechaHasta) {
+      setStatus("Elegí fecha desde y fecha hasta para consultar ventas ERP.");
+      return;
+    }
+    datasetsPayload.sales = {
+      source: state.datasets.sales.sourceMode,
+      fechaDesde,
+      fechaHasta,
+      erp: { enabled: state.datasets.sales.sourceMode === "erp", fechaDesde, fechaHasta },
+    };
+  } else {
+    const salesSources = state.datasets.sales.sources
+      .filter((s) => s.file && s.sheet)
+      .map((s) => ({ file: s.file, sheet: s.sheet, headerRow: Number(s.headerRow || 0) }));
+    if (!salesSources.length) { setStatus("No hay datos cargados para analizar."); return; }
+    datasetsPayload.sales = { source: "files", sources: salesSources, mapping: state.datasets.sales.mapping };
+  }
 
-  const datasetsPayload = { sales: { sources: salesSources, mapping: state.datasets.sales.mapping } };
   for (const dt of datasetOrder.filter((d) => d !== "sales")) {
     const ds = state.datasets[dt];
     if (ds.file && ds.sheet) {
@@ -1138,11 +1757,11 @@ async function runDynamicTask() {
   btn.disabled = true;
   setStatus(`Ejecutando: ${task?.label || taskId}...`);
   try {
-    const data = await api("/api/analyze-dynamic", {
+    const data = await withProgress(`Ejecutando: ${task?.label || taskId}...`, () => api("/api/analyze-dynamic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ datasets: datasetsPayload, filters: serializeFilters(), task_id: taskId, combo }),
-    });
+    }));
     renderDynKpis(data.kpiSet || {});
     renderDynInsights(data.insights || [], data.insightsSummary || {});
     document.getElementById("dynSemaphores").innerHTML = renderDynSemaphoresHtml(data.kpiSet?.semaphores || []);
@@ -1300,6 +1919,9 @@ document.getElementById("dynRunBtn").addEventListener("click", () => runDynamicT
 document.getElementById("libraryScope").addEventListener("change", async (event) => {
   state.scope = event.target.value;
   await boot().catch(showError);
+});
+document.querySelectorAll("[data-scroll-action]").forEach((button) => {
+  button.addEventListener("click", () => handleScrollAction(button.dataset.scrollAction));
 });
 
 boot().catch(showError);

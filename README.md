@@ -7,6 +7,10 @@ Versión local para analizar ventas históricas de una distribuidora relacionand
 3. Maestro de rutas
 4. Maestro de vendedores
 
+La venta por cliente ahora puede venir desde archivos Excel, directo desde ChessERP o desde ventas ERP persistidas en MongoDB.
+El maestro de artículos también puede poblarse desde ChessERP con agrupaciones como línea, familia, marca, sabor, proveedor, segmento y unidad de negocio.
+Los maestros de vendedores y rutas se derivan automáticamente de las ventas ERP y también se persisten en MongoDB.
+
 ## Cómo usar
 
 1. Abrí una terminal en VS Code dentro de esta carpeta.
@@ -22,6 +26,37 @@ python3 app.py
 6. Elegí hoja y fila de encabezado por dataset o por archivo de ventas.
 7. Mapeá columnas según el tipo de archivo.
 8. Ejecutá el análisis.
+
+## Uso con ChessERP
+
+1. Configurá en `.env`:
+
+```bash
+CHESS_ERP_BASE_URL=...
+ERP_LOGIN_PATH=/auth/login
+CHESS_ERP_USERNAME=...
+CHESS_ERP_PASSWORD=...
+CHESS_ERP_TIMEOUT=30
+CHESS_ERP_VERIFY_SSL=true
+```
+
+2. En la tarjeta `Venta por cliente`, elegí `ChessERP`.
+3. Definí `Fecha desde` y `Fecha hasta`.
+4. Si querés persistir la información, usá `Sincronizar en MongoDB`.
+5. Esa sincronización guarda ventas ERP y también el maestro de artículos con sus agrupaciones.
+6. Para trabajar sin depender del ERP ni del Excel, cambiá la fuente a `MongoDB`.
+7. Si querés enriquecer todavía más el análisis, podés seguir cargando archivos manuales, pero ya no son obligatorios para ventas, artículos, vendedores y rutas.
+8. Ejecutá el análisis.
+
+## Persistencia en MongoDB
+
+- Las ventas sincronizadas desde ChessERP se guardan en la colección `erp_sales`.
+- Los artículos y sus agrupaciones se guardan en `erp_articles`.
+- Los vendedores derivados del ERP se guardan en `erp_sellers`.
+- Las rutas derivadas del ERP se guardan en `erp_routes`.
+- Cada sincronización queda registrada en `erp_sync_runs`.
+- La configuración de la pantalla sigue guardándose en `sessions`.
+- Los análisis ejecutados siguen registrándose en `registros`.
 
 ## Qué resuelve esta versión
 

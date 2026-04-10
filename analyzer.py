@@ -40,6 +40,10 @@ DATASET_DEFINITIONS = {
             "product_name": {"label": "Descripción artículo", "required": False},
             "family": {"label": "Familia", "required": False},
             "line": {"label": "Línea", "required": False},
+            "brand": {"label": "Marca", "required": False},
+            "business_unit": {"label": "Unidad de negocio", "required": False},
+            "segment": {"label": "Segmento", "required": False},
+            "division": {"label": "División", "required": False},
             "supplier": {"label": "Proveedor", "required": False},
             "flavor": {"label": "Sabor", "required": False},
             "uxb": {"label": "UxB", "required": False},
@@ -90,6 +94,10 @@ KEYWORDS = {
         "product_name": ["articulo", "artículo", "producto", "descripcion articulo", "descripción artículo", "detalle producto"],
         "family": ["familia", "rubro", "categoria", "categoría"],
         "line": ["linea", "línea"],
+        "brand": ["marca"],
+        "business_unit": ["unidad de negocio", "negocio"],
+        "segment": ["segmento"],
+        "division": ["division", "división"],
         "supplier": ["proveedor"],
         "flavor": ["sabor"],
         "uxb": ["uxb", "u x b", "unid x bulto", "unidades por bulto"],
@@ -114,6 +122,8 @@ FILTER_DEFINITIONS = {
     "month": {"label": "Mes", "kind": "month"},
     "family": {"label": "Familia", "kind": "text"},
     "line": {"label": "Línea", "kind": "text"},
+    "brand": {"label": "Marca", "kind": "text"},
+    "business_unit": {"label": "Unidad de negocio", "kind": "text"},
     "supplier": {"label": "Proveedor", "kind": "text"},
     "sales_force": {"label": "Fuerza de ventas", "kind": "text"},
     "route_description": {"label": "Ruta", "kind": "text"},
@@ -252,17 +262,20 @@ def analyze_datasets(datasets, filters=None):
     seller_stats = aggregate_dimension(last_12_months, "seller_name", "seller", missing_label="Sin vendedor")
     sales_force_stats = aggregate_dimension(last_12_months, "sales_force", "sales_force", missing_label="Sin fuerza de ventas")
     family_stats = aggregate_dimension(last_12_months, "family", "family", current_start=current_start, previous_start=previous_start, previous_end=previous_end, missing_label="Sin familia")
+    brand_stats = aggregate_dimension(last_12_months, "brand", "brand", current_start=current_start, previous_start=previous_start, previous_end=previous_end, missing_label="Sin marca")
+    business_unit_stats = aggregate_dimension(last_12_months, "business_unit", "business_unit", current_start=current_start, previous_start=previous_start, previous_end=previous_end, missing_label="Sin unidad de negocio")
+    channel_stats = aggregate_dimension(last_12_months, "channel", "channel", current_start=current_start, previous_start=previous_start, previous_end=previous_end, missing_label="Sin canal")
     route_stats = aggregate_dimension(last_12_months, "route_description", "route_description", missing_label="Sin ruta")
 
     coverage = build_coverage(filtered_sales)
-    summary = build_summary(current_period, previous_period, client_stats, seller_stats, sales_force_stats, family_stats, route_stats, coverage)
-    ratios = build_ratios(last_12_months, client_stats, seller_stats, sales_force_stats, family_stats, coverage)
+    summary = build_summary(current_period, previous_period, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, route_stats, coverage)
+    ratios = build_ratios(last_12_months, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, coverage)
     forecast = build_forecast(last_12_months)
     opportunities = build_opportunities(client_stats, sales_force_stats, family_stats, route_stats, coverage, last_12_months)
-    alerts = build_alerts(summary, coverage, opportunities, seller_stats, sales_force_stats, family_stats)
+    alerts = build_alerts(summary, coverage, opportunities, seller_stats, sales_force_stats, family_stats, brand_stats, channel_stats)
     semaphores = build_semaphores(summary, coverage, forecast)
-    charts = build_charts(last_12_months, sales_force_stats, seller_stats, family_stats, coverage, forecast)
-    rankings = build_rankings(client_stats, seller_stats, sales_force_stats, route_stats, family_stats, opportunities)
+    charts = build_charts(last_12_months, sales_force_stats, seller_stats, brand_stats, channel_stats, coverage, forecast)
+    rankings = build_rankings(client_stats, seller_stats, sales_force_stats, route_stats, brand_stats, business_unit_stats, channel_stats, opportunities)
     insights = build_insights(summary, coverage, forecast, opportunities, alerts)
     action_plan = build_action_plan(alerts, opportunities, forecast, coverage)
     available_filters = build_available_filters(filtered_sales)
@@ -300,6 +313,19 @@ def analyze_datasets(datasets, filters=None):
 
 
 def load_dataset(dataset_type, source):
+    if source.get("records") is not None:
+        records = source.get("records") or []
+        return {
+            "datasetType": dataset_type,
+            "file": source.get("file", "Fuente externa"),
+            "sheet": source.get("sheet", "Datos"),
+            "headerRow": int(source.get("headerRow", 0)),
+            "rowsRead": int(source.get("rowsRead", len(records))),
+            "rowsValid": int(source.get("rowsValid", len(records))),
+            "headers": source.get("headers") or [],
+            "mapping": source.get("mapping", {}),
+            "records": records,
+        }
     loaded = load_dataset_source(dataset_type, source, source.get("mapping", {}))
     return {
         "datasetType": dataset_type,
@@ -315,6 +341,35 @@ def load_dataset(dataset_type, source):
 
 
 def load_sales_dataset(config):
+    if config.get("records") is not None:
+        records = config.get("records") or []
+        if not records:
+            raise ValueError("La venta por cliente no devolvió registros válidos")
+        sources = config.get("sources") or [
+            {
+                "file": config.get("file", "Fuente externa"),
+                "sheet": config.get("sheet", "Datos"),
+                "headerRow": int(config.get("headerRow", 0)),
+                "rowsRead": int(config.get("rowsRead", len(records))),
+                "rowsValid": int(config.get("rowsValid", len(records))),
+                "sourceKind": config.get("sourceKind"),
+            }
+        ]
+        return {
+            "datasetType": "sales",
+            "file": config.get("file", f"{len(sources)} fuente(s)"),
+            "sheet": config.get("sheet", "Datos"),
+            "headerRow": int(config.get("headerRow", 0)),
+            "rowsRead": int(config.get("rowsRead", len(records))),
+            "rowsValid": int(config.get("rowsValid", len(records))),
+            "headers": config.get("headers") or [],
+            "mapping": config.get("mapping", {}),
+            "records": records,
+            "sources": sources,
+            "sourceCount": int(config.get("sourceCount", len(sources))),
+            "sourceKind": config.get("sourceKind"),
+        }
+
     sources = config.get("sources") or [config]
     if not sources:
         raise ValueError("La venta por cliente requiere al menos un archivo")
@@ -357,6 +412,7 @@ def load_sales_dataset(config):
         "records": merged_records,
         "sources": source_meta,
         "sourceCount": len(source_meta),
+        "sourceKind": "files",
     }
 
 
@@ -468,6 +524,10 @@ def normalize_article_row(row, mapping, row_number, source_name):
         "product_name": clean_text(cell_value(row, mapping.get("product_name"))),
         "family": clean_text(cell_value(row, mapping.get("family"))),
         "line": clean_text(cell_value(row, mapping.get("line"))),
+        "brand": clean_text(cell_value(row, mapping.get("brand"))),
+        "business_unit": clean_text(cell_value(row, mapping.get("business_unit"))),
+        "segment": clean_text(cell_value(row, mapping.get("segment"))),
+        "division": clean_text(cell_value(row, mapping.get("division"))),
         "supplier": clean_text(cell_value(row, mapping.get("supplier"))),
         "flavor": clean_text(cell_value(row, mapping.get("flavor"))),
         "uxb": clean_text(cell_value(row, mapping.get("uxb"))),
@@ -512,7 +572,7 @@ def enrich_sales(sales_records, article_map, route_seller_map, seller_key_map, s
             seller_master = seller_name_map.get(normalize_text(row["seller_name"]), {})
         seller_name = first_non_empty(row["seller_name"], seller_master.get("seller_name"), row["seller_key"], "Sin vendedor")
         route = route_seller_map.get(normalize_text(seller_name), {})
-        sales_force = first_non_empty(route.get("sales_force"), seller_master.get("sales_force"), "Sin fuerza de ventas")
+        sales_force = first_non_empty(row.get("sales_force"), route.get("sales_force"), seller_master.get("sales_force"), "Sin fuerza de ventas")
         route_name = first_non_empty(row["route_description"], route.get("route_description"), seller_master.get("route_description"), "Sin ruta")
         enriched.append(
             {
@@ -522,6 +582,10 @@ def enrich_sales(sales_records, article_map, route_seller_map, seller_key_map, s
                 "sales_force": sales_force,
                 "family": first_non_empty(article.get("family"), "Sin familia"),
                 "line": first_non_empty(article.get("line"), "Sin línea"),
+                "brand": first_non_empty(article.get("brand"), "Sin marca"),
+                "business_unit": first_non_empty(article.get("business_unit"), "Sin unidad de negocio"),
+                "segment": first_non_empty(article.get("segment"), "Sin segmento"),
+                "division": first_non_empty(article.get("division"), "Sin división"),
                 "supplier": first_non_empty(article.get("supplier"), "Sin proveedor"),
                 "flavor": first_non_empty(article.get("flavor"), "Sin sabor"),
                 "uxb": first_non_empty(article.get("uxb"), "Sin UxB"),
@@ -529,8 +593,8 @@ def enrich_sales(sales_records, article_map, route_seller_map, seller_key_map, s
                 "channel": first_non_empty(row["channel"], "Sin canal"),
                 "route_description": route_name,
                 "has_article_match": bool(article),
-                "has_route_match": bool(route),
-                "has_seller_match": bool(seller_master),
+                "has_route_match": bool(route or row.get("route_description")),
+                "has_seller_match": bool(seller_master or row.get("seller_key") or row.get("seller_name")),
             }
         )
     return enriched
@@ -591,13 +655,19 @@ def aggregate_dimension(records, key, label_key, current_start=None, previous_st
     for name, items in grouped.items():
         sales = sum(item["amount"] for item in items)
         clients = len({item["client_key"] for item in items})
+        orders = len(order_index(items))
+        quantity = sum(item.get("quantity", 0) or 0 for item in items)
         current_sales = sum(item["amount"] for item in items if current_start and item["date"] >= current_start) if current_start else sales
         previous_sales = sum(item["amount"] for item in items if previous_start and previous_end and previous_start <= item["date"] <= previous_end) if previous_start else 0
         stats[name] = {
             label_key: name,
             "sales": round(sales, 2),
             "clients": clients,
-            "orders": len({item["invoice"] for item in items}),
+            "orders": orders,
+            "quantity": round(quantity, 2),
+            "avgOrderValue": round(sales / max(orders, 1), 2),
+            "avgUnitsPerOrder": round(quantity / max(orders, 1), 2),
+            "avgSalesPerClient": round(sales / max(clients, 1), 2),
             "growthPct": pct_change(current_sales, previous_sales) if current_start else 0,
         }
     return stats
@@ -625,10 +695,16 @@ def build_coverage(records):
     }
 
 
-def build_summary(current_period, previous_period, client_stats, seller_stats, sales_force_stats, family_stats, route_stats, coverage):
+def build_summary(current_period, previous_period, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, route_stats, coverage):
     current_sales = sum(item["amount"] for item in current_period)
     previous_sales = sum(item["amount"] for item in previous_period)
     total_clients = max(len(client_stats), 1)
+    current_orders = order_index(current_period)
+    current_units = sum(item.get("quantity", 0) or 0 for item in current_period)
+    current_order_count = len(current_orders)
+    avg_order_value = round(current_sales / max(current_order_count, 1), 2)
+    avg_unit_price = round(current_sales / max(current_units, 1), 2)
+    avg_units_per_order = round(current_units / max(current_order_count, 1), 2)
     active = sum(1 for item in client_stats.values() if item["status"] == "Activo")
     dormant = sum(1 for item in client_stats.values() if item["status"] == "Dormido")
     reactivable = sum(1 for item in client_stats.values() if item["status"] == "Reactivable")
@@ -637,10 +713,22 @@ def build_summary(current_period, previous_period, client_stats, seller_stats, s
     avg_ticket = round(sum(item["avgTicket"] for item in client_stats.values()) / total_clients, 2)
     avg_families = round(sum(item["families"] for item in client_stats.values()) / total_clients, 2)
     top10_share = concentration_share(client_stats, 10, "sales12m")
+    seller_count = count_real_dimension_items(seller_stats, "seller")
+    sales_force_count = count_real_dimension_items(sales_force_stats, "sales_force")
+    route_count = count_real_dimension_items(route_stats, "route_description")
+    family_count = count_real_dimension_items(family_stats, "family")
+    brand_count = count_real_dimension_items(brand_stats, "brand")
+    business_unit_count = count_real_dimension_items(business_unit_stats, "business_unit")
+    channel_count = count_real_dimension_items(channel_stats, "channel")
     return {
         "salesCurrent": round(current_sales, 2),
         "salesPrevious": round(previous_sales, 2),
         "salesGrowthPct": pct_change(current_sales, previous_sales),
+        "ordersCurrent": current_order_count,
+        "unitsCurrent": round(current_units, 2),
+        "avgOrderValue": avg_order_value,
+        "avgUnitPrice": avg_unit_price,
+        "avgUnitsPerOrder": avg_units_per_order,
         "activeClients": active,
         "activeRatioPct": round(active / total_clients * 100, 1),
         "dormantClients": dormant,
@@ -651,10 +739,17 @@ def build_summary(current_period, previous_period, client_stats, seller_stats, s
         "avgTicket": avg_ticket,
         "avgFamiliesPerClient": avg_families,
         "top10SharePct": round(top10_share, 1),
-        "sellerCount": len(seller_stats),
-        "salesForceCount": len(sales_force_stats),
-        "routeCount": len(route_stats),
-        "familyCount": len(family_stats),
+        "sellerCount": seller_count,
+        "salesForceCount": sales_force_count,
+        "routeCount": route_count,
+        "familyCount": family_count,
+        "brandCount": brand_count,
+        "businessUnitCount": business_unit_count,
+        "channelCount": channel_count,
+        "salesPerActiveSeller": round(current_sales / max(seller_count, 1), 2),
+        "topBrandSharePct": round(concentration_share(brand_stats, 1, "sales"), 1),
+        "topBusinessUnitSharePct": round(concentration_share(business_unit_stats, 1, "sales"), 1),
+        "topChannelSharePct": round(concentration_share(channel_stats, 1, "sales"), 1),
         "portfolioHealthPct": round((active + reactivable * 0.5) / total_clients * 100, 1),
         "routeCoveragePct": coverage["routeCoveragePct"],
         "articleCoveragePct": coverage["articleCoveragePct"],
@@ -662,18 +757,28 @@ def build_summary(current_period, previous_period, client_stats, seller_stats, s
     }
 
 
-def build_ratios(records, client_stats, seller_stats, sales_force_stats, family_stats, coverage):
+def build_ratios(records, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, coverage):
     total_sales = sum(item["amount"] for item in records)
     total_clients = max(len(client_stats), 1)
-    total_sellers = max(len(seller_stats), 1)
+    total_sellers = max(count_real_dimension_items(seller_stats, "seller"), 1)
+    orders = order_index(records)
+    total_orders = max(len(orders), 1)
+    total_units = sum(item.get("quantity", 0) or 0 for item in records)
     top_sales_force_share = concentration_share(sales_force_stats, 3, "sales")
     top_seller_share = concentration_share(seller_stats, 3, "sales")
     return {
         "salesPerClient": round(total_sales / total_clients, 2),
         "salesPerSeller": round(total_sales / total_sellers, 2),
         "clientsPerSeller": round(total_clients / total_sellers, 1),
+        "ordersPerSeller": round(total_orders / total_sellers, 1),
+        "avgOrderValue": round(total_sales / total_orders, 2),
+        "avgUnitsPerOrder": round(total_units / total_orders, 2),
+        "avgUnitPrice": round(total_sales / max(total_units, 1), 2),
         "top3SalesForcesSharePct": round(top_sales_force_share, 1),
         "top3SellersSharePct": round(top_seller_share, 1),
+        "topBrandSharePct": round(concentration_share(brand_stats, 1, "sales"), 1),
+        "topBusinessUnitSharePct": round(concentration_share(business_unit_stats, 1, "sales"), 1),
+        "topChannelSharePct": round(concentration_share(channel_stats, 1, "sales"), 1),
         "familyBreadthPerClient": round(sum(item["families"] for item in client_stats.values()) / total_clients, 2),
         "mappedSalesPct": round(
             (total_sales - coverage["salesWithoutArticle"] - coverage["salesWithoutRoute"]) / max(total_sales, 1) * 100,
@@ -725,7 +830,7 @@ def build_opportunities(client_stats, sales_force_stats, family_stats, route_sta
     }
 
 
-def build_alerts(summary, coverage, opportunities, seller_stats, sales_force_stats, family_stats):
+def build_alerts(summary, coverage, opportunities, seller_stats, sales_force_stats, family_stats, brand_stats, channel_stats):
     alerts = []
     if coverage["routeCoveragePct"] < 85:
         alerts.append(alert("Datos comerciales", "Cobertura baja de rutas", f"Solo {coverage['routeCoveragePct']}% de las ventas quedó asociada a rutas.", "high"))
@@ -745,6 +850,12 @@ def build_alerts(summary, coverage, opportunities, seller_stats, sales_force_sta
     top_force = max(sales_force_stats.values(), key=lambda item: item["sales"], default=None)
     if top_force and concentration_share(sales_force_stats, 3, "sales") >= 60:
         alerts.append(alert("Territorio", "Concentración alta por fuerza de ventas", f"Las 3 fuerzas de ventas principales explican {round(concentration_share(sales_force_stats, 3, 'sales'), 1)}% de la venta.", "medium"))
+    top_brand = max(brand_stats.values(), key=lambda item: item["sales"], default=None)
+    if top_brand and concentration_share(brand_stats, 1, "sales") >= 45:
+        alerts.append(alert("Mix", "Dependencia alta de una sola marca", f"La marca líder explica {round(concentration_share(brand_stats, 1, 'sales'), 1)}% de la venta.", "medium"))
+    top_channel = max(channel_stats.values(), key=lambda item: item["sales"], default=None)
+    if top_channel and concentration_share(channel_stats, 1, "sales") >= 55:
+        alerts.append(alert("Canal", "Concentración alta por canal", f"El canal líder concentra {round(concentration_share(channel_stats, 1, 'sales'), 1)}% de la venta.", "medium"))
     return alerts[:8]
 
 
@@ -759,46 +870,47 @@ def build_semaphores(summary, coverage, forecast):
     ]
 
 
-def build_charts(records, sales_force_stats, seller_stats, family_stats, coverage, forecast):
-    coverage_items = [
-        {"label": "Rutas", "value": coverage["routeCoveragePct"]},
-        {"label": "Artículos", "value": coverage["articleCoveragePct"]},
-        {"label": "Vendedores", "value": coverage["sellerCoveragePct"]},
-    ]
+def build_charts(records, sales_force_stats, seller_stats, brand_stats, channel_stats, coverage, forecast):
     return {
         "salesByMonth": forecast["series"],
         "salesForecast": forecast["forecastSeries"],
         "salesForceSales": top_items(sales_force_stats, "sales", "sales_force"),
-        "sellerSales": top_items(seller_stats, "sales", "seller"),
-        "familyMomentum": top_items(family_stats, "growthPct", "family", abs_sort=True),
-        "coverage": coverage_items,
+        "sellerProductivity": top_items(seller_stats, "avgOrderValue", "seller"),
+        "brandSales": top_items(brand_stats, "sales", "brand"),
+        "channelSales": top_items(channel_stats, "sales", "channel"),
     }
 
 
-def build_rankings(client_stats, seller_stats, sales_force_stats, route_stats, family_stats, opportunities):
+def build_rankings(client_stats, seller_stats, sales_force_stats, route_stats, brand_stats, business_unit_stats, channel_stats, opportunities):
     positive_clients = sorted(client_stats.values(), key=lambda item: item["sales12m"], reverse=True)[:10]
     risk_clients = sorted(client_stats.values(), key=lambda item: (status_rank(item["status"]), -item["salesHistory"]), reverse=False)[:10]
     top_sellers = sorted(seller_stats.values(), key=lambda item: item["sales"], reverse=True)[:10]
+    productive_sellers = sorted(seller_stats.values(), key=lambda item: item["avgOrderValue"], reverse=True)[:10]
     top_sales_forces = sorted(sales_force_stats.values(), key=lambda item: item["sales"], reverse=True)[:10]
-    weak_routes = sorted(route_stats.values(), key=lambda item: item["sales"])[:10]
-    expanding_families = sorted(family_stats.values(), key=lambda item: item["growthPct"], reverse=True)[:10]
-    contracting_families = sorted(family_stats.values(), key=lambda item: item["growthPct"])[:10]
+    top_routes = sorted(route_stats.values(), key=lambda item: item["sales"], reverse=True)[:10]
+    top_brands = sorted(brand_stats.values(), key=lambda item: item["sales"], reverse=True)[:10]
+    top_business_units = sorted(business_unit_stats.values(), key=lambda item: item["sales"], reverse=True)[:10]
+    top_channels = sorted(channel_stats.values(), key=lambda item: item["sales"], reverse=True)[:10]
     return {
         "positiveClients": positive_clients,
         "riskClients": risk_clients,
         "topSellers": top_sellers,
+        "productiveSellers": productive_sellers,
         "topSalesForces": top_sales_forces,
-        "weakRoutes": weak_routes,
-        "expandingFamilies": expanding_families,
-        "contractingFamilies": contracting_families,
+        "topRoutes": top_routes,
+        "topBrands": top_brands,
+        "topBusinessUnits": top_business_units,
+        "topChannels": top_channels,
         "opportunityHeadline": f"Potencial estimado capturable: {money(opportunities['totalPotential'])}",
     }
 
 
 def build_insights(summary, coverage, forecast, opportunities, alerts):
     insights = [
-        f"En los últimos 90 días la venta {growth_phrase(summary['salesGrowthPct'])}. La cartera activa representa {summary['activeRatioPct']}% y la recurrencia real llega a {summary['recurringRatioPct']}%.",
-        f"La calidad de datos comerciales mejoró o se ve limitada por los maestros: rutas {coverage['routeCoveragePct']}%, artículos {coverage['articleCoveragePct']}% y vendedores {coverage['sellerCoveragePct']}% de cobertura sobre ventas.",
+        f"En los últimos 90 días la venta {growth_phrase(summary['salesGrowthPct'])}, con {summary['ordersCurrent']} pedidos, {int(round(summary['unitsCurrent']))} unidades y un ticket promedio de {money(summary['avgOrderValue'])}.",
+        f"La productividad comercial actual equivale a {money(summary['salesPerActiveSeller'])} por vendedor activo, con un precio medio de {money(summary['avgUnitPrice'])} por unidad y {summary['avgUnitsPerOrder']} unidades por pedido.",
+        f"El mix activo hoy cubre {summary['brandCount']} marcas, {summary['businessUnitCount']} unidades de negocio y {summary['channelCount']} canales. La marca líder concentra {summary['topBrandSharePct']}% y el canal principal {summary['topChannelSharePct']}%.",
+        f"La calidad de datos para BI queda en rutas {coverage['routeCoveragePct']}%, artículos {coverage['articleCoveragePct']}% y vendedores {coverage['sellerCoveragePct']}% de cobertura sobre ventas.",
         f"La proyección base para el próximo trimestre es {money(forecast['projectedQuarterSales'])}, apoyada en una base mensual reciente de {money(forecast['baseMonthlySales'])} y una tendencia de {forecast['trendPct']}%.",
         f"Las palancas más claras hoy son recuperar cartera dormida ({money(opportunities['recoverDormantSales'])}), venta cruzada ({money(opportunities['crossSellPotential'])}) y optimización de ruteo ({money(opportunities['routeOptimizationPotential'])}).",
     ]
@@ -823,6 +935,37 @@ def build_action_plan(alerts, opportunities, forecast, coverage):
     return actions[:6]
 
 
+def order_index(records):
+    grouped = {}
+    for item in records:
+        key = "|".join(
+            [
+                item["date"].isoformat(),
+                clean_text(item.get("client_key")),
+                clean_text(item.get("invoice")),
+            ]
+        )
+        current = grouped.setdefault(
+            key,
+            {
+                "amount": 0.0,
+                "quantity": 0.0,
+            },
+        )
+        current["amount"] += item["amount"]
+        current["quantity"] += item.get("quantity", 0) or 0
+    return grouped
+
+
+def count_real_dimension_items(items, label_key):
+    return sum(1 for item in items.values() if not is_missing_label(item.get(label_key)))
+
+
+def is_missing_label(value):
+    text = normalize_text(value)
+    return not text or text.startswith("sin ")
+
+
 def build_dataset_meta(loaded):
     info = []
     for dataset_type, dataset in loaded.items():
@@ -830,6 +973,7 @@ def build_dataset_meta(loaded):
         if dataset_type == "sales":
             extra["sourceCount"] = dataset.get("sourceCount", 1)
             extra["sources"] = dataset.get("sources", [])
+            extra["sourceKind"] = dataset.get("sourceKind", "files")
         info.append(
             {
                 "datasetType": dataset_type,
@@ -847,11 +991,15 @@ def build_dataset_meta(loaded):
 def apply_filters(records, raw_filters):
     applied = {}
     for field in FILTER_DEFINITIONS:
+        if field not in (raw_filters or {}):
+            continue
         values = normalize_filter_values(field, raw_filters.get(field))
-        if values:
+        if values or field in raw_filters:
             applied[field] = values
     if not applied:
         return {}, list(records)
+    if any(not values for values in applied.values()):
+        return applied, []
 
     filtered = []
     for item in records:
@@ -894,7 +1042,9 @@ def summarize_filters(applied_filters):
     pieces = []
     for field, values in applied_filters.items():
         label = FILTER_DEFINITIONS[field]["label"]
-        if len(values) == 1:
+        if not values:
+            pieces.append(f"{label}: 0 seleccionados")
+        elif len(values) == 1:
             pieces.append(f"{label}: {filter_label(field, values[0])}")
         else:
             pieces.append(f"{label}: {len(values)} seleccionados")
