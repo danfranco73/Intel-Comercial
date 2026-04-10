@@ -14,6 +14,7 @@ const state = {
   dynamic: { tasks: [], selectedTaskId: null },
   adminErrors: [],
   adminAuth: { token: readStoredAdminToken() },
+  reportView: { metricMode: readStoredMetricMode(), lastData: null },
 };
 
 const datasetOrder = ["sales"];
@@ -22,6 +23,7 @@ const ERP_KEEPALIVE_MS = 4 * 60 * 1000;
 const appSurface = document.body.dataset.surface || "admin";
 const isAdminSurface = appSurface === "admin";
 const isBiSurface = appSurface === "bi";
+const REPORT_METRIC_MODES = ["mixed", "units", "sales"];
 
 const filterGroups = [
   { id: "tiempo",     label: "Período",       fields: ["year", "month"] },
@@ -291,6 +293,25 @@ function storeAdminToken(token) {
     } else {
       sessionStorage.removeItem("appAdminToken");
     }
+  } catch (_) {
+    // Ignorar almacenamiento no disponible.
+  }
+}
+
+function readStoredMetricMode() {
+  try {
+    const stored = localStorage.getItem("reportMetricMode") || "mixed";
+    return REPORT_METRIC_MODES.includes(stored) ? stored : "mixed";
+  } catch (_) {
+    return "mixed";
+  }
+}
+
+function storeMetricMode(mode) {
+  const nextMode = REPORT_METRIC_MODES.includes(mode) ? mode : "mixed";
+  state.reportView.metricMode = nextMode;
+  try {
+    localStorage.setItem("reportMetricMode", nextMode);
   } catch (_) {
     // Ignorar almacenamiento no disponible.
   }
@@ -1535,33 +1556,94 @@ async function analyze() {
     sourceMode: state.datasets.sales.sourceMode,
   });
   renderResults(data);
-  setStatus(`Análisis completo: ${data.meta.rowsAnalyzed} registros analizados entre ${data.meta.periodStart} y ${data.meta.periodEnd}.`);
+  const comparisonLabel = data.meta?.comparison?.comparisonLabel;
+  setStatus(
+    comparisonLabel
+      ? `Análisis completo: ${data.meta.rowsAnalyzed} registros del período ${data.meta.periodStart} a ${data.meta.periodEnd}, comparados contra ${comparisonLabel}.`
+      : `Análisis completo: ${data.meta.rowsAnalyzed} registros analizados entre ${data.meta.periodStart} y ${data.meta.periodEnd}.`
+  );
 }
 
 function renderResults(data) {
   document.getElementById("results").classList.remove("hidden");
+  state.reportView.lastData = data;
   state.filters.available = data.availableFilters || {};
   state.filters.selected = normalizeSelectedFilters(data.appliedFilters || {}, state.filters.available);
   renderFilterPanel(data.meta);
-  renderSummaryCards(data.summary);
-  renderSemaphores(data.semaphores);
+  renderMetricViewBar(data);
+  renderReportData(data);
+}
+
+function renderReportData(data) {
+  const mode = resolveMetricMode(data.summary);
+  renderSummaryCards(data.summary, data.meta, mode);
+  renderSemaphores(data.semaphores, data.summary, data.forecast, data.meta, mode);
   renderCoverage(data.coverage, data.meta.datasets);
-  renderInsights(data.insights);
+  renderInsights(data.insights, data.summary, data.meta, mode);
   renderActionPlan(data.actionPlan);
-  renderRatios(data.ratios, data.opportunities);
-  renderForecast(data.forecast);
-  renderCharts(data.charts, data.summary?.volumeModeActive);
-  renderRankings(data.rankings);
+  renderRatios(data.ratios, data.opportunities, mode);
+  renderForecast(data.forecast, data.meta, mode);
+  renderCharts(data.charts, mode);
+  renderRankings(data.rankings, mode);
   renderDynamicPanel(data);
+}
+
+function resolveMetricMode(summary = {}) {
+  const preferred = state.reportView.metricMode || "mixed";
+  if (preferred === "units" && !summary.volumeModeActive) {
+    return "sales";
+  }
+  return preferred;
+}
+
+function renderMetricViewBar(data) {
+  const containers = [document.getElementById("metricViewHeader")].filter(Boolean);
+  if (!containers.length) {
+    return;
+  }
+  const mode = resolveMetricMode(data.summary);
+  const disabledUnits = !data.summary?.volumeModeActive;
+  const helper = mode === "mixed"
+    ? "Mixto muestra resumen dual y prioriza bultos en gráficos y rankings."
+    : mode === "sales"
+      ? "La visualización prioriza pesos en gráficos, rankings y semáforos."
+      : "La visualización prioriza bultos en gráficos, rankings y semáforos.";
+  const html = `
+    <div class="subpanel-header">
+      <div>
+        <h2>Visualización del informe</h2>
+        <div class="muted">${helper}</div>
+      </div>
+      <div class="metric-toggle" role="tablist" aria-label="Modo del informe">
+        <button type="button" class="metric-chip${mode === "mixed" ? " active" : ""}" data-metric-mode="mixed">Mixto</button>
+        <button type="button" class="metric-chip${mode === "units" ? " active" : ""}" data-metric-mode="units" ${disabledUnits ? "disabled" : ""}>Bultos</button>
+        <button type="button" class="metric-chip${mode === "sales" ? " active" : ""}" data-metric-mode="sales">Pesos</button>
+      </div>
+    </div>
+  `;
+  containers.forEach((container) => {
+    container.classList.remove("hidden");
+    container.innerHTML = html;
+    container.querySelectorAll("[data-metric-mode]").forEach((button) => {
+      button.addEventListener("click", () => {
+        storeMetricMode(button.dataset.metricMode);
+        if (state.reportView.lastData) {
+          renderMetricViewBar(state.reportView.lastData);
+          renderReportData(state.reportView.lastData);
+        }
+      });
+    });
+  });
 }
 
 function renderFilterPanel(meta) {
   const container = document.getElementById("resultsFilters");
   container._lastMeta = meta;  // guardado para re-render al cambiar tab
   const activeCount = countConstrainedFields(state.filters.selected, state.filters.available);
+  const comparisonLabel = meta?.comparison?.comparisonLabel;
   const summary = activeCount
-    ? `${meta.activeFilterSummary}. ${meta.rowsAnalyzed} registros analizados de ${meta.rowsUniverse} disponibles.`
-    : `Sin filtros aplicados. ${meta.rowsAnalyzed} registros disponibles.`;
+    ? `${meta.activeFilterSummary}. ${meta.rowsAnalyzed} registros del período seleccionados de ${meta.rowsUniverse} disponibles.${comparisonLabel ? ` Comparando contra ${comparisonLabel}.` : ""}`
+    : `Sin filtros aplicados. ${meta.rowsAnalyzed} registros del período disponibles.${comparisonLabel ? ` Comparando contra ${comparisonLabel}.` : ""}`;
 
   // Calcular qué grupos tienen opciones disponibles
   const availableGroups = filterGroups.filter((g) =>
@@ -1655,19 +1737,28 @@ function renderSelectableField(kind, field, config, selectedValues) {
   `;
 }
 
-function renderSummaryCards(summary) {
-  const volumeMode = !!summary.volumeModeActive;
-  const cards = volumeMode ? [
-    ["Bultos 90 días", decimalNumber(summary.unitsCurrent), `vs previo ${summary.unitsGrowthPct}% · base ${decimalNumber(summary.unitsPrevious || 0)}`],
+function renderSummaryCards(summary, meta = {}, mode = "mixed") {
+  const comparisonLabel = meta?.comparison?.comparisonLabel || summary.comparisonLabel || "período anterior equivalente";
+  const cards = mode === "mixed" ? [
+    ["Período comparado", summary.periodLabel || `${meta.periodStart} a ${meta.periodEnd}`, `vs ${comparisonLabel.toLowerCase()}`],
+    ["Bultos del período", decimalNumber(summary.unitsCurrent), `base ${decimalNumber(summary.unitsPrevious || 0)} · ${summary.unitsGrowthPct}%`],
+    ["Venta del período", money(summary.salesCurrent), `base ${money(summary.salesPrevious || 0)} · ${summary.salesGrowthPct}%`],
+    ["Pedidos", intNumber(summary.ordersCurrent), `${decimalNumber(summary.avgUnitsPerOrder)} bultos por pedido · ${money(summary.avgOrderValue)} por pedido`],
+    ["Precio promedio / bulto", money(summary.avgUnitPrice), `${money(summary.avgTicket)} ticket cliente`],
+    ["Productividad comercial", `${decimalNumber(summary.unitsPerActiveSeller)} bultos`, `${money(summary.salesPerActiveSeller)} por vendedor activo`],
+    ["Clientes activos", intNumber(summary.activeClients), `${summary.activeRatioPct}% del padrón`],
+    ["Mix activo", `${summary.brandCount} marcas`, `${summary.businessUnitCount} unidades negocio · ${summary.channelCount} canales`],
+  ] : mode === "units" ? [
+    ["Bultos del período", decimalNumber(summary.unitsCurrent), `vs ${comparisonLabel.toLowerCase()} ${summary.unitsGrowthPct}% · base ${decimalNumber(summary.unitsPrevious || 0)}`],
     ["Pedidos", intNumber(summary.ordersCurrent), `${decimalNumber(summary.avgUnitsPerOrder)} bultos por pedido`],
-    ["Venta 90 días", money(summary.salesCurrent), `base ${money(summary.salesPrevious || 0)} · ${summary.salesGrowthPct}%`],
+    ["Venta del período", money(summary.salesCurrent), `base ${money(summary.salesPrevious || 0)} · vs ${comparisonLabel.toLowerCase()} ${summary.salesGrowthPct}%`],
     ["Precio promedio / bulto", money(summary.avgUnitPrice), `${money(summary.avgTicket)} ticket cliente`],
     ["Clientes activos", intNumber(summary.activeClients), `${summary.activeRatioPct}% del padrón`],
     ["Bultos por vendedor", decimalNumber(summary.unitsPerActiveSeller), `${summary.sellerCount} vendedores · ${summary.salesForceCount} fuerzas`],
     ["Mix activo", `${summary.brandCount} marcas`, `${summary.businessUnitCount} unidades negocio · ${summary.channelCount} canales`],
     ["Cobertura BI", `${summary.articleCoveragePct}%`, `${summary.routeCoveragePct}% rutas · ${summary.sellerCoveragePct}% vendedores`],
   ] : [
-    ["Venta 90 días", money(summary.salesCurrent), `vs previo ${summary.salesGrowthPct}% · base ${money(summary.salesPrevious || 0)}`],
+    ["Venta del período", money(summary.salesCurrent), `vs ${comparisonLabel.toLowerCase()} ${summary.salesGrowthPct}% · base ${money(summary.salesPrevious || 0)}`],
     ["Pedidos", intNumber(summary.ordersCurrent), `${money(summary.avgOrderValue)} por pedido`],
     ["Unidades", decimalNumber(summary.unitsCurrent), `${decimalNumber(summary.avgUnitsPerOrder)} por pedido`],
     ["Precio promedio / unidad", money(summary.avgUnitPrice), `${money(summary.avgTicket)} ticket cliente`],
@@ -1685,8 +1776,30 @@ function renderSummaryCards(summary) {
   `).join("");
 }
 
-function renderSemaphores(items) {
-  document.getElementById("semaphores").innerHTML = (items || []).map((item) => `
+function renderSemaphores(items, summary = {}, forecast = {}, meta = {}, mode = "mixed") {
+  const normalized = [...(items || [])];
+  const comparisonLabel = meta?.comparison?.comparisonLabel || summary.comparisonLabel || "período anterior equivalente";
+  if (normalized[0]) {
+    normalized[0] = {
+      ...normalized[0],
+      detail: mode === "sales"
+        ? `${summary.periodLabel || "Período"}: ${summary.salesGrowthPct}% vs ${comparisonLabel.toLowerCase()}`
+        : mode === "mixed"
+          ? `${summary.periodLabel || "Período"}: ${summary.unitsGrowthPct}% en bultos y ${summary.salesGrowthPct}% en pesos`
+          : `${summary.periodLabel || "Período"}: ${summary.unitsGrowthPct}% vs ${comparisonLabel.toLowerCase()}`,
+    };
+  }
+  if (normalized[normalized.length - 1]) {
+    normalized[normalized.length - 1] = {
+      ...normalized[normalized.length - 1],
+      detail: mode === "sales"
+        ? `Próxima ventana: ${money(forecast.projectedQuarterSales || 0)}`
+        : mode === "mixed"
+          ? `Próxima ventana: ${decimalNumber(forecast.projectedQuarterUnits || 0)} bultos y ${money(forecast.projectedQuarterSales || 0)}`
+          : `Próxima ventana: ${decimalNumber(forecast.projectedQuarterUnits || 0)} bultos`,
+    };
+  }
+  document.getElementById("semaphores").innerHTML = normalized.map((item) => `
     <div class="semaphore">
       <div><span class="dot ${item.color}"></span><strong>${item.name}</strong></div>
       <div class="muted">${item.detail}</div>
@@ -1714,8 +1827,16 @@ function renderCoverage(coverage, datasets) {
   document.getElementById("coverageCards").innerHTML = items.map((item) => `<div class="insight-item">${item}</div>`).join("");
 }
 
-function renderInsights(items) {
-  document.getElementById("insights").innerHTML = (items || []).map((item) => `<div class="insight-item">${item}</div>`).join("");
+function renderInsights(items, summary = {}, meta = {}, mode = "mixed") {
+  const comparisonLabel = meta?.comparison?.comparisonLabel || summary.comparisonLabel || "período anterior equivalente";
+  const intro = mode === "sales"
+    ? `En ${summary.periodLabel || "el período"} la referencia principal es ${money(summary.salesCurrent || 0)}, frente a ${money(summary.salesPrevious || 0)} en ${comparisonLabel.toLowerCase()}.`
+    : mode === "mixed"
+      ? `En ${summary.periodLabel || "el período"} se combinaron ${decimalNumber(summary.unitsCurrent || 0)} bultos y ${money(summary.salesCurrent || 0)}, comparados contra ${comparisonLabel.toLowerCase()}.`
+      : `En ${summary.periodLabel || "el período"} la referencia principal es ${decimalNumber(summary.unitsCurrent || 0)} bultos, frente a ${decimalNumber(summary.unitsPrevious || 0)} en ${comparisonLabel.toLowerCase()}.`;
+  document.getElementById("insights").innerHTML = [intro, ...(items || [])]
+    .map((item) => `<div class="insight-item">${item}</div>`)
+    .join("");
 }
 
 function renderActionPlan(items) {
@@ -1731,9 +1852,23 @@ function renderActionPlan(items) {
   `).join("");
 }
 
-function renderRatios(ratios, opportunities) {
-  const volumeMode = !!ratios.volumeModeActive;
-  const items = volumeMode ? [
+function renderRatios(ratios, opportunities, mode = "mixed") {
+  const items = mode === "mixed" ? [
+    `Bultos por cliente: ${decimalNumber(ratios.unitsPerClient)}`,
+    `Venta por cliente: ${money(ratios.salesPerClient)}`,
+    `Bultos por vendedor: ${decimalNumber(ratios.unitsPerSeller)}`,
+    `Venta por vendedor: ${money(ratios.salesPerSeller)}`,
+    `Pedidos por vendedor: ${ratios.ordersPerSeller}`,
+    `Bultos por pedido: ${decimalNumber(ratios.avgUnitsPerOrder)} · Ticket promedio ${money(ratios.avgOrderValue)}`,
+    `Precio promedio por bulto: ${money(ratios.avgUnitPrice)}`,
+    `Top 3 fuerzas de ventas: ${ratios.top3SalesForcesSharePct}% de la venta`,
+    `Top 3 vendedores: ${ratios.top3SellersSharePct}% de la venta`,
+    `Profundidad media: ${ratios.familyBreadthPerClient} familias por cliente`,
+    `Potencial recuperación de cartera: ${money(opportunities.recoverDormantSales)}`,
+    `Potencial cross-sell: ${money(opportunities.crossSellPotential)}`,
+    `Potencial optimización de rutas: ${money(opportunities.routeOptimizationPotential)}`,
+    `Potencial total estimado: ${money(opportunities.totalPotential)}`,
+  ] : mode === "units" ? [
     `Bultos por cliente: ${decimalNumber(ratios.unitsPerClient)}`,
     `Bultos por vendedor: ${decimalNumber(ratios.unitsPerSeller)}`,
     `Clientes por vendedor: ${ratios.clientsPerSeller}`,
@@ -1776,47 +1911,61 @@ function renderRatios(ratios, opportunities) {
   document.getElementById("ratiosCards").innerHTML = items.map((item) => `<div class="insight-item">${item}</div>`).join("");
 }
 
-function renderForecast(forecast) {
-  const volumeMode = !!forecast.volumeModeActive;
-  const items = volumeMode ? [
-    `Base mensual reciente: ${decimalNumber(forecast.baseMonthlyUnits)} bultos`,
+function renderForecast(forecast, meta = {}, mode = "mixed") {
+  const nextLabel = forecast.nextWindowLabel || meta?.comparison?.comparisonLabel || "la próxima ventana";
+  const items = mode === "mixed" ? [
+    `Base media del período: ${decimalNumber(forecast.baseMonthlyUnits)} bultos`,
+    `Base media del período: ${money(forecast.baseMonthlySales)}`,
+    `Tendencia reciente: ${forecast.unitsTrendPct}% en bultos · ${forecast.trendPct}% en pesos`,
+    `Proyección ${nextLabel.toLowerCase()}: ${decimalNumber(forecast.projectedQuarterUnits)} bultos`,
+    `Proyección ${nextLabel.toLowerCase()}: ${money(forecast.projectedQuarterSales)}`,
+  ] : mode === "units" ? [
+    `Base media del período: ${decimalNumber(forecast.baseMonthlyUnits)} bultos`,
     `Tendencia reciente: ${forecast.unitsTrendPct}%`,
-    `Proyección próximo trimestre: ${decimalNumber(forecast.projectedQuarterUnits)} bultos`,
+    `Proyección ${nextLabel.toLowerCase()}: ${decimalNumber(forecast.projectedQuarterUnits)} bultos`,
     `Referencia monetaria: ${money(forecast.projectedQuarterSales)}`,
   ] : [
-    `Base mensual reciente: ${money(forecast.baseMonthlySales)}`,
+    `Base media del período: ${money(forecast.baseMonthlySales)}`,
     `Tendencia reciente: ${forecast.trendPct}%`,
-    `Proyección próximo trimestre: ${money(forecast.projectedQuarterSales)}`,
+    `Proyección ${nextLabel.toLowerCase()}: ${money(forecast.projectedQuarterSales)}`,
   ];
   document.getElementById("forecastCards").innerHTML = items.map((item) => `<div class="insight-item">${item}</div>`).join("");
 }
 
-function renderCharts(charts, volumeMode = false) {
-  const formatter = volumeMode ? decimalNumber : money;
-  document.getElementById("chartSalesByMonth").innerHTML = renderLineChart(charts.salesByMonth || [], formatter);
-  document.getElementById("chartForecast").innerHTML = renderBars(charts.salesForecast || [], formatter);
-  document.getElementById("chartZoneSales").innerHTML = renderBars(charts.salesForceSales || [], formatter);
-  document.getElementById("chartSellerSales").innerHTML = renderBars(charts.sellerProductivity || [], formatter);
-  document.getElementById("chartFamilyMomentum").innerHTML = renderBars(charts.brandSales || [], formatter);
-  document.getElementById("chartCoverage").innerHTML = renderBars(charts.channelSales || [], formatter);
+function renderCharts(charts, mode = "mixed") {
+  const unitsMode = mode !== "sales";
+  const formatter = unitsMode ? decimalNumber : money;
+  document.getElementById("chartSalesByMonthTitle").textContent = unitsMode ? "Bultos por mes" : "Ventas por mes";
+  document.getElementById("chartForecastTitle").textContent = unitsMode ? "Proyección en bultos" : "Proyección en pesos";
+  document.getElementById("chartZoneSalesTitle").textContent = unitsMode ? "Bultos por fuerza de ventas" : "Ventas por fuerza de ventas";
+  document.getElementById("chartSellerSalesTitle").textContent = unitsMode ? "Bultos por vendedor" : "Ticket por vendedor";
+  document.getElementById("chartFamilyMomentumTitle").textContent = unitsMode ? "Bultos por marca" : "Ventas por marca";
+  document.getElementById("chartCoverageTitle").textContent = unitsMode ? "Bultos por canal" : "Ventas por canal";
+  document.getElementById("chartSalesByMonth").innerHTML = renderLineChart(unitsMode ? (charts.salesByMonthUnits || []) : (charts.salesByMonthMoney || []), formatter);
+  document.getElementById("chartForecast").innerHTML = renderBars(unitsMode ? (charts.salesForecastUnits || []) : (charts.salesForecastMoney || []), formatter);
+  document.getElementById("chartZoneSales").innerHTML = renderBars(unitsMode ? (charts.salesForceUnits || []) : (charts.salesForceMoney || []), formatter);
+  document.getElementById("chartSellerSales").innerHTML = renderBars(unitsMode ? (charts.sellerProductivityUnits || []) : (charts.sellerProductivityMoney || []), formatter);
+  document.getElementById("chartFamilyMomentum").innerHTML = renderBars(unitsMode ? (charts.brandUnits || []) : (charts.brandMoney || []), formatter);
+  document.getElementById("chartCoverage").innerHTML = renderBars(unitsMode ? (charts.channelUnits || []) : (charts.channelMoney || []), formatter);
 }
 
-function renderRankings(rankings) {
-  const volumeMode = !!rankings.volumeModeActive;
+function renderRankings(rankings, mode = "mixed") {
+  const unitsMode = mode !== "sales";
+  const titleMode = mode === "mixed" ? "mixed" : (unitsMode ? "units" : "sales");
   renderRankingGroup("clientsRankings", [
-    { title: volumeMode ? "Clientes con más volumen" : "Clientes más valiosos", items: rankings.positiveClients, formatter: (item) => clientLine(item, volumeMode) },
+    { title: titleMode === "mixed" ? "Clientes destacados" : unitsMode ? "Clientes con más volumen" : "Clientes más valiosos", items: unitsMode ? rankings.positiveClientsByUnits : rankings.positiveClientsBySales, formatter: (item) => clientLine(item, titleMode) },
     { title: "Clientes en riesgo", items: rankings.riskClients, formatter: clientRiskLine },
   ]);
   renderRankingGroup("commercialRankings", [
-    { title: volumeMode ? "Vendedores con más volumen" : "Vendedores destacados", items: rankings.topSellers, formatter: (item) => sellerLine(item, volumeMode) },
-    { title: volumeMode ? "Mejor volumen por pedido" : "Vendedores más rentables", items: rankings.productiveSellers, formatter: (item) => productiveSellerLine(item, volumeMode) },
-    { title: "Fuerzas de ventas principales", items: rankings.topSalesForces, formatter: (item) => salesForceLine(item, volumeMode) },
-    { title: "Rutas principales", items: rankings.topRoutes, formatter: (item) => routeLine(item, volumeMode) },
+    { title: titleMode === "mixed" ? "Vendedores destacados" : unitsMode ? "Vendedores con más volumen" : "Vendedores destacados", items: unitsMode ? rankings.topSellersByUnits : rankings.topSellersBySales, formatter: (item) => sellerLine(item, titleMode) },
+    { title: titleMode === "mixed" ? "Productividad comercial" : unitsMode ? "Mejor volumen por pedido" : "Vendedores más rentables", items: unitsMode ? rankings.productiveSellersByUnits : rankings.productiveSellersBySales, formatter: (item) => productiveSellerLine(item, titleMode) },
+    { title: "Fuerzas de ventas principales", items: unitsMode ? rankings.topSalesForcesByUnits : rankings.topSalesForcesBySales, formatter: (item) => salesForceLine(item, titleMode) },
+    { title: "Rutas principales", items: unitsMode ? rankings.topRoutesByUnits : rankings.topRoutesBySales, formatter: (item) => routeLine(item, titleMode) },
   ]);
   renderRankingGroup("mixRankings", [
-    { title: "Marcas líderes", items: rankings.topBrands, formatter: (item) => brandLine(item, volumeMode) },
-    { title: "Unidades de negocio", items: rankings.topBusinessUnits, formatter: (item) => businessUnitLine(item, volumeMode) },
-    { title: "Canales principales", items: rankings.topChannels, formatter: (item) => channelLine(item, volumeMode) },
+    { title: "Marcas líderes", items: unitsMode ? rankings.topBrandsByUnits : rankings.topBrandsBySales, formatter: (item) => brandLine(item, titleMode) },
+    { title: "Unidades de negocio", items: unitsMode ? rankings.topBusinessUnitsByUnits : rankings.topBusinessUnitsBySales, formatter: (item) => businessUnitLine(item, titleMode) },
+    { title: "Canales principales", items: unitsMode ? rankings.topChannelsByUnits : rankings.topChannelsBySales, formatter: (item) => channelLine(item, titleMode) },
     { title: "Potencial", items: [{ text: rankings.opportunityHeadline }], formatter: genericLine },
   ]);
 }
@@ -1931,6 +2080,7 @@ function renderLineChart(items, formatter) {
     return `${x},${y}`;
   }).join(" ");
   const last = items[items.length - 1];
+  const axisLabels = buildLineAxisLabels(items);
   return `
     <div class="chart-shell">
       <div class="line-chart">
@@ -1944,11 +2094,96 @@ function renderLineChart(items, formatter) {
         </svg>
       </div>
       <div class="line-axis">
-        <span>${items[0].label}</span>
-        <span>${last.label} · ${formatter(last.value)}</span>
+        ${axisLabels}
       </div>
+      <div class="line-axis-summary">${last.label} · ${formatter(last.value)}</div>
     </div>
   `;
+}
+
+function renderMultiLineChart(seriesList, formatter) {
+  const normalizedSeries = (seriesList || []).filter((serie) => (serie.data || []).length);
+  if (!normalizedSeries.length) {
+    return "<div class='muted'>Sin datos para graficar.</div>";
+  }
+  const labels = [];
+  normalizedSeries.forEach((serie) => {
+    (serie.data || []).forEach((point) => {
+      if (!labels.includes(point.x)) {
+        labels.push(point.x);
+      }
+    });
+  });
+  if (!labels.length) {
+    return "<div class='muted'>Sin datos para graficar.</div>";
+  }
+  const width = 640;
+  const height = 220;
+  const stepX = labels.length === 1 ? width / 2 : width / (labels.length - 1);
+  const seriesMaps = normalizedSeries.map((serie) => ({
+    ...serie,
+    map: new Map((serie.data || []).map((point) => [point.x, Number(point.y || 0)])),
+  }));
+  const maxValue = Math.max(
+    1,
+    ...seriesMaps.flatMap((serie) => labels.map((label) => Math.abs(serie.map.get(label) || 0))),
+  );
+  const lines = seriesMaps.map((serie) => {
+    const color = serie.color || "#0f766e";
+    const points = labels.map((label, index) => {
+      const x = index * stepX;
+      const value = serie.map.get(label) || 0;
+      const y = height - (Math.abs(value) / maxValue) * (height - 28) - 14;
+      return { x, y, value };
+    });
+    return {
+      label: serie.label,
+      color,
+      dashed: !!serie.dashed,
+      points,
+      polyline: points.map((point) => `${point.x},${point.y}`).join(" "),
+    };
+  });
+  const axisLabels = buildLineAxisLabels(labels.map((label, index) => ({ label, value: index })));
+  const legend = lines.map((line) => `
+    <span class="line-legend-item">
+      <span class="line-legend-swatch${line.dashed ? " dashed" : ""}" style="--line-color:${line.color}"></span>
+      ${escapeHtml(line.label)}
+    </span>
+  `).join("");
+  return `
+    <div class="chart-shell">
+      <div class="line-legend">${legend}</div>
+      <div class="line-chart">
+        <svg viewBox="0 0 ${width} ${height}">
+          ${lines.map((line) => `<polyline fill="none" stroke="${line.color}" stroke-width="3" ${line.dashed ? 'stroke-dasharray="8 6"' : ""} points="${line.polyline}" />`).join("")}
+          ${lines.map((line) => line.points.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="3.5" fill="${line.color}"></circle>`).join("")).join("")}
+        </svg>
+      </div>
+      <div class="line-axis">${axisLabels}</div>
+    </div>
+  `;
+}
+
+function buildLineAxisLabels(items) {
+  const maxLabels = 8;
+  const labels = [];
+  if (items.length <= maxLabels) {
+    items.forEach((item, index) => labels.push({ item, index }));
+  } else {
+    const step = Math.max(1, Math.ceil((items.length - 1) / (maxLabels - 1)));
+    for (let index = 0; index < items.length; index += step) {
+      labels.push({ item: items[index], index });
+    }
+    const lastIndex = items.length - 1;
+    if (labels[labels.length - 1]?.index !== lastIndex) {
+      labels.push({ item: items[lastIndex], index: lastIndex });
+    }
+  }
+  const totalSteps = Math.max(items.length - 1, 1);
+  return labels.map(({ item, index }) => `
+    <span class="line-axis-label" style="left:${(index / totalSteps) * 100}%">${escapeHtml(item.label)}</span>
+  `).join("");
 }
 
 function renderBars(items, formatter, forceNegative = false, diverging = false) {
@@ -1977,40 +2212,105 @@ function renderBars(items, formatter, forceNegative = false, diverging = false) 
   `;
 }
 
-function clientLine(item, volumeMode = false) {
-  return `<strong>${escapeHtml(item.client)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.quantity12m || 0)} bultos` : money(item.sales12m)} · ${item.families} familias · ${item.sales_force}</span>`;
+function clientLine(item, metricMode = "units") {
+  const detail = metricMode === "sales"
+    ? `${money(item.sales12m)}`
+    : metricMode === "mixed"
+      ? `${decimalNumber(item.quantity12m || 0)} bultos · ${money(item.sales12m)}`
+      : `${decimalNumber(item.quantity12m || 0)} bultos`;
+  return `<strong>${escapeHtml(item.client)}</strong><br><span class="muted">${detail} · ${item.families} familias · ${item.sales_force}</span>`;
 }
 
 function clientRiskLine(item) {
   return `<strong>${escapeHtml(item.client)}</strong><br><span class="muted">${item.status} · ${money(item.salesHistory)} histórico · ${item.recencyDays} días sin compra</span>`;
 }
 
-function sellerLine(item, volumeMode = false) {
-  return `<strong>${escapeHtml(item.seller)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.quantity || 0)} bultos` : money(item.sales)} · ${item.clients} clientes · ${volumeMode ? `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido` : `${money(item.avgOrderValue || 0)} ticket`}</span>`;
+function sellerLine(item, metricMode = "units") {
+  const head = metricMode === "sales"
+    ? money(item.sales)
+    : metricMode === "mixed"
+      ? `${decimalNumber(item.quantity || 0)} bultos · ${money(item.sales)}`
+      : `${decimalNumber(item.quantity || 0)} bultos`;
+  const tail = metricMode === "sales"
+    ? `${money(item.avgOrderValue || 0)} ticket`
+    : metricMode === "mixed"
+      ? `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido · ${money(item.avgOrderValue || 0)} ticket`
+      : `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido`;
+  return `<strong>${escapeHtml(item.seller)}</strong><br><span class="muted">${head} · ${item.clients} clientes · ${tail}</span>`;
 }
 
-function productiveSellerLine(item, volumeMode = false) {
-  return `<strong>${escapeHtml(item.seller)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.avgUnitsPerOrder || 0)} bultos por pedido` : `${money(item.avgOrderValue || 0)} por pedido`} · ${item.orders} pedidos · ${volumeMode ? `${decimalNumber(item.quantity || 0)} bultos` : money(item.sales)}</span>`;
+function productiveSellerLine(item, metricMode = "units") {
+  const head = metricMode === "sales"
+    ? `${money(item.avgOrderValue || 0)} por pedido`
+    : metricMode === "mixed"
+      ? `${decimalNumber(item.avgUnitsPerOrder || 0)} bultos por pedido · ${money(item.avgOrderValue || 0)} por pedido`
+      : `${decimalNumber(item.avgUnitsPerOrder || 0)} bultos por pedido`;
+  const tail = metricMode === "sales"
+    ? money(item.sales)
+    : metricMode === "mixed"
+      ? `${decimalNumber(item.quantity || 0)} bultos · ${money(item.sales)}`
+      : `${decimalNumber(item.quantity || 0)} bultos`;
+  return `<strong>${escapeHtml(item.seller)}</strong><br><span class="muted">${head} · ${item.orders} pedidos · ${tail}</span>`;
 }
 
-function salesForceLine(item, volumeMode = false) {
-  return `<strong>${escapeHtml(item.sales_force)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.quantity || 0)} bultos` : money(item.sales)} · ${item.clients} clientes</span>`;
+function salesForceLine(item, metricMode = "units") {
+  const detail = metricMode === "sales"
+    ? money(item.sales)
+    : metricMode === "mixed"
+      ? `${decimalNumber(item.quantity || 0)} bultos · ${money(item.sales)}`
+      : `${decimalNumber(item.quantity || 0)} bultos`;
+  return `<strong>${escapeHtml(item.sales_force)}</strong><br><span class="muted">${detail} · ${item.clients} clientes</span>`;
 }
 
-function routeLine(item, volumeMode = false) {
-  return `<strong>${escapeHtml(item.route_description)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.quantity || 0)} bultos` : money(item.sales)} · ${item.clients} clientes · ${volumeMode ? `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido` : `${money(item.avgOrderValue || 0)} ticket`}</span>`;
+function routeLine(item, metricMode = "units") {
+  const head = metricMode === "sales"
+    ? money(item.sales)
+    : metricMode === "mixed"
+      ? `${decimalNumber(item.quantity || 0)} bultos · ${money(item.sales)}`
+      : `${decimalNumber(item.quantity || 0)} bultos`;
+  const tail = metricMode === "sales"
+    ? `${money(item.avgOrderValue || 0)} ticket`
+    : metricMode === "mixed"
+      ? `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido · ${money(item.avgOrderValue || 0)} ticket`
+      : `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido`;
+  return `<strong>${escapeHtml(item.route_description)}</strong><br><span class="muted">${head} · ${item.clients} clientes · ${tail}</span>`;
 }
 
-function brandLine(item, volumeMode = false) {
-  return `<strong>${escapeHtml(item.brand)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.quantity || 0)} bultos` : money(item.sales)} · ${item.clients} clientes · ${volumeMode ? `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido` : `${money(item.avgOrderValue || 0)} ticket`}</span>`;
+function brandLine(item, metricMode = "units") {
+  const head = metricMode === "sales"
+    ? money(item.sales)
+    : metricMode === "mixed"
+      ? `${decimalNumber(item.quantity || 0)} bultos · ${money(item.sales)}`
+      : `${decimalNumber(item.quantity || 0)} bultos`;
+  const tail = metricMode === "sales"
+    ? `${money(item.avgOrderValue || 0)} ticket`
+    : metricMode === "mixed"
+      ? `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido · ${money(item.avgOrderValue || 0)} ticket`
+      : `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido`;
+  return `<strong>${escapeHtml(item.brand)}</strong><br><span class="muted">${head} · ${item.clients} clientes · ${tail}</span>`;
 }
 
-function businessUnitLine(item, volumeMode = false) {
-  return `<strong>${escapeHtml(item.business_unit)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.quantity || 0)} bultos` : money(item.sales)} · ${item.orders} pedidos</span>`;
+function businessUnitLine(item, metricMode = "units") {
+  const detail = metricMode === "sales"
+    ? money(item.sales)
+    : metricMode === "mixed"
+      ? `${decimalNumber(item.quantity || 0)} bultos · ${money(item.sales)}`
+      : `${decimalNumber(item.quantity || 0)} bultos`;
+  return `<strong>${escapeHtml(item.business_unit)}</strong><br><span class="muted">${detail} · ${item.orders} pedidos</span>`;
 }
 
-function channelLine(item, volumeMode = false) {
-  return `<strong>${escapeHtml(item.channel)}</strong><br><span class="muted">${volumeMode ? `${decimalNumber(item.quantity || 0)} bultos` : money(item.sales)} · ${item.clients} clientes · ${volumeMode ? `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido` : `${money(item.avgOrderValue || 0)} ticket`}</span>`;
+function channelLine(item, metricMode = "units") {
+  const head = metricMode === "sales"
+    ? money(item.sales)
+    : metricMode === "mixed"
+      ? `${decimalNumber(item.quantity || 0)} bultos · ${money(item.sales)}`
+      : `${decimalNumber(item.quantity || 0)} bultos`;
+  const tail = metricMode === "sales"
+    ? `${money(item.avgOrderValue || 0)} ticket`
+    : metricMode === "mixed"
+      ? `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido · ${money(item.avgOrderValue || 0)} ticket`
+      : `${decimalNumber(item.avgUnitsPerOrder || 0)} por pedido`;
+  return `<strong>${escapeHtml(item.channel)}</strong><br><span class="muted">${head} · ${item.clients} clientes · ${tail}</span>`;
 }
 
 function genericLine(item) {
@@ -2591,8 +2891,9 @@ function renderVizSpec(spec, containerId) {
   const main = spec.series[0];
   let vizHtml = "";
   if (spec.type === "line" || spec.type === "area") {
-    const items = (main?.data || []).map((p) => ({ label: p.x, value: p.y }));
-    vizHtml = renderLineChart(items, fmt);
+    vizHtml = spec.series.length > 1
+      ? renderMultiLineChart(spec.series, fmt)
+      : renderLineChart((main?.data || []).map((p) => ({ label: p.x, value: p.y })), fmt);
   } else if (spec.type === "bar" || spec.type === "stacked_bar") {
     const items = (main?.data || []).map((p) => ({ label: p.x, value: p.y }));
     vizHtml = renderBars(items, fmt);

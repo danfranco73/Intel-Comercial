@@ -126,7 +126,7 @@ def _gen_temporal(result: dict, ratios: dict) -> list:
     ins.append(_insight(
         "tempo_trend", "tiempo", 1, itype,
         f"La venta {_trend_word(trend)} ({_sign(trend)}{_pct(trend)}) "
-        f"respecto al trimestre anterior, con una base mensual de {_money(base)} "
+        f"respecto al bloque previo equivalente, con una base media de {_money(base)} "
         f"sobre {periods} períodos analizados.",
         ["tendencia", "crecimiento"],
     ))
@@ -136,7 +136,7 @@ def _gen_temporal(result: dict, ratios: dict) -> list:
         proj_q = sum(p["value"] for p in forecast[:3])
         ins.append(_insight(
             "tempo_forecast", "tiempo", 2, "context",
-            f"Con la tendencia actual, la proyección para los próximos 3 meses "
+            f"Con la tendencia actual, la proyección para la próxima ventana "
             f"es de {_money(proj_q)}.",
             ["proyeccion", "forecast"],
         ))

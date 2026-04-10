@@ -92,6 +92,43 @@ def _parse_iso_date(value, field_name):
         raise ValueError(f"{field_name} debe tener formato YYYY-MM-DD")
 
 
+def _build_sales_analysis_window(fecha_desde, fecha_hasta):
+    start = _parse_iso_date(fecha_desde, "fechaDesde")
+    end = _parse_iso_date(fecha_hasta, "fechaHasta")
+    if start > end:
+        raise ValueError("fechaDesde no puede ser mayor que fechaHasta")
+    days = (end - start).days + 1
+    comparison_end = start - timedelta(days=1)
+    comparison_start = comparison_end - timedelta(days=days - 1)
+    return {
+        "selectedStart": start.isoformat(),
+        "selectedEnd": end.isoformat(),
+        "comparisonStart": comparison_start.isoformat(),
+        "comparisonEnd": comparison_end.isoformat(),
+        "loadStart": comparison_start.isoformat(),
+        "loadEnd": end.isoformat(),
+        "days": days,
+    }
+
+
+def _attach_sales_analysis_window(dataset, window):
+    attached = dict(dataset)
+    attached["analysisRange"] = {
+        "fechaDesde": window["selectedStart"],
+        "fechaHasta": window["selectedEnd"],
+    }
+    attached["comparisonRange"] = {
+        "fechaDesde": window["comparisonStart"],
+        "fechaHasta": window["comparisonEnd"],
+    }
+    attached["loadRange"] = {
+        "fechaDesde": window["loadStart"],
+        "fechaHasta": window["loadEnd"],
+    }
+    attached["comparisonDays"] = window["days"]
+    return attached
+
+
 def _parse_int_env(name, default_value, minimum=None):
     try:
         value = int(os.getenv(name) or default_value)
@@ -1050,20 +1087,27 @@ def _resolve_datasets(datasets):
             )
             fecha_desde = config.get("fechaDesde") or erp_config.get("fechaDesde")
             fecha_hasta = config.get("fechaHasta") or erp_config.get("fechaHasta")
+            analysis_window = None
+            if fecha_desde and fecha_hasta and (use_auto or use_mongo or use_clickhouse or use_erp):
+                analysis_window = _build_sales_analysis_window(fecha_desde, fecha_hasta)
             if use_auto:
-                resolved[dataset_type], sales_source = _load_commercial_sales_dataset(fecha_desde, fecha_hasta)
+                dataset, sales_source = _load_commercial_sales_dataset(analysis_window["loadStart"], analysis_window["loadEnd"])
+                resolved[dataset_type] = _attach_sales_analysis_window(dataset, analysis_window)
                 continue
             if use_erp:
                 erp_cookie = erp_cookie or erp_login().get("cookie")
-                resolved[dataset_type] = _fetch_sales_dataset_chunked(fecha_desde, fecha_hasta, detailed=True, cookie=erp_cookie)
+                dataset = _fetch_sales_dataset_chunked(analysis_window["loadStart"], analysis_window["loadEnd"], detailed=True, cookie=erp_cookie)
+                resolved[dataset_type] = _attach_sales_analysis_window(dataset, analysis_window)
                 sales_source = "erp"
                 continue
             if use_mongo:
-                resolved[dataset_type] = load_erp_sales_dataset(fecha_desde, fecha_hasta)
+                dataset = load_erp_sales_dataset(analysis_window["loadStart"], analysis_window["loadEnd"])
+                resolved[dataset_type] = _attach_sales_analysis_window(dataset, analysis_window)
                 sales_source = "mongo"
                 continue
             if use_clickhouse:
-                resolved[dataset_type] = load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta)
+                dataset = load_erp_sales_dataset_clickhouse(analysis_window["loadStart"], analysis_window["loadEnd"])
+                resolved[dataset_type] = _attach_sales_analysis_window(dataset, analysis_window)
                 sales_source = "clickhouse"
                 continue
             sources = []

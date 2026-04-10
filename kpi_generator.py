@@ -117,10 +117,10 @@ def _extract_temporal(result, domain, priority):
     periods = result.get("periods", 0)
 
     kpis.append(_kpi("trend_pct",  "Tendencia reciente",    trend,   "pct",   domain, priority,
-                     delta=trend, context=f"Base mensual {_fmt_money(base)}"))
-    kpis.append(_kpi("base_monthly", "Promedio mensual (últ. 3)", base, "money", domain, priority,
+                     delta=trend, context=f"Base media {_fmt_money(base)}"))
+    kpis.append(_kpi("base_monthly", "Promedio por período", base, "money", domain, priority,
                      context=f"{periods} períodos analizados"))
-    kpis.append(_kpi("projected_quarter", "Proyección próximo trimestre", proj, "money", domain, priority,
+    kpis.append(_kpi("projected_quarter", "Proyección próxima ventana", proj, "money", domain, priority,
                      context="Basado en tendencia moderada"))
 
     rat["trend_pct"]   = trend

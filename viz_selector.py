@@ -102,23 +102,20 @@ def _viz_temporal(task, result):
     if not series_data:
         return _empty_spec(task.get("label", "Evolución temporal"))
 
-    # Serie principal
-    main_series = [_serie("total", "Total", [{**p, "x": p["label"], "y": p["value"]} for p in series_data], _PALETTE[0])]
-
-    # Forecast con color diferente
-    if forecast:
-        main_series.append(_serie("forecast", "Proyección",
-                                  [{"x": p["label"], "y": p["value"]} for p in forecast],
-                                  _PALETTE[2], dashed=True))
-
-    # Desagregación por dimensión (máx 4 series)
     if by_dim:
+        main_series = []
         for i, (dim_val, dim_series) in enumerate(list(by_dim.items())[:4]):
             main_series.append(_serie(
                 f"dim_{i}", dim_val,
                 [{"x": p["label"], "y": p["value"]} for p in dim_series],
-                _PALETTE[(i + 3) % len(_PALETTE)],
+                _PALETTE[i % len(_PALETTE)],
             ))
+    else:
+        main_series = [_serie("total", "Total", [{**p, "x": p["label"], "y": p["value"]} for p in series_data], _PALETTE[0])]
+        if forecast:
+            main_series.append(_serie("forecast", "Proyección",
+                                      [{"x": p["label"], "y": p["value"]} for p in forecast],
+                                      _PALETTE[2], dashed=True))
 
     return {
         "type":   "line",

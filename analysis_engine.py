@@ -147,9 +147,9 @@ class AnalysisEngine:
             "forecast":     [{label, value}],                           ← 3 períodos
         }
         """
-        date_fld  = fields.get("date") or fields.get("metric")   # fallback
+        date_fld  = fields.get("date") or ("date" if records and "date" in records[0] else None)
         metric_fld = fields.get("metric")
-        if not metric_fld:
+        if not metric_fld or not date_fld:
             return {"error": "No se encontró campo de métrica"}
 
         monthly    = defaultdict(float)

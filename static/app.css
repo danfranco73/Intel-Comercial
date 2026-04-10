@@ -24,7 +24,7 @@
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 24px;
-  padding: 14px 20px;
+  padding: 14px 280px 14px 20px;
   margin-bottom: 12px;
   box-shadow: var(--shadow);
   backdrop-filter: blur(4px);
@@ -66,6 +66,15 @@
 
 .sticky-controls .row {
   margin-bottom: 0;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.metric-view-header {
+  display: flex;
+  flex: 1 1 420px;
+  justify-content: flex-end;
+  max-width: 100%;
 }
 
 .watermark {
@@ -291,6 +300,74 @@ table,
   gap: 16px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.metric-view-bar {
+  margin-bottom: 18px;
+}
+
+.metric-toggle {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.metric-view-header .subpanel-header {
+  width: 100%;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+}
+
+.metric-view-header .subpanel-header > div:first-child {
+  text-align: right;
+  max-width: 320px;
+}
+
+.metric-chip {
+  min-width: 88px;
+  border-radius: 999px;
+  background: #fff7ed;
+  border-color: #fdba74;
+  color: #9a3412;
+  font-weight: 600;
+}
+
+.metric-chip.active {
+  background: #ea580c;
+  border-color: #ea580c;
+  color: #fff;
+}
+
+.metric-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.line-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.line-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.line-legend-swatch {
+  width: 18px;
+  height: 0;
+  border-top: 3px solid var(--line-color, var(--brand));
+}
+
+.line-legend-swatch.dashed {
+  border-top-style: dashed;
 }
 
 .row {
@@ -939,9 +1016,32 @@ th {
 }
 
 .line-axis {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  position: relative;
+  min-height: 18px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.line-axis-label {
+  position: absolute;
+  bottom: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.line-axis-label:first-child {
+  left: 0 !important;
+  transform: none;
+}
+
+.line-axis-label:last-child {
+  transform: translateX(-100%);
+}
+
+.line-axis-summary {
+  margin-top: 6px;
+  text-align: right;
   font-size: 12px;
   color: var(--muted);
 }
@@ -957,6 +1057,29 @@ th {
 }
 
 @media (max-width: 840px) {
+  .sticky-controls {
+    padding: 14px 16px;
+  }
+
+  .sticky-controls .row {
+    justify-content: stretch;
+    align-items: stretch;
+  }
+
+  .metric-view-header {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+  }
+
+  .metric-view-header .subpanel-header {
+    justify-content: flex-start;
+  }
+
+  .metric-view-header .subpanel-header > div:first-child {
+    text-align: left;
+    max-width: none;
+  }
+
   .surface-switch {
     top: 12px;
     right: 12px;

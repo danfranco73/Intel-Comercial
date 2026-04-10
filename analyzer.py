@@ -243,51 +243,134 @@ def analyze_datasets(datasets, filters=None):
     viz_configs  = build_all_viz(tasks, engine_results)
     dyn_insights = write_insights(kpi_set, engine_results, tasks)
 
+    sales_context = resolve_period_context(loaded["sales"], enriched_sales)
+    selected_unfiltered_sales = records_between(
+        enriched_sales,
+        sales_context["selectedStart"],
+        sales_context["selectedEnd"],
+    )
+
     applied_filters, filtered_sales = apply_filters(enriched_sales, filters or {})
     if not filtered_sales:
         raise ValueError("No quedaron ventas para los filtros seleccionados")
 
     filtered_sales.sort(key=lambda item: item["date"])
-    max_date = max(item["date"] for item in filtered_sales)
-    current_start = max_date - timedelta(days=89)
-    previous_start = current_start - timedelta(days=90)
-    previous_end = current_start - timedelta(days=1)
-    year_cut = max_date - timedelta(days=364)
+    current_period = records_between(filtered_sales, sales_context["selectedStart"], sales_context["selectedEnd"])
+    if not current_period:
+        raise ValueError("No quedaron ventas dentro del período seleccionado para los filtros aplicados")
+    previous_period = records_between(filtered_sales, sales_context["comparisonStart"], sales_context["comparisonEnd"])
 
-    current_period = [item for item in filtered_sales if current_start <= item["date"] <= max_date]
-    previous_period = [item for item in filtered_sales if previous_start <= item["date"] <= previous_end]
-    last_12_months = [item for item in filtered_sales if item["date"] >= year_cut]
+    max_date = sales_context["selectedEnd"]
+    client_stats = aggregate_clients(
+        filtered_sales,
+        sales_context["selectedStart"],
+        sales_context["selectedEnd"],
+        sales_context["comparisonStart"],
+        sales_context["comparisonEnd"],
+    )
+    seller_stats = aggregate_dimension(
+        filtered_sales,
+        "seller_name",
+        "seller",
+        current_start=sales_context["selectedStart"],
+        current_end=sales_context["selectedEnd"],
+        previous_start=sales_context["comparisonStart"],
+        previous_end=sales_context["comparisonEnd"],
+        missing_label="Sin vendedor",
+    )
+    sales_force_stats = aggregate_dimension(
+        filtered_sales,
+        "sales_force",
+        "sales_force",
+        current_start=sales_context["selectedStart"],
+        current_end=sales_context["selectedEnd"],
+        previous_start=sales_context["comparisonStart"],
+        previous_end=sales_context["comparisonEnd"],
+        missing_label="Sin fuerza de ventas",
+    )
+    family_stats = aggregate_dimension(
+        filtered_sales,
+        "family",
+        "family",
+        current_start=sales_context["selectedStart"],
+        current_end=sales_context["selectedEnd"],
+        previous_start=sales_context["comparisonStart"],
+        previous_end=sales_context["comparisonEnd"],
+        missing_label="Sin familia",
+    )
+    brand_stats = aggregate_dimension(
+        filtered_sales,
+        "brand",
+        "brand",
+        current_start=sales_context["selectedStart"],
+        current_end=sales_context["selectedEnd"],
+        previous_start=sales_context["comparisonStart"],
+        previous_end=sales_context["comparisonEnd"],
+        missing_label="Sin marca",
+    )
+    business_unit_stats = aggregate_dimension(
+        filtered_sales,
+        "business_unit",
+        "business_unit",
+        current_start=sales_context["selectedStart"],
+        current_end=sales_context["selectedEnd"],
+        previous_start=sales_context["comparisonStart"],
+        previous_end=sales_context["comparisonEnd"],
+        missing_label="Sin unidad de negocio",
+    )
+    channel_stats = aggregate_dimension(
+        filtered_sales,
+        "channel",
+        "channel",
+        current_start=sales_context["selectedStart"],
+        current_end=sales_context["selectedEnd"],
+        previous_start=sales_context["comparisonStart"],
+        previous_end=sales_context["comparisonEnd"],
+        missing_label="Sin canal",
+    )
+    route_stats = aggregate_dimension(
+        filtered_sales,
+        "route_description",
+        "route_description",
+        current_start=sales_context["selectedStart"],
+        current_end=sales_context["selectedEnd"],
+        previous_start=sales_context["comparisonStart"],
+        previous_end=sales_context["comparisonEnd"],
+        missing_label="Sin ruta",
+    )
 
-    client_stats = aggregate_clients(filtered_sales, max_date)
-    seller_stats = aggregate_dimension(last_12_months, "seller_name", "seller", missing_label="Sin vendedor")
-    sales_force_stats = aggregate_dimension(last_12_months, "sales_force", "sales_force", missing_label="Sin fuerza de ventas")
-    family_stats = aggregate_dimension(last_12_months, "family", "family", current_start=current_start, previous_start=previous_start, previous_end=previous_end, missing_label="Sin familia")
-    brand_stats = aggregate_dimension(last_12_months, "brand", "brand", current_start=current_start, previous_start=previous_start, previous_end=previous_end, missing_label="Sin marca")
-    business_unit_stats = aggregate_dimension(last_12_months, "business_unit", "business_unit", current_start=current_start, previous_start=previous_start, previous_end=previous_end, missing_label="Sin unidad de negocio")
-    channel_stats = aggregate_dimension(last_12_months, "channel", "channel", current_start=current_start, previous_start=previous_start, previous_end=previous_end, missing_label="Sin canal")
-    route_stats = aggregate_dimension(last_12_months, "route_description", "route_description", missing_label="Sin ruta")
-
-    coverage = build_coverage(filtered_sales)
-    summary = build_summary(current_period, previous_period, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, route_stats, coverage)
-    ratios = build_ratios(last_12_months, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, coverage)
-    forecast = build_forecast(last_12_months)
-    opportunities = build_opportunities(client_stats, sales_force_stats, family_stats, route_stats, coverage, last_12_months)
-    alerts = build_alerts(summary, coverage, opportunities, seller_stats, sales_force_stats, family_stats, brand_stats, channel_stats)
-    semaphores = build_semaphores(summary, coverage, forecast)
-    charts = build_charts(last_12_months, sales_force_stats, seller_stats, brand_stats, channel_stats, coverage, forecast)
+    coverage = build_coverage(current_period)
+    summary = build_summary(current_period, previous_period, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, route_stats, coverage, sales_context)
+    ratios = build_ratios(current_period, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, coverage)
+    forecast = build_forecast(current_period, previous_period, sales_context)
+    opportunities = build_opportunities(client_stats, sales_force_stats, family_stats, route_stats, coverage, current_period)
+    alerts = build_alerts(summary, coverage, opportunities, seller_stats, sales_force_stats, family_stats, brand_stats, channel_stats, sales_context)
+    semaphores = build_semaphores(summary, coverage, forecast, sales_context)
+    charts = build_charts(current_period, sales_force_stats, seller_stats, brand_stats, channel_stats, coverage, forecast)
     rankings = build_rankings(client_stats, seller_stats, sales_force_stats, route_stats, brand_stats, business_unit_stats, channel_stats, opportunities)
-    insights = build_insights(summary, coverage, forecast, opportunities, alerts)
-    action_plan = build_action_plan(alerts, opportunities, forecast, coverage)
-    available_filters = build_available_filters(filtered_sales)
+    insights = build_insights(summary, coverage, forecast, opportunities, alerts, sales_context)
+    action_plan = build_action_plan(alerts, opportunities, forecast, coverage, sales_context)
+    available_filters = build_available_filters(current_period, sales_context)
 
     return {
         "meta": {
-            "periodStart": min(item["date"] for item in filtered_sales).isoformat(),
+            "periodStart": sales_context["selectedStart"].isoformat(),
             "periodEnd": max_date.isoformat(),
-            "rowsUniverse": len(enriched_sales),
-            "rowsAnalyzed": len(filtered_sales),
+            "rowsUniverse": len(selected_unfiltered_sales),
+            "rowsAnalyzed": len(current_period),
+            "comparisonRows": len(previous_period),
             "activeFilterSummary": summarize_filters(applied_filters),
             "datasets": build_dataset_meta(loaded),
+            "comparison": {
+                "selectedStart": sales_context["selectedStart"].isoformat(),
+                "selectedEnd": sales_context["selectedEnd"].isoformat(),
+                "selectedLabel": sales_context["selectedLabel"],
+                "comparisonStart": sales_context["comparisonStart"].isoformat(),
+                "comparisonEnd": sales_context["comparisonEnd"].isoformat(),
+                "comparisonLabel": sales_context["comparisonLabel"],
+                "days": sales_context["days"],
+                "selectedPeriods": sales_context["selectedPeriods"],
+            },
         },
         "schema": schema,
         "availableAnalyses": tasks_summary(tasks),
@@ -368,6 +451,10 @@ def load_sales_dataset(config):
             "sources": sources,
             "sourceCount": int(config.get("sourceCount", len(sources))),
             "sourceKind": config.get("sourceKind"),
+            "analysisRange": config.get("analysisRange"),
+            "comparisonRange": config.get("comparisonRange"),
+            "loadRange": config.get("loadRange"),
+            "comparisonDays": config.get("comparisonDays"),
         }
 
     sources = config.get("sources") or [config]
@@ -413,6 +500,10 @@ def load_sales_dataset(config):
         "sources": source_meta,
         "sourceCount": len(source_meta),
         "sourceKind": "files",
+        "analysisRange": config.get("analysisRange"),
+        "comparisonRange": config.get("comparisonRange"),
+        "loadRange": config.get("loadRange"),
+        "comparisonDays": config.get("comparisonDays"),
     }
 
 
@@ -604,35 +695,45 @@ def enrich_sales(sales_records, article_map, route_seller_map, seller_key_map, s
     return enriched
 
 
-def aggregate_clients(records, max_date):
+def aggregate_clients(records, current_start, current_end, previous_start=None, previous_end=None):
     clients = {}
     grouped = defaultdict(list)
-    last_12_cut = max_date - timedelta(days=364)
     for item in records:
         grouped[item["client_key"]].append(item)
     for client_key, items in grouped.items():
-        last_date = max(item["date"] for item in items)
-        recency = (max_date - last_date).days
-        dates = sorted({item["date"] for item in items})
+        relevant_items = [item for item in items if item["date"] <= current_end]
+        if not relevant_items:
+            continue
+        last_date = max(item["date"] for item in relevant_items)
+        recency = (current_end - last_date).days
+        dates = sorted({item["date"] for item in relevant_items})
         gaps = [(b - a).days for a, b in zip(dates, dates[1:])]
         avg_gap = median(gaps) if gaps else 45
         status = classify_client(recency, avg_gap)
-        items_12 = [item for item in items if item["date"] >= last_12_cut]
-        reference = items_12 or items
+        current_items = [item for item in relevant_items if current_start <= item["date"] <= current_end]
+        previous_items = [
+            item
+            for item in relevant_items
+            if previous_start and previous_end and previous_start <= item["date"] <= previous_end
+        ]
+        reference = current_items or relevant_items
         orders = len({item["invoice"] for item in reference})
         families = {item["family"] for item in reference if item["family"] != "Sin familia"}
-        quantity_12 = sum(item.get("quantity", 0) or 0 for item in items_12)
-        quantity_history = sum(item.get("quantity", 0) or 0 for item in items)
+        quantity_current = sum(item.get("quantity", 0) or 0 for item in current_items)
+        quantity_previous = sum(item.get("quantity", 0) or 0 for item in previous_items)
+        quantity_history = sum(item.get("quantity", 0) or 0 for item in relevant_items)
         clients[client_key] = {
             "client_key": client_key,
-            "client": items[-1]["client"],
-            "sales12m": round(sum(item["amount"] for item in items_12), 2),
-            "salesHistory": round(sum(item["amount"] for item in items), 2),
-            "quantity12m": round(quantity_12, 2),
+            "client": relevant_items[-1]["client"],
+            "sales12m": round(sum(item["amount"] for item in current_items), 2),
+            "salesPrevious": round(sum(item["amount"] for item in previous_items), 2),
+            "salesHistory": round(sum(item["amount"] for item in relevant_items), 2),
+            "quantity12m": round(quantity_current, 2),
+            "quantityPrevious": round(quantity_previous, 2),
             "quantityHistory": round(quantity_history, 2),
-            "monthsActive": len({item["date"].strftime("%Y-%m") for item in items_12}),
+            "monthsActive": len({item["date"].strftime("%Y-%m") for item in current_items}),
             "avgTicket": round(sum(item["amount"] for item in reference) / max(orders, 1), 2),
-            "avgUnitsPerOrder": round(quantity_12 / max(orders, 1), 2),
+            "avgUnitsPerOrder": round(quantity_current / max(orders, 1), 2),
             "orders": orders,
             "families": len(families),
             "lastDate": last_date.isoformat(),
@@ -656,18 +757,26 @@ def classify_client(recency, avg_gap):
     return "Perdido"
 
 
-def aggregate_dimension(records, key, label_key, current_start=None, previous_start=None, previous_end=None, missing_label=None):
+def aggregate_dimension(records, key, label_key, current_start=None, current_end=None, previous_start=None, previous_end=None, missing_label=None):
     stats = {}
     grouped = defaultdict(list)
     for item in records:
         grouped[item.get(key) or missing_label or f"Sin {label_key}"].append(item)
     for name, items in grouped.items():
-        sales = sum(item["amount"] for item in items)
-        clients = len({item["client_key"] for item in items})
-        orders = len(order_index(items))
-        quantity = sum(item.get("quantity", 0) or 0 for item in items)
-        current_sales = sum(item["amount"] for item in items if current_start and item["date"] >= current_start) if current_start else sales
-        previous_sales = sum(item["amount"] for item in items if previous_start and previous_end and previous_start <= item["date"] <= previous_end) if previous_start else 0
+        current_items = [
+            item for item in items
+            if current_start and current_end and current_start <= item["date"] <= current_end
+        ] if current_start and current_end else items
+        previous_items = [
+            item for item in items
+            if previous_start and previous_end and previous_start <= item["date"] <= previous_end
+        ] if previous_start and previous_end else []
+        sales = sum(item["amount"] for item in current_items)
+        clients = len({item["client_key"] for item in current_items})
+        orders = len(order_index(current_items))
+        quantity = sum(item.get("quantity", 0) or 0 for item in current_items)
+        current_sales = sales
+        previous_sales = sum(item["amount"] for item in previous_items)
         stats[name] = {
             label_key: name,
             "sales": round(sales, 2),
@@ -704,7 +813,7 @@ def build_coverage(records):
     }
 
 
-def build_summary(current_period, previous_period, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, route_stats, coverage):
+def build_summary(current_period, previous_period, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, route_stats, coverage, period_context):
     current_sales = sum(item["amount"] for item in current_period)
     previous_sales = sum(item["amount"] for item in previous_period)
     previous_units = sum(item.get("quantity", 0) or 0 for item in previous_period)
@@ -733,6 +842,10 @@ def build_summary(current_period, previous_period, client_stats, seller_stats, s
     volume_mode_active = current_units > 0 or previous_units > 0
     return {
         "volumeModeActive": volume_mode_active,
+        "periodLabel": period_context["selectedLabel"],
+        "comparisonLabel": period_context["comparisonLabel"],
+        "periodDays": period_context["days"],
+        "periodPeriods": period_context["selectedPeriods"],
         "salesCurrent": round(current_sales, 2),
         "salesPrevious": round(previous_sales, 2),
         "salesGrowthPct": pct_change(current_sales, previous_sales),
@@ -805,40 +918,42 @@ def build_ratios(records, client_stats, seller_stats, sales_force_stats, family_
     }
 
 
-def build_forecast(records):
+def build_forecast(records, previous_period, period_context):
     monthly_sales = aggregate_monthly_sales(records)
     monthly_units = aggregate_monthly_quantity(records)
     labels = sorted(set(monthly_sales) | set(monthly_units))
     sales_values = [monthly_sales.get(label, 0) for label in labels]
     unit_values = [monthly_units.get(label, 0) for label in labels]
+    current_sales_total = sum(item["amount"] for item in records)
+    previous_sales_total = sum(item["amount"] for item in previous_period)
+    current_units_total = sum(item.get("quantity", 0) or 0 for item in records)
+    previous_units_total = sum(item.get("quantity", 0) or 0 for item in previous_period)
+    period_count = max(len(labels), 1)
 
-    sales_last3 = sales_values[-3:] if len(sales_values) >= 3 else sales_values
-    sales_prev3 = sales_values[-6:-3] if len(sales_values) >= 6 else sales_values[:-3]
-    avg_last3_sales = sum(sales_last3) / max(len(sales_last3), 1)
-    avg_prev3_sales = sum(sales_prev3) / max(len(sales_prev3), 1) if sales_prev3 else avg_last3_sales
-    sales_trend_pct = pct_change(avg_last3_sales, avg_prev3_sales) if avg_prev3_sales else 0
+    sales_trend_pct = pct_change(current_sales_total, previous_sales_total)
     moderated_sales_trend = max(min(sales_trend_pct, 20), -20) * 0.6
-    projected_month_sales = avg_last3_sales * (1 + moderated_sales_trend / 100)
+    projected_period_sales = current_sales_total * (1 + moderated_sales_trend / 100)
 
-    unit_last3 = unit_values[-3:] if len(unit_values) >= 3 else unit_values
-    unit_prev3 = unit_values[-6:-3] if len(unit_values) >= 6 else unit_values[:-3]
-    avg_last3_units = sum(unit_last3) / max(len(unit_last3), 1)
-    avg_prev3_units = sum(unit_prev3) / max(len(unit_prev3), 1) if unit_prev3 else avg_last3_units
-    units_trend_pct = pct_change(avg_last3_units, avg_prev3_units) if avg_prev3_units else 0
+    units_trend_pct = pct_change(current_units_total, previous_units_total)
     moderated_units_trend = max(min(units_trend_pct, 20), -20) * 0.6
-    projected_month_units = avg_last3_units * (1 + moderated_units_trend / 100)
+    projected_period_units = current_units_total * (1 + moderated_units_trend / 100)
 
-    next_labels = next_month_labels(labels[-1] if labels else date.today().strftime("%Y-%m"), 3)
-    forecast_points_sales = [{"label": label, "value": round(projected_month_sales, 2)} for label in next_labels]
-    forecast_points_units = [{"label": label, "value": round(projected_month_units, 2)} for label in next_labels]
+    next_labels = next_month_labels(labels[-1] if labels else date.today().strftime("%Y-%m"), period_count)
+    forecast_sales_value = projected_period_sales / max(period_count, 1)
+    forecast_units_value = projected_period_units / max(period_count, 1)
+    forecast_points_sales = [{"label": label, "value": round(forecast_sales_value, 2)} for label in next_labels]
+    forecast_points_units = [{"label": label, "value": round(forecast_units_value, 2)} for label in next_labels]
     return {
         "volumeModeActive": any(value > 0 for value in unit_values),
-        "baseMonthlySales": round(avg_last3_sales, 2),
-        "baseMonthlyUnits": round(avg_last3_units, 2),
+        "windowLabel": period_context["selectedLabel"],
+        "nextWindowLabel": period_context["nextLabel"],
+        "windowPeriods": period_count,
+        "baseMonthlySales": round(current_sales_total / max(period_count, 1), 2),
+        "baseMonthlyUnits": round(current_units_total / max(period_count, 1), 2),
         "trendPct": round(sales_trend_pct, 1),
         "unitsTrendPct": round(units_trend_pct, 1),
-        "projectedQuarterSales": round(projected_month_sales * 3, 2),
-        "projectedQuarterUnits": round(projected_month_units * 3, 2),
+        "projectedQuarterSales": round(projected_period_sales, 2),
+        "projectedQuarterUnits": round(projected_period_units, 2),
         "series": [{"label": label, "value": round(monthly_sales.get(label, 0), 2)} for label in labels],
         "seriesUnits": [{"label": label, "value": round(monthly_units.get(label, 0), 2)} for label in labels],
         "forecastSeries": forecast_points_sales,
@@ -867,7 +982,7 @@ def build_opportunities(client_stats, sales_force_stats, family_stats, route_sta
     }
 
 
-def build_alerts(summary, coverage, opportunities, seller_stats, sales_force_stats, family_stats, brand_stats, channel_stats):
+def build_alerts(summary, coverage, opportunities, seller_stats, sales_force_stats, family_stats, brand_stats, channel_stats, period_context):
     alerts = []
     if coverage["routeCoveragePct"] < 85:
         alerts.append(alert("Datos comerciales", "Cobertura baja de rutas", f"Solo {coverage['routeCoveragePct']}% de las ventas quedó asociada a rutas.", "high"))
@@ -883,7 +998,7 @@ def build_alerts(summary, coverage, opportunities, seller_stats, sales_force_sta
     contracting = [item for item in family_stats.values() if item["growthPct"] <= -15]
     if contracting:
         family = sorted(contracting, key=lambda item: item["growthPct"])[0]
-        alerts.append(alert("Mix", f"{family['family']} en retracción", f"La familia cae {family['growthPct']}% contra el trimestre previo.", "medium"))
+        alerts.append(alert("Mix", f"{family['family']} en retracción", f"La familia cae {family['growthPct']}% contra {period_context['comparisonLabel'].lower()}.", "medium"))
     top_force = max(sales_force_stats.values(), key=lambda item: item["sales"], default=None)
     if top_force and concentration_share(sales_force_stats, 3, "sales") >= 60:
         alerts.append(alert("Territorio", "Concentración alta por fuerza de ventas", f"Las 3 fuerzas de ventas principales explican {round(concentration_share(sales_force_stats, 3, 'sales'), 1)}% de la venta.", "medium"))
@@ -896,12 +1011,12 @@ def build_alerts(summary, coverage, opportunities, seller_stats, sales_force_sta
     return alerts[:8]
 
 
-def build_semaphores(summary, coverage, forecast):
+def build_semaphores(summary, coverage, forecast, period_context):
     return [
         semaphore(
-            "Volumen reciente",
+            "Evolución del período",
             color_by_value(summary["unitsGrowthPct"] if summary["volumeModeActive"] else summary["salesGrowthPct"], [0, 8]),
-            f"Variación 90 días: {summary['unitsGrowthPct'] if summary['volumeModeActive'] else summary['salesGrowthPct']}%"
+            f"{period_context['selectedLabel']}: {summary['unitsGrowthPct'] if summary['volumeModeActive'] else summary['salesGrowthPct']}% vs {period_context['comparisonLabel'].lower()}"
         ),
         semaphore("Calidad de cartera", color_by_value(summary["portfolioHealthPct"], [65, 80]), f"Cartera sana: {summary['portfolioHealthPct']}%"),
         semaphore("Cobertura de rutas", color_by_value(coverage["routeCoveragePct"], [85, 95]), f"Ventas mapeadas a rutas: {coverage['routeCoveragePct']}%"),
@@ -911,62 +1026,85 @@ def build_semaphores(summary, coverage, forecast):
             "Proyección",
             color_by_value(forecast["unitsTrendPct"] if forecast["volumeModeActive"] else forecast["trendPct"], [0, 8]),
             forecast["volumeModeActive"]
-                and f"Proyección trimestre: {int(round(forecast['projectedQuarterUnits']))} bultos"
-                or f"Proyección trimestre: {money(forecast['projectedQuarterSales'])}"
+                and f"Próxima ventana: {int(round(forecast['projectedQuarterUnits']))} bultos"
+                or f"Próxima ventana: {money(forecast['projectedQuarterSales'])}"
         ),
     ]
 
 
 def build_charts(records, sales_force_stats, seller_stats, brand_stats, channel_stats, coverage, forecast):
     return {
-        "salesByMonth": forecast["seriesUnits"] if forecast["volumeModeActive"] else forecast["series"],
-        "salesForecast": forecast["forecastSeriesUnits"] if forecast["volumeModeActive"] else forecast["forecastSeries"],
-        "salesForceSales": top_items(sales_force_stats, "quantity" if forecast["volumeModeActive"] else "sales", "sales_force"),
-        "sellerProductivity": top_items(seller_stats, "quantity" if forecast["volumeModeActive"] else "avgOrderValue", "seller"),
-        "brandSales": top_items(brand_stats, "quantity" if forecast["volumeModeActive"] else "sales", "brand"),
-        "channelSales": top_items(channel_stats, "quantity" if forecast["volumeModeActive"] else "sales", "channel"),
+        "salesByMonthMoney": forecast["series"],
+        "salesByMonthUnits": forecast["seriesUnits"],
+        "salesForecastMoney": forecast["forecastSeries"],
+        "salesForecastUnits": forecast["forecastSeriesUnits"],
+        "salesForceMoney": top_items(sales_force_stats, "sales", "sales_force"),
+        "salesForceUnits": top_items(sales_force_stats, "quantity", "sales_force"),
+        "sellerProductivityMoney": top_items(seller_stats, "avgOrderValue", "seller"),
+        "sellerProductivityUnits": top_items(seller_stats, "quantity", "seller"),
+        "brandMoney": top_items(brand_stats, "sales", "brand"),
+        "brandUnits": top_items(brand_stats, "quantity", "brand"),
+        "channelMoney": top_items(channel_stats, "sales", "channel"),
+        "channelUnits": top_items(channel_stats, "quantity", "channel"),
     }
 
 
 def build_rankings(client_stats, seller_stats, sales_force_stats, route_stats, brand_stats, business_unit_stats, channel_stats, opportunities):
     volume_mode_active = any(item.get("quantity12m", 0) > 0 for item in client_stats.values())
-    client_metric = "quantity12m" if volume_mode_active else "sales12m"
-    seller_metric = "quantity" if volume_mode_active else "sales"
-    force_metric = "quantity" if volume_mode_active else "sales"
-    route_metric = "quantity" if volume_mode_active else "sales"
-    brand_metric = "quantity" if volume_mode_active else "sales"
-    business_metric = "quantity" if volume_mode_active else "sales"
-    channel_metric = "quantity" if volume_mode_active else "sales"
-    positive_clients = sorted(client_stats.values(), key=lambda item: item[client_metric], reverse=True)[:10]
+    positive_clients_by_sales = sorted(client_stats.values(), key=lambda item: item["sales12m"], reverse=True)[:10]
+    positive_clients_by_units = sorted(client_stats.values(), key=lambda item: item["quantity12m"], reverse=True)[:10]
     risk_clients = sorted(client_stats.values(), key=lambda item: (status_rank(item["status"]), -item["salesHistory"]), reverse=False)[:10]
-    top_sellers = sorted(seller_stats.values(), key=lambda item: item[seller_metric], reverse=True)[:10]
-    productive_sellers = sorted(seller_stats.values(), key=lambda item: item["avgUnitsPerOrder"] if volume_mode_active else item["avgOrderValue"], reverse=True)[:10]
-    top_sales_forces = sorted(sales_force_stats.values(), key=lambda item: item[force_metric], reverse=True)[:10]
-    top_routes = sorted(route_stats.values(), key=lambda item: item[route_metric], reverse=True)[:10]
-    top_brands = sorted(brand_stats.values(), key=lambda item: item[brand_metric], reverse=True)[:10]
-    top_business_units = sorted(business_unit_stats.values(), key=lambda item: item[business_metric], reverse=True)[:10]
-    top_channels = sorted(channel_stats.values(), key=lambda item: item[channel_metric], reverse=True)[:10]
+    top_sellers_by_sales = sorted(seller_stats.values(), key=lambda item: item["sales"], reverse=True)[:10]
+    top_sellers_by_units = sorted(seller_stats.values(), key=lambda item: item["quantity"], reverse=True)[:10]
+    productive_sellers_by_sales = sorted(seller_stats.values(), key=lambda item: item["avgOrderValue"], reverse=True)[:10]
+    productive_sellers_by_units = sorted(seller_stats.values(), key=lambda item: item["avgUnitsPerOrder"], reverse=True)[:10]
+    top_sales_forces_by_sales = sorted(sales_force_stats.values(), key=lambda item: item["sales"], reverse=True)[:10]
+    top_sales_forces_by_units = sorted(sales_force_stats.values(), key=lambda item: item["quantity"], reverse=True)[:10]
+    top_routes_by_sales = sorted(route_stats.values(), key=lambda item: item["sales"], reverse=True)[:10]
+    top_routes_by_units = sorted(route_stats.values(), key=lambda item: item["quantity"], reverse=True)[:10]
+    top_brands_by_sales = sorted(brand_stats.values(), key=lambda item: item["sales"], reverse=True)[:10]
+    top_brands_by_units = sorted(brand_stats.values(), key=lambda item: item["quantity"], reverse=True)[:10]
+    top_business_units_by_sales = sorted(business_unit_stats.values(), key=lambda item: item["sales"], reverse=True)[:10]
+    top_business_units_by_units = sorted(business_unit_stats.values(), key=lambda item: item["quantity"], reverse=True)[:10]
+    top_channels_by_sales = sorted(channel_stats.values(), key=lambda item: item["sales"], reverse=True)[:10]
+    top_channels_by_units = sorted(channel_stats.values(), key=lambda item: item["quantity"], reverse=True)[:10]
     return {
         "volumeModeActive": volume_mode_active,
-        "positiveClients": positive_clients,
+        "positiveClients": positive_clients_by_units if volume_mode_active else positive_clients_by_sales,
+        "positiveClientsBySales": positive_clients_by_sales,
+        "positiveClientsByUnits": positive_clients_by_units,
         "riskClients": risk_clients,
-        "topSellers": top_sellers,
-        "productiveSellers": productive_sellers,
-        "topSalesForces": top_sales_forces,
-        "topRoutes": top_routes,
-        "topBrands": top_brands,
-        "topBusinessUnits": top_business_units,
-        "topChannels": top_channels,
+        "topSellers": top_sellers_by_units if volume_mode_active else top_sellers_by_sales,
+        "topSellersBySales": top_sellers_by_sales,
+        "topSellersByUnits": top_sellers_by_units,
+        "productiveSellers": productive_sellers_by_units if volume_mode_active else productive_sellers_by_sales,
+        "productiveSellersBySales": productive_sellers_by_sales,
+        "productiveSellersByUnits": productive_sellers_by_units,
+        "topSalesForces": top_sales_forces_by_units if volume_mode_active else top_sales_forces_by_sales,
+        "topSalesForcesBySales": top_sales_forces_by_sales,
+        "topSalesForcesByUnits": top_sales_forces_by_units,
+        "topRoutes": top_routes_by_units if volume_mode_active else top_routes_by_sales,
+        "topRoutesBySales": top_routes_by_sales,
+        "topRoutesByUnits": top_routes_by_units,
+        "topBrands": top_brands_by_units if volume_mode_active else top_brands_by_sales,
+        "topBrandsBySales": top_brands_by_sales,
+        "topBrandsByUnits": top_brands_by_units,
+        "topBusinessUnits": top_business_units_by_units if volume_mode_active else top_business_units_by_sales,
+        "topBusinessUnitsBySales": top_business_units_by_sales,
+        "topBusinessUnitsByUnits": top_business_units_by_units,
+        "topChannels": top_channels_by_units if volume_mode_active else top_channels_by_sales,
+        "topChannelsBySales": top_channels_by_sales,
+        "topChannelsByUnits": top_channels_by_units,
         "opportunityHeadline": f"Potencial estimado capturable: {money(opportunities['totalPotential'])}",
     }
 
 
-def build_insights(summary, coverage, forecast, opportunities, alerts):
+def build_insights(summary, coverage, forecast, opportunities, alerts, period_context):
     insights = [
         (
-            f"En los últimos 90 días el volumen {growth_phrase(summary['unitsGrowthPct'])}, con {summary['ordersCurrent']} pedidos y {int(round(summary['unitsCurrent']))} bultos."
+            f"En {period_context['selectedLabel'].lower()} el volumen {growth_phrase(summary['unitsGrowthPct'])}, con {summary['ordersCurrent']} pedidos y {int(round(summary['unitsCurrent']))} bultos frente a {period_context['comparisonLabel'].lower()}."
             if summary["volumeModeActive"]
-            else f"En los últimos 90 días la venta {growth_phrase(summary['salesGrowthPct'])}, con {summary['ordersCurrent']} pedidos y un ticket promedio de {money(summary['avgOrderValue'])}."
+            else f"En {period_context['selectedLabel'].lower()} la venta {growth_phrase(summary['salesGrowthPct'])}, con {summary['ordersCurrent']} pedidos y un ticket promedio de {money(summary['avgOrderValue'])} frente a {period_context['comparisonLabel'].lower()}."
         ),
         (
             f"La productividad comercial actual equivale a {round(summary['unitsPerActiveSeller'], 1)} bultos por vendedor activo, con {summary['avgUnitsPerOrder']} bultos por pedido y {money(summary['avgUnitPrice'])} por bulto."
@@ -976,9 +1114,9 @@ def build_insights(summary, coverage, forecast, opportunities, alerts):
         f"El mix activo hoy cubre {summary['brandCount']} marcas, {summary['businessUnitCount']} unidades de negocio y {summary['channelCount']} canales. La marca líder concentra {summary['topBrandSharePct']}% y el canal principal {summary['topChannelSharePct']}%.",
         f"La calidad de datos para BI queda en rutas {coverage['routeCoveragePct']}%, artículos {coverage['articleCoveragePct']}% y vendedores {coverage['sellerCoveragePct']}% de cobertura sobre ventas.",
         (
-            f"La proyección base para el próximo trimestre es {int(round(forecast['projectedQuarterUnits']))} bultos, apoyada en una base mensual reciente de {int(round(forecast['baseMonthlyUnits']))} bultos y una tendencia de {forecast['unitsTrendPct']}%."
+            f"La proyección base para {forecast['nextWindowLabel'].lower()} es {int(round(forecast['projectedQuarterUnits']))} bultos, apoyada en una base media de {int(round(forecast['baseMonthlyUnits']))} bultos por período y una tendencia de {forecast['unitsTrendPct']}%."
             if forecast["volumeModeActive"]
-            else f"La proyección base para el próximo trimestre es {money(forecast['projectedQuarterSales'])}, apoyada en una base mensual reciente de {money(forecast['baseMonthlySales'])} y una tendencia de {forecast['trendPct']}%."
+            else f"La proyección base para {forecast['nextWindowLabel'].lower()} es {money(forecast['projectedQuarterSales'])}, apoyada en una base media de {money(forecast['baseMonthlySales'])} por período y una tendencia de {forecast['trendPct']}%."
         ),
         f"Las palancas más claras hoy son recuperar cartera dormida ({money(opportunities['recoverDormantSales'])}), venta cruzada ({money(opportunities['crossSellPotential'])}) y optimización de ruteo ({money(opportunities['routeOptimizationPotential'])}).",
     ]
@@ -987,7 +1125,7 @@ def build_insights(summary, coverage, forecast, opportunities, alerts):
     return insights[:6]
 
 
-def build_action_plan(alerts, opportunities, forecast, coverage):
+def build_action_plan(alerts, opportunities, forecast, coverage, period_context):
     actions = []
     if opportunities["recoverDormantSales"] > 0:
         actions.append(action("Plan de recuperación de cartera", "Alta", "Comercial", "15 días", f"Priorizar dormidos y reactivables con potencial de {money(opportunities['recoverDormantSales'])}."))
@@ -997,7 +1135,7 @@ def build_action_plan(alerts, opportunities, forecast, coverage):
         actions.append(action("Depurar maestro de rutas", "Media", "Administración comercial", "10 días", f"Hay {money(coverage['salesWithoutRoute'])} de venta sin ruta asignada."))
     if coverage["articleCoveragePct"] < 95:
         actions.append(action("Completar maestro de artículos", "Media", "Producto / sistemas", "10 días", f"Hay {money(coverage['salesWithoutArticle'])} de venta sin enriquecer con familia, marca o línea."))
-    actions.append(action("Revisar proyección trimestral", "Alta", "Dirección comercial", "Próximo comité", f"Tomar la base proyectada de {money(forecast['projectedQuarterSales'])} y convertirla en meta por zona y vendedor."))
+    actions.append(action("Revisar proyección de la próxima ventana", "Alta", "Dirección comercial", "Próximo comité", f"Tomar la base proyectada de {money(forecast['projectedQuarterSales'])} para {forecast['nextWindowLabel'].lower()} y convertirla en meta por zona y vendedor."))
     if alerts:
         actions.append(action("Atender alerta principal", "Alta", "Gerencia comercial", "Inmediato", alerts[0]["detail"]))
     return actions[:6]
@@ -1056,6 +1194,59 @@ def build_dataset_meta(loaded):
     return info
 
 
+def resolve_period_context(sales_dataset, records):
+    analysis_range = sales_dataset.get("analysisRange") or {}
+    comparison_range = sales_dataset.get("comparisonRange") or {}
+
+    selected_start = parse_date(analysis_range.get("fechaDesde")) if analysis_range else None
+    selected_end = parse_date(analysis_range.get("fechaHasta")) if analysis_range else None
+    if not selected_start or not selected_end:
+        selected_start = min(item["date"] for item in records)
+        selected_end = max(item["date"] for item in records)
+
+    comparison_start = parse_date(comparison_range.get("fechaDesde")) if comparison_range else None
+    comparison_end = parse_date(comparison_range.get("fechaHasta")) if comparison_range else None
+    if not comparison_start or not comparison_end:
+        days = max((selected_end - selected_start).days + 1, 1)
+        comparison_end = selected_start - timedelta(days=1)
+        comparison_start = comparison_end - timedelta(days=days - 1)
+
+    selected_labels = sorted({item["date"].strftime("%Y-%m") for item in records_between(records, selected_start, selected_end)})
+    next_labels = next_month_labels(selected_labels[-1] if selected_labels else selected_end.strftime("%Y-%m"), max(len(selected_labels), 1))
+    return {
+        "selectedStart": selected_start,
+        "selectedEnd": selected_end,
+        "comparisonStart": comparison_start,
+        "comparisonEnd": comparison_end,
+        "days": max((selected_end - selected_start).days + 1, 1),
+        "selectedLabel": format_date_range(selected_start, selected_end),
+        "comparisonLabel": format_date_range(comparison_start, comparison_end),
+        "nextLabel": format_date_range_for_labels(next_labels),
+        "selectedPeriods": len(selected_labels) or 1,
+    }
+
+
+def records_between(records, start, end):
+    return [item for item in records if start <= item["date"] <= end]
+
+
+def format_date_range(start, end):
+    if start == end:
+        return start.strftime("%d/%m/%Y")
+    return f"{start.strftime('%d/%m/%Y')} al {end.strftime('%d/%m/%Y')}"
+
+
+def format_date_range_for_labels(labels):
+    if not labels:
+        return "la próxima ventana"
+    if len(labels) == 1:
+        year_value, month_value = [int(value) for value in labels[0].split("-")]
+        return f"{MONTH_NAMES.get(month_value, month_value)} {year_value}"
+    first_year, first_month = [int(value) for value in labels[0].split("-")]
+    last_year, last_month = [int(value) for value in labels[-1].split("-")]
+    return f"{MONTH_NAMES.get(first_month, first_month)} {first_year} al {MONTH_NAMES.get(last_month, last_month)} {last_year}"
+
+
 def apply_filters(records, raw_filters):
     applied = {}
     for field in FILTER_DEFINITIONS:
@@ -1076,7 +1267,7 @@ def apply_filters(records, raw_filters):
     return applied, filtered
 
 
-def build_available_filters(records):
+def build_available_filters(records, period_context=None):
     filters = {}
     for field, meta in FILTER_DEFINITIONS.items():
         counter = Counter()
@@ -1087,13 +1278,20 @@ def build_available_filters(records):
                 continue
             counter[value] += 1
             labels[value] = filter_label(field, value)
+        ordered_values = list(sort_filter_values(field, counter.keys()))
+        if field in {"year", "month"} and period_context:
+            period_values = period_filter_values(field, period_context["selectedStart"], period_context["selectedEnd"])
+            for value in period_values:
+                counter.setdefault(value, 0)
+                labels[value] = filter_label(field, value)
+            ordered_values = list(sort_filter_values(field, counter.keys()))
         options = [
             {
                 "value": value,
                 "label": labels[value],
                 "count": counter[value],
             }
-            for value in sort_filter_values(field, counter.keys())
+            for value in ordered_values
         ]
         if options:
             filters[field] = {
@@ -1117,6 +1315,21 @@ def summarize_filters(applied_filters):
         else:
             pieces.append(f"{label}: {len(values)} seleccionados")
     return " | ".join(pieces)
+
+
+def period_filter_values(field, start, end):
+    values = []
+    cursor = date(start.year, start.month, 1)
+    end_marker = date(end.year, end.month, 1)
+    while cursor <= end_marker:
+        values.append(cursor.year if field == "year" else cursor.month)
+        if cursor.month == 12:
+            cursor = date(cursor.year + 1, 1, 1)
+        else:
+            cursor = date(cursor.year, cursor.month + 1, 1)
+    if field == "year":
+        return sorted(set(values), reverse=True)
+    return sorted(set(values))
 
 
 def aggregate_monthly_sales(records):

@@ -33,6 +33,7 @@
       <div class="sticky-controls">
         <div class="row">
           <button id="analyzeBtn" class="primary">Actualizar informe</button>
+          <div id="metricViewHeader" class="metric-view-header hidden"></div>
         </div>
       </div>
 
@@ -40,7 +41,7 @@
         <div class="subpanel controls-main">
         <div class="subpanel-header">
           <h2>Parámetros del informe</h2>
-            <p class="muted">La vista comercial consulta automáticamente la base correcta según el período elegido y deja la operación técnica en la superficie admin.</p>
+            <p class="muted">La vista comercial consulta automáticamente la base correcta según el período elegido y compara cada informe contra el período anterior equivalente.</p>
         </div>
           <div id="commercialGuide" class="commercial-guide"></div>
           <div id="datasetConfigs" class="dataset-grid"></div>
@@ -91,27 +92,27 @@
 
         <div class="chart-grid">
           <div class="panel inner-panel">
-            <h2>Volumen por mes</h2>
+            <h2 id="chartSalesByMonthTitle">Volumen por mes</h2>
             <div id="chartSalesByMonth"></div>
           </div>
           <div class="panel inner-panel">
-            <h2>Proyección próxima</h2>
+            <h2 id="chartForecastTitle">Proyección próxima</h2>
             <div id="chartForecast"></div>
           </div>
           <div class="panel inner-panel">
-            <h2>Volumen por fuerza de ventas</h2>
+            <h2 id="chartZoneSalesTitle">Volumen por fuerza de ventas</h2>
             <div id="chartZoneSales"></div>
           </div>
           <div class="panel inner-panel">
-            <h2>Volumen por vendedor</h2>
+            <h2 id="chartSellerSalesTitle">Volumen por vendedor</h2>
             <div id="chartSellerSales"></div>
           </div>
           <div class="panel inner-panel">
-            <h2>Volumen por marca</h2>
+            <h2 id="chartFamilyMomentumTitle">Volumen por marca</h2>
             <div id="chartFamilyMomentum"></div>
           </div>
           <div class="panel inner-panel">
-            <h2>Volumen por canal</h2>
+            <h2 id="chartCoverageTitle">Volumen por canal</h2>
             <div id="chartCoverage"></div>
           </div>
         </div>
