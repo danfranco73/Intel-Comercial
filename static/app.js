@@ -24,6 +24,7 @@ const appSurface = document.body.dataset.surface || "admin";
 const isAdminSurface = appSurface === "admin";
 const isBiSurface = appSurface === "bi";
 const REPORT_METRIC_MODES = ["mixed", "units", "sales"];
+const dashboardState = { charts: {}, table: null };
 
 const filterGroups = [
   { id: "tiempo",     label: "Período",       fields: ["year", "month"] },
@@ -1577,6 +1578,7 @@ function renderResults(data) {
 function renderReportData(data) {
   const mode = resolveMetricMode(data.summary);
   renderSummaryCards(data.summary, data.meta, mode);
+  renderExecutiveDashboard(data, mode);
   renderSemaphores(data.semaphores, data.summary, data.forecast, data.meta, mode);
   renderCoverage(data.coverage, data.meta.datasets);
   renderInsights(data.insights, data.summary, data.meta, mode);
@@ -1634,6 +1636,313 @@ function renderMetricViewBar(data) {
       });
     });
   });
+}
+
+function renderExecutiveDashboard(data, mode = "mixed") {
+  renderExecutiveDashboardSummary(data, mode);
+  renderExecutiveCharts(data, mode);
+  renderExecutiveTable(data, mode);
+}
+
+function renderExecutiveDashboardSummary(data, mode) {
+  const summary = data.summary || {};
+  const comparisonLabel = data.meta?.comparison?.comparisonLabel || summary.comparisonLabel || "período anterior equivalente";
+  const text = mode === "sales"
+    ? `Tablero en pesos para ${summary.periodLabel || "el período"} contra ${comparisonLabel}.`
+    : mode === "mixed"
+      ? `Tablero mixto para ${summary.periodLabel || "el período"} con lectura simultánea de pesos y bultos.`
+      : `Tablero en bultos para ${summary.periodLabel || "el período"} contra ${comparisonLabel}.`;
+  document.getElementById("executiveDashboardSummary").textContent = text;
+}
+
+function renderExecutiveCharts(data, mode) {
+  if (!window.echarts) {
+    renderDashboardFallback();
+    return;
+  }
+  const trendMode = mode === "sales" ? "sales" : mode === "units" ? "units" : "mixed";
+  mountDashboardChart("execTrendChart", buildTrendOption(data, trendMode));
+  mountDashboardChart("execSellerChart", buildSellerOption(data, mode));
+  mountDashboardChart("execChannelChart", buildPieOption(data, mode, "channel"));
+  mountDashboardChart("execBrandChart", buildBarOption(data, mode, "brand"));
+}
+
+function renderExecutiveTable(data, mode) {
+  const host = document.getElementById("executiveTable");
+  if (!host) {
+    return;
+  }
+  const tableRows = buildExecutiveTableRows(data, mode);
+  const tableModeLabel = mode === "sales" ? "pesos" : mode === "units" ? "bultos" : "visión mixta";
+  document.getElementById("executiveTableTitle").textContent = "Mesa comercial priorizada";
+  document.getElementById("executiveTableSummary").textContent = `Clientes y cuentas clave del período en ${tableModeLabel}.`;
+  if (!window.Tabulator) {
+    host.innerHTML = "<div class='muted'>Tabulator no está disponible en esta sesión.</div>";
+    return;
+  }
+  if (!dashboardState.table) {
+    dashboardState.table = new Tabulator(host, {
+      data: tableRows,
+      layout: "fitColumns",
+      responsiveLayout: "collapse",
+      height: "420px",
+      pagination: true,
+      paginationSize: 10,
+      movableColumns: true,
+      placeholder: "Sin registros para mostrar",
+      columns: buildExecutiveColumns(mode),
+    });
+    return;
+  }
+  dashboardState.table.setColumns(buildExecutiveColumns(mode));
+  dashboardState.table.replaceData(tableRows);
+}
+
+function renderDashboardFallback() {
+  ["execTrendChart", "execSellerChart", "execChannelChart", "execBrandChart"].forEach((id) => {
+    const node = document.getElementById(id);
+    if (node) {
+      node.innerHTML = "<div class='muted'>ECharts no está disponible en esta sesión.</div>";
+    }
+  });
+}
+
+function mountDashboardChart(id, option) {
+  const node = document.getElementById(id);
+  if (!node) {
+    return;
+  }
+  let chart = dashboardState.charts[id];
+  if (!chart) {
+    chart = echarts.init(node, null, { renderer: "canvas" });
+    dashboardState.charts[id] = chart;
+  }
+  chart.setOption(option, true);
+}
+
+function buildTrendOption(data, mode) {
+  const salesSeries = data.charts?.salesByMonthMoney || [];
+  const unitsSeries = data.charts?.salesByMonthUnits || [];
+  const labels = dedupeLabels([...salesSeries, ...unitsSeries].map((item) => item.label));
+  const salesMap = indexSeriesByLabel(salesSeries);
+  const unitsMap = indexSeriesByLabel(unitsSeries);
+  const summary = data.summary || {};
+  document.getElementById("execTrendTitle").textContent = mode === "sales"
+    ? "Evolución de ventas"
+    : mode === "units"
+      ? "Evolución de bultos"
+      : "Evolución del período";
+  const series = [];
+  if (mode !== "units") {
+    series.push({
+      name: "Pesos",
+      type: "bar",
+      itemStyle: { color: "#0f766e", borderRadius: [8, 8, 0, 0] },
+      data: labels.map((label) => salesMap.get(label) || 0),
+      yAxisIndex: 0,
+    });
+  }
+  if (mode !== "sales") {
+    series.push({
+      name: "Bultos",
+      type: "line",
+      smooth: true,
+      symbolSize: 8,
+      lineStyle: { width: 3, color: mode === "mixed" ? "#b45309" : "#1d4ed8" },
+      itemStyle: { color: mode === "mixed" ? "#b45309" : "#1d4ed8" },
+      yAxisIndex: mode === "mixed" ? 1 : 0,
+      data: labels.map((label) => unitsMap.get(label) || 0),
+    });
+  }
+  return {
+    tooltip: { trigger: "axis" },
+    legend: { top: 0, textStyle: { color: "#6b7280" } },
+    grid: { left: 56, right: mode === "mixed" ? 56 : 24, top: 42, bottom: 40 },
+    xAxis: {
+      type: "category",
+      data: labels,
+      axisLabel: {
+        color: "#6b7280",
+        interval: 0,
+        formatter: (value) => formatMonthAxisLabel(value),
+      },
+    },
+    yAxis: mode === "mixed"
+      ? [
+          { type: "value", axisLabel: { color: "#6b7280", formatter: (value) => compactMoney(value) } },
+          { type: "value", axisLabel: { color: "#6b7280", formatter: (value) => compactNumber(value) } },
+        ]
+      : [{ type: "value", axisLabel: { color: "#6b7280", formatter: (value) => mode === "sales" ? compactMoney(value) : compactNumber(value) } }],
+    series,
+    graphic: buildChartKicker(mode === "sales"
+      ? `Venta actual ${money(summary.salesCurrent || 0)}`
+      : mode === "units"
+        ? `Bultos actuales ${decimalNumber(summary.unitsCurrent || 0)}`
+        : `Actual ${money(summary.salesCurrent || 0)} y ${decimalNumber(summary.unitsCurrent || 0)} bultos`),
+  };
+}
+
+function buildSellerOption(data, mode) {
+  const isSales = mode === "sales";
+  const isMixed = mode === "mixed";
+  const sellers = isSales ? (data.rankings?.topSellersBySales || []) : (data.rankings?.topSellersByUnits || []);
+  document.getElementById("execSellerTitle").textContent = isSales ? "Top vendedores por pesos" : isMixed ? "Top vendedores por bultos" : "Top vendedores por bultos";
+  return {
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+    grid: { left: 140, right: 24, top: 18, bottom: 20 },
+    xAxis: { type: "value", axisLabel: { color: "#6b7280", formatter: (value) => isSales ? compactMoney(value) : compactNumber(value) } },
+    yAxis: { type: "category", data: sellers.map((item) => item.seller), axisLabel: { color: "#6b7280" } },
+    series: [{
+      type: "bar",
+      data: sellers.map((item) => isSales ? item.sales : item.quantity),
+      itemStyle: { color: isSales ? "#0f766e" : "#1d4ed8", borderRadius: [0, 8, 8, 0] },
+      label: { show: true, position: "right", formatter: ({ value }) => isSales ? compactMoney(value) : compactNumber(value), color: "#6b7280" },
+    }],
+  };
+}
+
+function buildPieOption(data, mode, target) {
+  const isSales = mode === "sales";
+  const items = target === "channel"
+    ? (isSales ? (data.rankings?.topChannelsBySales || []) : (data.rankings?.topChannelsByUnits || []))
+    : [];
+  document.getElementById("execChannelTitle").textContent = isSales ? "Canales por pesos" : mode === "mixed" ? "Canales por bultos" : "Canales por bultos";
+  return {
+    tooltip: { trigger: "item" },
+    legend: { bottom: 0, textStyle: { color: "#6b7280" } },
+    series: [{
+      type: "pie",
+      radius: ["44%", "72%"],
+      center: ["50%", "44%"],
+      itemStyle: { borderRadius: 10, borderColor: "#fffdf8", borderWidth: 3 },
+      label: { formatter: "{b}\n{d}%" },
+      data: items.map((item) => ({ name: item.channel, value: isSales ? item.sales : item.quantity })),
+    }],
+  };
+}
+
+function buildBarOption(data, mode, target) {
+  const isSales = mode === "sales";
+  const items = target === "brand"
+    ? (isSales ? (data.rankings?.topBrandsBySales || []) : (data.rankings?.topBrandsByUnits || []))
+    : [];
+  document.getElementById("execBrandTitle").textContent = isSales ? "Marcas por pesos" : mode === "mixed" ? "Marcas por bultos" : "Marcas por bultos";
+  return {
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+    grid: { left: 56, right: 24, top: 20, bottom: 52 },
+    xAxis: {
+      type: "category",
+      data: items.map((item) => item.brand),
+      axisLabel: { color: "#6b7280", rotate: 22 },
+    },
+    yAxis: {
+      type: "value",
+      axisLabel: { color: "#6b7280", formatter: (value) => isSales ? compactMoney(value) : compactNumber(value) },
+    },
+    series: [{
+      type: "bar",
+      data: items.map((item) => isSales ? item.sales : item.quantity),
+      itemStyle: { color: isSales ? "#15803d" : "#b45309", borderRadius: [8, 8, 0, 0] },
+    }],
+  };
+}
+
+function buildExecutiveTableRows(data, mode) {
+  const baseRows = mode === "sales"
+    ? (data.rankings?.positiveClientsBySales || [])
+    : mode === "units"
+      ? (data.rankings?.positiveClientsByUnits || [])
+      : (data.rankings?.positiveClientsBySales || []);
+  return baseRows.map((item, index) => ({
+    rank: index + 1,
+    client: item.client,
+    status: item.status || "Activo",
+    sales: Number(item.sales12m || 0),
+    units: Number(item.quantity12m || 0),
+    avgTicket: Number(item.avgTicket || 0),
+    avgUnitsPerOrder: Number(item.avgUnitsPerOrder || 0),
+    families: Number(item.families || 0),
+    lastDate: item.lastDate || "",
+    salesForce: item.sales_force || "Sin fuerza",
+    route: item.route_description || "Sin ruta",
+    seller: item.seller_name || "Sin vendedor",
+  }));
+}
+
+function buildExecutiveColumns(mode) {
+  const columns = [
+    { title: "#", field: "rank", hozAlign: "center", width: 60 },
+    { title: "Cliente", field: "client", minWidth: 220, headerFilter: "input" },
+    { title: "Estado", field: "status", width: 130, headerFilter: "list", headerFilterParams: { valuesLookup: true } },
+    { title: "Pesos", field: "sales", hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
+    { title: "Bultos", field: "units", hozAlign: "right", formatter: (cell) => decimalNumber(cell.getValue()) },
+    { title: "Ticket", field: "avgTicket", hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
+    { title: "Bultos/pedido", field: "avgUnitsPerOrder", hozAlign: "right", formatter: (cell) => decimalNumber(cell.getValue()) },
+    { title: "Familias", field: "families", hozAlign: "center", width: 110 },
+    { title: "Última compra", field: "lastDate", width: 130 },
+    { title: "Fuerza", field: "salesForce", minWidth: 140, headerFilter: "input" },
+    { title: "Ruta", field: "route", minWidth: 150, headerFilter: "input" },
+    { title: "Vendedor", field: "seller", minWidth: 150, headerFilter: "input" },
+  ];
+  if (mode === "sales") {
+    return columns.filter((column) => !["units", "avgUnitsPerOrder"].includes(column.field));
+  }
+  if (mode === "units") {
+    return columns.filter((column) => !["avgTicket"].includes(column.field));
+  }
+  return columns;
+}
+
+function buildChartKicker(text) {
+  return [{
+    type: "text",
+    right: 8,
+    top: 8,
+    style: {
+      text,
+      fill: "#6b7280",
+      font: '12px "Trebuchet MS", Verdana, sans-serif',
+    },
+  }];
+}
+
+function dedupeLabels(labels) {
+  return [...new Set(labels.filter(Boolean))];
+}
+
+function indexSeriesByLabel(items) {
+  return new Map((items || []).map((item) => [item.label, Number(item.value || 0)]));
+}
+
+function compactMoney(value) {
+  const amount = Number(value || 0);
+  if (Math.abs(amount) >= 1_000_000) {
+    return `${(amount / 1_000_000).toFixed(1)}M`;
+  }
+  if (Math.abs(amount) >= 1_000) {
+    return `${(amount / 1_000).toFixed(0)}K`;
+  }
+  return intNumber(amount);
+}
+
+function compactNumber(value) {
+  const amount = Number(value || 0);
+  if (Math.abs(amount) >= 1_000_000) {
+    return `${(amount / 1_000_000).toFixed(1)}M`;
+  }
+  if (Math.abs(amount) >= 1_000) {
+    return `${(amount / 1_000).toFixed(0)}K`;
+  }
+  return decimalNumber(amount);
+}
+
+function formatMonthAxisLabel(label) {
+  if (!label || !/^\d{4}-\d{2}$/.test(label)) {
+    return label || "";
+  }
+  const [year, month] = label.split("-");
+  const shortMonths = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+  return `${shortMonths[Number(month) - 1] || month} ${year.slice(2)}`;
 }
 
 function renderFilterPanel(meta) {
@@ -2986,6 +3295,15 @@ bindChange("libraryScope", async (event) => {
 });
 document.querySelectorAll("[data-scroll-action]").forEach((button) => {
   button.addEventListener("click", () => handleScrollAction(button.dataset.scrollAction));
+});
+window.addEventListener("resize", () => {
+  Object.values(dashboardState.charts).forEach((chart) => {
+    try {
+      chart.resize();
+    } catch (_) {
+      // Ignorar instancias ya descartadas.
+    }
+  });
 });
 
 boot().catch(showError);

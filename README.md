@@ -77,6 +77,47 @@ Si definís `APP_ADMIN_TOKEN`, la superficie `Admin` pedirá ese token para ejec
 - La tabla se particiona por mes (`toYYYYMM(date)`) y se ordena por `date, client_key, seller_key, product_key, invoice`.
 - La UI comercial prioriza ClickHouse cuando está disponible y deja MongoDB como fallback.
 
+## Arquitectura de presentación
+
+La capa visual ahora queda separada en tres niveles:
+
+1. Informe base
+- KPIs, filtros, insights, rankings y planes de acción siguen usando el JSON consolidado del backend.
+
+2. Dashboard ejecutivo
+- `Apache ECharts` renderiza las visualizaciones profesionales del tablero.
+- El dashboard toma el mismo resultado del análisis y lo expresa como:
+  - evolución del período
+  - top comercial
+  - mix por canal
+  - mix por marca
+
+3. Mesa comercial
+- `Tabulator` renderiza la tabla interactiva del período con:
+  - filtros por columna
+  - paginación
+  - reordenamiento
+  - columnas movibles
+
+Flujo:
+- `MongoDB / ClickHouse / ERP`
+- `app.py`
+- `analyzer.py`
+- JSON del informe
+- `ECharts + Tabulator` en `static/index.html` y `static/app.js`
+
+## Dashboard ejecutivo
+
+- La superficie `Comercial` ahora combina informe narrativo + dashboard profesional.
+- El selector `Mixto / Bultos / Pesos` gobierna también el dashboard.
+- En `Mixto`, el tablero muestra lectura dual.
+- En `Bultos` o `Pesos`, ECharts y Tabulator priorizan la métrica elegida.
+- El dashboard se monta sobre:
+  - `ECharts` desde CDN `jsDelivr`
+  - `Tabulator 6.3.1` desde CDN `unpkg`
+
+Esto permite elevar mucho la presentación sin reescribir el backend analítico.
+
 ## Qué resuelve esta versión
 
 - Relaciona ventas con información de artículos
@@ -87,8 +128,9 @@ Si definís `APP_ADMIN_TOKEN`, la superficie `Admin` pedirá ese token para ejec
 - Detecta clientes activos, dormidos, reactivables y perdidos
 - Calcula ratios comerciales clave
 - Estima potencial de mejora por recuperación, cross-sell y ruteo
-- Genera proyecciones trimestrales simples
-- Muestra gráficos para presentación
+- Genera proyecciones de la próxima ventana comparable
+- Muestra un dashboard ejecutivo con ECharts
+- Muestra una mesa comercial profesional con Tabulator
 - Redacta insights y planes de acción
 - Permite filtrar el informe por `Año`, `Mes`, `Familia`, `Línea`, `Proveedor`, `Fuerza de ventas`, `Ruta`, `Vendedor` y `Canal`
 
@@ -118,7 +160,8 @@ Si definís `APP_ADMIN_TOKEN`, la superficie `Admin` pedirá ese token para ejec
 
 ## Notas técnicas
 
-- No usa dependencias externas.
+- El backend sigue corriendo sin framework frontend.
+- La capa visual profesional usa `Apache ECharts` y `Tabulator` cargados por CDN.
 - Lee `.xlsx` y `.xlsm`.
 - La preview está optimizada para archivos grandes.
 - Si un maestro no se carga, el análisis sigue funcionando pero baja la calidad de la lectura comercial.

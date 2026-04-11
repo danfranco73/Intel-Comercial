@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Gestión Comercial BI</title>
+    <link rel="stylesheet" href="/vendor/tabulator/tabulator.min.css">
     <link rel="stylesheet" href="/app.css">
   </head>
   <body data-surface="bi">
@@ -56,6 +57,42 @@
         </div>
 
         <div class="cards" id="summaryCards"></div>
+
+        <section class="panel inner-panel dashboard-panel">
+          <div class="subpanel-header">
+            <div>
+              <h2>Dashboard ejecutivo</h2>
+              <div class="muted" id="executiveDashboardSummary">Vista ejecutiva del período actual.</div>
+            </div>
+          </div>
+          <div class="executive-grid">
+            <div class="panel inner-panel chart-panel">
+              <h3 id="execTrendTitle">Evolución del período</h3>
+              <div id="execTrendChart" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3 id="execSellerTitle">Desempeño comercial</h3>
+              <div id="execSellerChart" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3 id="execChannelTitle">Mix por canal</h3>
+              <div id="execChannelChart" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3 id="execBrandTitle">Mix por marca</h3>
+              <div id="execBrandChart" class="echart-host"></div>
+            </div>
+          </div>
+          <div class="panel inner-panel table-panel">
+            <div class="subpanel-header">
+              <div>
+                <h3 id="executiveTableTitle">Mesa comercial</h3>
+                <div class="muted" id="executiveTableSummary">Clientes y cuentas clave del período.</div>
+              </div>
+            </div>
+            <div id="executiveTable" class="tabulator-host"></div>
+          </div>
+        </section>
 
         <div class="two-col">
           <div class="panel inner-panel">
@@ -181,6 +218,8 @@
       <button type="button" data-scroll-action="top" title="Ir al inicio">⇡</button>
       <button type="button" data-scroll-action="bottom" title="Ir al final">⇣</button>
     </div>
+    <script src="/vendor/echarts/echarts.min.js"></script>
+    <script src="/vendor/tabulator/tabulator.min.js"></script>
     <script src="/app.js"></script>
     <div class="watermark">@DanFran</div>
   </body>

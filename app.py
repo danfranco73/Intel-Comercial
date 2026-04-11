@@ -56,6 +56,7 @@ from xlsx_reader import preview_sheet, read_sheet_names
 BASE_DIR = Path(__file__).resolve().parent
 PARENT_DIR = BASE_DIR.parent
 STATIC_DIR = BASE_DIR / "static"
+VENDOR_DIR = STATIC_DIR / "vendor"
 UPLOAD_DIR = BASE_DIR / "uploads"
 LOG_DIR = BASE_DIR / "logs"
 ERROR_LOG = LOG_DIR / "app_errors.log"
@@ -450,6 +451,9 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/app.js":
             self.serve_file(STATIC_DIR / "app.js", "application/javascript; charset=utf-8")
+            return
+        if parsed.path.startswith("/vendor/"):
+            self.serve_vendor_file(parsed.path)
             return
         if parsed.path == "/api/session":
             self.handle_get_session()
@@ -950,6 +954,21 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(data)
+
+    def serve_vendor_file(self, request_path):
+        vendor_root = VENDOR_DIR.resolve()
+        relative = request_path.lstrip("/")
+        target = (STATIC_DIR / relative).resolve()
+        if vendor_root != target and vendor_root not in target.parents:
+            self.send_error(404, "Ruta no encontrada")
+            return
+        if target.suffix == ".js":
+            content_type = "application/javascript; charset=utf-8"
+        elif target.suffix == ".css":
+            content_type = "text/css; charset=utf-8"
+        else:
+            content_type = "application/octet-stream"
+        self.serve_file(target, content_type)
 
     def send_json(self, payload, status=200):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")

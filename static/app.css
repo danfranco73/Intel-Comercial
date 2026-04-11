@@ -265,6 +265,61 @@ table,
   color: var(--ink);
 }
 
+.dashboard-panel {
+  margin-bottom: 22px;
+}
+
+.executive-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.chart-panel,
+.table-panel {
+  background: linear-gradient(180deg, #fffdfa, #f7f1e5);
+}
+
+.echart-host {
+  width: 100%;
+  min-height: 340px;
+}
+
+.tabulator-host {
+  margin-top: 12px;
+}
+
+.tabulator {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  font-family: "Trebuchet MS", Verdana, sans-serif;
+}
+
+.tabulator .tabulator-header {
+  background: #f5ede0;
+  border-bottom: 1px solid var(--line);
+}
+
+.tabulator .tabulator-header .tabulator-col {
+  background: #f5ede0;
+}
+
+.tabulator .tabulator-row {
+  background: #fffdfa;
+}
+
+.tabulator .tabulator-row.tabulator-row-even {
+  background: #fbf6ee;
+}
+
+@media (max-width: 1080px) {
+  .executive-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .request-flow {
   margin-bottom: 14px;
 }

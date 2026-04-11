@@ -921,7 +921,9 @@ def build_ratios(records, client_stats, seller_stats, sales_force_stats, family_
 def build_forecast(records, previous_period, period_context):
     monthly_sales = aggregate_monthly_sales(records)
     monthly_units = aggregate_monthly_quantity(records)
-    labels = sorted(set(monthly_sales) | set(monthly_units))
+    labels = month_labels_between(period_context["selectedStart"], period_context["selectedEnd"])
+    if not labels:
+        labels = sorted(set(monthly_sales) | set(monthly_units))
     sales_values = [monthly_sales.get(label, 0) for label in labels]
     unit_values = [monthly_units.get(label, 0) for label in labels]
     current_sales_total = sum(item["amount"] for item in records)
@@ -1211,7 +1213,9 @@ def resolve_period_context(sales_dataset, records):
         comparison_end = selected_start - timedelta(days=1)
         comparison_start = comparison_end - timedelta(days=days - 1)
 
-    selected_labels = sorted({item["date"].strftime("%Y-%m") for item in records_between(records, selected_start, selected_end)})
+    selected_labels = month_labels_between(selected_start, selected_end)
+    if not selected_labels:
+        selected_labels = sorted({item["date"].strftime("%Y-%m") for item in records_between(records, selected_start, selected_end)})
     next_labels = next_month_labels(selected_labels[-1] if selected_labels else selected_end.strftime("%Y-%m"), max(len(selected_labels), 1))
     return {
         "selectedStart": selected_start,
@@ -1330,6 +1334,21 @@ def period_filter_values(field, start, end):
     if field == "year":
         return sorted(set(values), reverse=True)
     return sorted(set(values))
+
+
+def month_labels_between(start, end):
+    if not start or not end or start > end:
+        return []
+    labels = []
+    cursor = date(start.year, start.month, 1)
+    end_marker = date(end.year, end.month, 1)
+    while cursor <= end_marker:
+        labels.append(cursor.strftime("%Y-%m"))
+        if cursor.month == 12:
+            cursor = date(cursor.year + 1, 1, 1)
+        else:
+            cursor = date(cursor.year, cursor.month + 1, 1)
+    return labels
 
 
 def aggregate_monthly_sales(records):
