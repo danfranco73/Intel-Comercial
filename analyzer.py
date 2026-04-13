@@ -201,7 +201,7 @@ def analyze_sources(sources, mapping, filters=None):
     return analyze_datasets(datasets, filters=filters)
 
 
-def analyze_datasets(datasets, filters=None):
+def analyze_datasets(datasets, filters=None, supplier_focus=None):
     if "sales" not in datasets or not datasets["sales"]:
         raise ValueError("La venta por cliente es obligatoria para analizar")
 
@@ -250,15 +250,32 @@ def analyze_datasets(datasets, filters=None):
         sales_context["selectedEnd"],
     )
 
-    applied_filters, filtered_sales = apply_filters(enriched_sales, filters or {})
+    base_filters = remove_filter_field(filters or {}, "supplier")
+    _, supplier_context_sales = apply_filters(enriched_sales, base_filters)
+    if not supplier_context_sales:
+        raise ValueError("No quedaron ventas para los filtros seleccionados")
+
+    effective_filters = merge_supplier_focus_filter(filters or {}, supplier_focus)
+    applied_filters, filtered_sales = apply_filters(enriched_sales, effective_filters)
     if not filtered_sales:
         raise ValueError("No quedaron ventas para los filtros seleccionados")
 
     filtered_sales.sort(key=lambda item: item["date"])
+    supplier_context_sales.sort(key=lambda item: item["date"])
     current_period = records_between(filtered_sales, sales_context["selectedStart"], sales_context["selectedEnd"])
     if not current_period:
         raise ValueError("No quedaron ventas dentro del período seleccionado para los filtros aplicados")
     previous_period = records_between(filtered_sales, sales_context["comparisonStart"], sales_context["comparisonEnd"])
+    supplier_context_current_period = records_between(
+        supplier_context_sales,
+        sales_context["selectedStart"],
+        sales_context["selectedEnd"],
+    )
+    supplier_context_previous_period = records_between(
+        supplier_context_sales,
+        sales_context["comparisonStart"],
+        sales_context["comparisonEnd"],
+    )
 
     max_date = sales_context["selectedEnd"]
     client_stats = aggregate_clients(
@@ -340,6 +357,12 @@ def analyze_datasets(datasets, filters=None):
     )
 
     coverage = build_coverage(current_period)
+    supplier_focus_data = build_supplier_focus(
+        supplier_context_current_period,
+        supplier_context_previous_period,
+        sales_context,
+        supplier_focus,
+    )
     summary = build_summary(current_period, previous_period, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, route_stats, coverage, sales_context)
     ratios = build_ratios(current_period, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, coverage)
     forecast = build_forecast(current_period, previous_period, sales_context)
@@ -381,6 +404,7 @@ def analyze_datasets(datasets, filters=None):
         "insightsSummary": insights_summary(dyn_insights),
         "summary": summary,
         "coverage": coverage,
+        "supplierFocus": supplier_focus_data,
         "ratios": ratios,
         "forecast": forecast,
         "opportunities": opportunities,
@@ -918,6 +942,104 @@ def build_ratios(records, client_stats, seller_stats, sales_force_stats, family_
     }
 
 
+def build_supplier_focus(records, previous_records, period_context, supplier_name):
+    selected_supplier = clean_text(supplier_name)
+    if not selected_supplier:
+        return {
+            "selected": False,
+            "supplier": "",
+            "label": "",
+            "ratios": {},
+            "monthlyCoverage": [],
+        }
+
+    supplier_key = normalize_text(selected_supplier)
+    current_supplier_records = [
+        item for item in records
+        if normalize_text(item.get("supplier")) == supplier_key
+    ]
+    previous_supplier_records = [
+        item for item in previous_records
+        if normalize_text(item.get("supplier")) == supplier_key
+    ]
+
+    total_active_clients = len({item["client_key"] for item in records if clean_text(item.get("client_key"))})
+    supplier_clients = len({item["client_key"] for item in current_supplier_records if clean_text(item.get("client_key"))})
+    total_sales = sum(item["amount"] for item in records)
+    supplier_sales = sum(item["amount"] for item in current_supplier_records)
+    supplier_units = sum(item.get("quantity", 0) or 0 for item in current_supplier_records)
+    supplier_orders = len(order_index(current_supplier_records))
+
+    trend_labels = month_labels_between(period_context["comparisonStart"], period_context["selectedEnd"])
+    if len(trend_labels) < 2:
+        trend_labels = month_labels_between(period_context["selectedStart"], period_context["selectedEnd"])
+    if len(trend_labels) < 2:
+        selected_label = period_context["selectedEnd"].strftime("%Y-%m")
+        comparison_label = period_context["comparisonEnd"].strftime("%Y-%m")
+        trend_labels = [comparison_label, selected_label]
+
+    supplier_sales_current_month = aggregate_monthly_sales(current_supplier_records).get(trend_labels[-1], 0)
+    supplier_sales_previous_month = aggregate_monthly_sales(previous_supplier_records).get(trend_labels[-2], 0)
+    if len(trend_labels) >= 2:
+        combined_supplier_sales = aggregate_monthly_sales(current_supplier_records + previous_supplier_records)
+        supplier_sales_previous_month = combined_supplier_sales.get(trend_labels[-2], supplier_sales_previous_month)
+
+    monthly_coverage = []
+    for label in month_labels_between(period_context["selectedStart"], period_context["selectedEnd"]):
+        month_records = [item for item in records if item["date"].strftime("%Y-%m") == label]
+        month_supplier_records = [
+            item for item in month_records
+            if normalize_text(item.get("supplier")) == supplier_key
+        ]
+        month_active_clients = len({item["client_key"] for item in month_records if clean_text(item.get("client_key"))})
+        month_supplier_clients = len({item["client_key"] for item in month_supplier_records if clean_text(item.get("client_key"))})
+        monthly_coverage.append(
+            {
+                "label": label,
+                "supplierClients": month_supplier_clients,
+                "totalActiveClients": month_active_clients,
+                "coveragePct": round(month_supplier_clients / max(month_active_clients, 1) * 100, 1),
+            }
+        )
+
+    latest_coverage = monthly_coverage[-1] if monthly_coverage else {
+        "label": period_context["selectedEnd"].strftime("%Y-%m"),
+        "supplierClients": supplier_clients,
+        "totalActiveClients": total_active_clients,
+        "coveragePct": round(supplier_clients / max(total_active_clients, 1) * 100, 1),
+    }
+
+    return {
+        "selected": True,
+        "supplier": selected_supplier,
+        "label": selected_supplier,
+        "totals": {
+            "sales": round(supplier_sales, 2),
+            "units": round(supplier_units, 2),
+            "clients": supplier_clients,
+            "orders": supplier_orders,
+            "totalActiveClients": total_active_clients,
+        },
+        "ratios": {
+            "bultosCliente": round(supplier_units / max(total_active_clients, 1), 2),
+            "facturacionCliente": round(supplier_sales / max(total_active_clients, 1), 2),
+            "penetracionPct": round(supplier_clients / max(total_active_clients, 1) * 100, 1),
+            "rotacion": round(supplier_units / max(total_active_clients, 1), 2),
+            "mixMarcaPct": round(supplier_sales / max(total_sales, 1) * 100, 1),
+            "ticket": round(supplier_sales / max(supplier_orders, 1), 2),
+            "growthPct": pct_change(supplier_sales_current_month, supplier_sales_previous_month),
+            "clientesCompradores": supplier_clients,
+            "clientesActivosTotales": total_active_clients,
+            "facturacionMesActual": round(supplier_sales_current_month, 2),
+            "facturacionMesAnterior": round(supplier_sales_previous_month, 2),
+            "mesActual": trend_labels[-1],
+            "mesAnterior": trend_labels[-2],
+            "coberturaClientesActualPct": latest_coverage["coveragePct"],
+        },
+        "monthlyCoverage": monthly_coverage,
+    }
+
+
 def build_forecast(records, previous_period, period_context):
     monthly_sales = aggregate_monthly_sales(records)
     monthly_units = aggregate_monthly_quantity(records)
@@ -1319,6 +1441,32 @@ def summarize_filters(applied_filters):
         else:
             pieces.append(f"{label}: {len(values)} seleccionados")
     return " | ".join(pieces)
+
+
+def remove_filter_field(raw_filters, field):
+    return {
+        key: value
+        for key, value in (raw_filters or {}).items()
+        if key != field
+    }
+
+
+def merge_supplier_focus_filter(raw_filters, supplier_focus):
+    merged = dict(raw_filters or {})
+    selected_supplier = clean_text(supplier_focus)
+    if not selected_supplier:
+        return merged
+
+    existing_values = normalize_filter_values("supplier", merged.get("supplier"))
+    if not existing_values:
+        merged["supplier"] = [selected_supplier]
+        return merged
+
+    merged["supplier"] = [
+        value for value in existing_values
+        if normalize_text(value) == normalize_text(selected_supplier)
+    ]
+    return merged
 
 
 def period_filter_values(field, start, end):

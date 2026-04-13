@@ -884,7 +884,11 @@ class AppHandler(BaseHTTPRequestHandler):
 
         try:
             resolved = _resolve_datasets(datasets)
-            result = analyze_datasets(resolved, filters=data.get("filters", {}))
+            result = analyze_datasets(
+                resolved,
+                filters=data.get("filters", {}),
+                supplier_focus=data.get("supplierFocus"),
+            )
         except ValueError as exc:
             self.send_json({"error": str(exc)}, status=422)
             return
@@ -1212,16 +1216,9 @@ def _load_commercial_sales_dataset(fecha_desde: str, fecha_hasta: str):
 
     mongo_error = None
     clickhouse_error = None
-    mongo_storage = get_erp_storage_status()
 
     try:
-        require_coverage = True
-        if mongo_storage.get("available"):
-            period_start = mongo_storage.get("periodStart")
-            period_end = mongo_storage.get("periodEnd")
-            if period_start and period_end and period_start <= fecha_desde <= fecha_hasta <= period_end:
-                require_coverage = False
-        return load_erp_sales_dataset(fecha_desde, fecha_hasta, require_coverage=require_coverage), "mongo"
+        return load_erp_sales_dataset(fecha_desde, fecha_hasta, require_coverage=True), "mongo"
     except Exception as exc:
         mongo_error = exc
 

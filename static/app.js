@@ -11,6 +11,7 @@ const state = {
   filterSearch: {},
   erpSyncPending: false,
   filters: { available: {}, selected: {} },
+  supplierFocus: "",
   dynamic: { tasks: [], selectedTaskId: null },
   adminErrors: [],
   adminAuth: { token: readStoredAdminToken() },
@@ -33,7 +34,7 @@ const filterGroups = [
   { id: "canal",      label: "Canal",         fields: ["channel"] },
 ];
 const prefilterGroups = [
-  { id: "producto", label: "Producto", fields: ["family", "line", "brand", "business_unit", "supplier"] },
+  { id: "producto", label: "Producto", fields: ["family", "line", "brand", "business_unit"] },
   { id: "comercial", label: "Comercial", fields: ["sales_force", "route_description", "seller_name"] },
 ];
 
@@ -371,6 +372,7 @@ async function boot() {
   state.clickhouseStorage = clickhouseStorage || { connected: false, available: false, configured: false, message: "" };
   state.prefilters.available = erpPrefilters?.filters || {};
   state.prefilters.selected = normalizeSelectedFilters({}, state.prefilters.available);
+  normalizeSupplierFocusSelection();
   state.adminErrors = adminErrorsResponse?.errors || [];
   initializeDatasets();
 
@@ -680,6 +682,7 @@ function renderBiSalesPanel(erp) {
           <input data-erp-to="1" type="date" value="${escapeHtml(erp.fechaHasta || "")}">
         </label>
       </div>
+      ${renderSupplierFocusControl()}
       ${renderPrefilterPanel("Enfoque del informe")}
       <div class="request-flow">
         <div class="request-step">
@@ -719,6 +722,7 @@ function renderErpSalesPanel(erp) {
       <div class="button-row">
         <button class="primary" data-erp-sync="1" ${state.erpSyncPending ? "disabled" : ""}>${state.erpSyncPending ? "Sincronizando..." : `Sincronizar en ${persistLabel}`}</button>
       </div>
+      ${renderSupplierFocusControl()}
       ${renderPrefilterPanel("Enfoque del informe")}
       ${storage}
       <div class="muted">Podés definir el enfoque comercial antes de analizar. Por limitación actual de ChessERP, la extracción de ventas sigue yendo por fecha; estas pestañas segmentan el informe dentro de la app usando los maestros persistidos.</div>
@@ -741,6 +745,7 @@ function renderMongoSalesPanel(erp) {
           <input data-erp-to="1" type="date" value="${escapeHtml(erp.fechaHasta || "")}">
         </label>
       </div>
+      ${renderSupplierFocusControl()}
       ${renderPrefilterPanel("Enfoque del informe")}
       ${renderMongoStorageSummary()}
       <div class="muted">El análisis usará únicamente ventas ERP persistidas en MongoDB para el rango seleccionado.</div>
@@ -763,9 +768,44 @@ function renderClickHouseSalesPanel(erp) {
           <input data-erp-to="1" type="date" value="${escapeHtml(erp.fechaHasta || "")}">
         </label>
       </div>
+      ${renderSupplierFocusControl()}
       ${renderPrefilterPanel("Enfoque del informe")}
       ${renderClickHouseStorageSummary()}
       <div class="muted">El análisis usará ventas ERP persistidas en ClickHouse para el rango seleccionado.</div>
+    </div>
+  `;
+}
+
+function normalizeSupplierFocusSelection(rawValue = state.supplierFocus) {
+  const options = state.prefilters.available?.supplier?.options || [];
+  const match = options.find((option) => normalizeText(option.value) === normalizeText(rawValue));
+  state.supplierFocus = match ? String(match.value) : "";
+  return state.supplierFocus;
+}
+
+function renderSupplierFocusControl() {
+  const supplierConfig = state.prefilters.available?.supplier;
+  if (!supplierConfig?.options?.length) {
+    return "";
+  }
+  const selected = normalizeSupplierFocusSelection();
+  return `
+    <div class="filter-grid">
+      <div class="subpanel-header">
+        <div>
+          <strong>Proveedor foco</strong>
+          <div class="muted">Restringe el informe completo al proveedor elegido y recalcula gráficos, rankings e insights con ese recorte.</div>
+        </div>
+      </div>
+      <div class="row">
+        <label class="wide">
+          Proveedor
+          <select data-supplier-focus="1">
+            <option value="">Todos los proveedores</option>
+            ${supplierConfig.options.map((option) => `<option value="${escapeHtml(option.value)}" ${option.value === selected ? "selected" : ""}>${escapeHtml(option.label)} (${option.count})</option>`).join("")}
+          </select>
+        </label>
+      </div>
     </div>
   `;
 }
@@ -1079,6 +1119,14 @@ function bindDatasetEvents(container) {
     button.addEventListener("click", () => syncErpToMongo().catch(showError));
   });
 
+  container.querySelectorAll("[data-supplier-focus]").forEach((select) => {
+    select.addEventListener("change", () => {
+      state.supplierFocus = select.value || "";
+      const label = state.supplierFocus ? `Proveedor foco: ${state.supplierFocus}. Actualizá el informe para recalcular gráficos, rankings e insights con ese recorte.` : "Proveedor foco limpiado. Actualizá el informe para volver a la vista general.";
+      setStatus(label);
+    });
+  });
+
   container.querySelectorAll("[data-prefilter-tab]").forEach((button) => {
     button.addEventListener("click", () => {
       activePrefilterTab = button.dataset.prefilterTab;
@@ -1295,6 +1343,7 @@ async function refreshErpPrefilterOptions() {
   const response = await api("/api/erp/prefilter-options").catch(() => ({ filters: {} }));
   state.prefilters.available = response.filters || {};
   state.prefilters.selected = normalizeSelectedFilters(state.prefilters.selected, state.prefilters.available);
+  normalizeSupplierFocusSelection();
 }
 
 async function refreshAdminErrors() {
@@ -1489,6 +1538,7 @@ async function analyze() {
   const payload = {
     datasets: {},
     filters: serializeFilters(),
+    supplierFocus: normalizeSupplierFocusSelection(),
   };
 
   if (state.datasets.sales.sourceMode === "erp" || state.datasets.sales.sourceMode === "mongo" || state.datasets.sales.sourceMode === "clickhouse" || state.datasets.sales.sourceMode === "auto") {
@@ -1568,6 +1618,7 @@ async function analyze() {
 function renderResults(data) {
   document.getElementById("results").classList.remove("hidden");
   state.reportView.lastData = data;
+  state.supplierFocus = data.supplierFocus?.selected ? (data.supplierFocus.supplier || "") : normalizeSupplierFocusSelection();
   state.filters.available = data.availableFilters || {};
   state.filters.selected = normalizeSelectedFilters(data.appliedFilters || {}, state.filters.available);
   renderFilterPanel(data.meta);
@@ -1583,9 +1634,9 @@ function renderReportData(data) {
   renderCoverage(data.coverage, data.meta.datasets);
   renderInsights(data.insights, data.summary, data.meta, mode);
   renderActionPlan(data.actionPlan);
-  renderRatios(data.ratios, data.opportunities, mode);
+  renderRatios(data.ratios, data.opportunities, data.supplierFocus, mode);
   renderForecast(data.forecast, data.meta, mode);
-  renderCharts(data.charts, mode);
+  renderCharts(data.charts, data.supplierFocus, mode);
   renderRankings(data.rankings, mode);
   renderDynamicPanel(data);
 }
@@ -2161,7 +2212,34 @@ function renderActionPlan(items) {
   `).join("");
 }
 
-function renderRatios(ratios, opportunities, mode = "mixed") {
+function renderRatios(ratios, opportunities, supplierFocus = {}, mode = "mixed") {
+  const title = document.getElementById("ratiosSectionTitle");
+  if (supplierFocus?.selected) {
+    if (title) {
+      title.textContent = `Ratios del proveedor · ${supplierFocus.label}`;
+    }
+    const focusRatios = supplierFocus.ratios || {};
+    const focusTotals = supplierFocus.totals || {};
+    const items = [
+      `Proveedor foco: ${supplierFocus.label}`,
+      `Bultos / cliente activo: ${decimalNumber(focusRatios.bultosCliente)}`,
+      `Facturación / cliente activo: ${money(focusRatios.facturacionCliente)}`,
+      `Penetración: ${focusRatios.penetracionPct || 0}% · ${intNumber(focusRatios.clientesCompradores || 0)} clientes compradores sobre ${intNumber(focusRatios.clientesActivosTotales || 0)} activos`,
+      `Rotación: ${decimalNumber(focusRatios.rotacion)} bultos por cliente activo`,
+      `Mix proveedor: ${focusRatios.mixMarcaPct || 0}% de la facturación total`,
+      `Ticket: ${money(focusRatios.ticket)}`,
+      `Growth mensual: ${focusRatios.growthPct || 0}% · ${focusRatios.mesActual || "-"} vs ${focusRatios.mesAnterior || "-"}`,
+      `Facturación proveedor: ${money(focusTotals.sales || 0)} · Bultos proveedor: ${decimalNumber(focusTotals.units || 0)}`,
+      `Cobertura clientes último mes: ${focusRatios.coberturaClientesActualPct || 0}%`,
+    ];
+    document.getElementById("ratiosCards").innerHTML = items.map((item) => `<div class="insight-item">${item}</div>`).join("");
+    return;
+  }
+
+  if (title) {
+    title.textContent = "Ratios y potencial";
+  }
+
   const items = mode === "mixed" ? [
     `Bultos por cliente: ${decimalNumber(ratios.unitsPerClient)}`,
     `Venta por cliente: ${money(ratios.salesPerClient)}`,
@@ -2241,7 +2319,7 @@ function renderForecast(forecast, meta = {}, mode = "mixed") {
   document.getElementById("forecastCards").innerHTML = items.map((item) => `<div class="insight-item">${item}</div>`).join("");
 }
 
-function renderCharts(charts, mode = "mixed") {
+function renderCharts(charts, supplierFocus = {}, mode = "mixed") {
   const unitsMode = mode !== "sales";
   const formatter = unitsMode ? decimalNumber : money;
   document.getElementById("chartSalesByMonthTitle").textContent = unitsMode ? "Bultos por mes" : "Ventas por mes";
@@ -2256,6 +2334,39 @@ function renderCharts(charts, mode = "mixed") {
   document.getElementById("chartSellerSales").innerHTML = renderBars(unitsMode ? (charts.sellerProductivityUnits || []) : (charts.sellerProductivityMoney || []), formatter);
   document.getElementById("chartFamilyMomentum").innerHTML = renderBars(unitsMode ? (charts.brandUnits || []) : (charts.brandMoney || []), formatter);
   document.getElementById("chartCoverage").innerHTML = renderBars(unitsMode ? (charts.channelUnits || []) : (charts.channelMoney || []), formatter);
+  renderSupplierFocusChart(supplierFocus);
+}
+
+function renderSupplierFocusChart(supplierFocus = {}) {
+  const title = document.getElementById("chartSupplierCoverageTitle");
+  const host = document.getElementById("chartSupplierCoverage");
+  if (!title || !host) {
+    return;
+  }
+  if (!supplierFocus?.selected) {
+    title.textContent = "Cobertura mensual de clientes";
+    host.innerHTML = "<div class='muted'>Elegí un proveedor foco para comparar compradores mensuales contra el total de clientes activos.</div>";
+    return;
+  }
+  const monthlyCoverage = supplierFocus.monthlyCoverage || [];
+  title.textContent = `Cobertura mensual de clientes · ${supplierFocus.label}`;
+  if (!monthlyCoverage.length) {
+    host.innerHTML = "<div class='muted'>No hay datos mensuales suficientes para este proveedor en el período seleccionado.</div>";
+    return;
+  }
+  host.innerHTML = renderMultiLineChart([
+    {
+      label: `${supplierFocus.label} compradores`,
+      color: "#0f766e",
+      data: monthlyCoverage.map((item) => ({ x: item.label, y: item.supplierClients })),
+    },
+    {
+      label: "Clientes activos totales",
+      color: "#b45309",
+      dashed: true,
+      data: monthlyCoverage.map((item) => ({ x: item.label, y: item.totalActiveClients })),
+    },
+  ], intNumber);
 }
 
 function renderRankings(rankings, mode = "mixed") {
@@ -2640,6 +2751,10 @@ function serializeFilters() {
       filters[field] = values;
     }
   });
+  const supplierFocus = normalizeSupplierFocusSelection();
+  if (supplierFocus) {
+    filters.supplier = [supplierFocus];
+  }
   return filters;
 }
 
@@ -3126,7 +3241,7 @@ async function runDynamicTask() {
     const data = await withProgress(`Ejecutando: ${task?.label || taskId}...`, () => api("/api/analyze-dynamic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ datasets: datasetsPayload, filters: serializeFilters(), task_id: taskId, combo }),
+      body: JSON.stringify({ datasets: datasetsPayload, filters: serializeFilters(), supplierFocus: normalizeSupplierFocusSelection(), task_id: taskId, combo }),
     }), {
       operationType: "dynamic",
       fechaDesde: state.datasets.sales.erp?.fechaDesde,
