@@ -943,7 +943,9 @@ th {
 }
 
 .card {
+  min-width: 0;
   padding: 18px;
+  overflow: hidden;
 }
 
 .card .label {
@@ -952,9 +954,14 @@ th {
 }
 
 .card .value {
-  font-size: 28px;
+  max-width: 100%;
+  font-size: clamp(22px, 2vw, 28px);
   font-weight: 700;
   margin-top: 10px;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
 }
 
 .card .sub {
@@ -1224,17 +1231,20 @@ th {
 
 .dyn-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 260px));
+  align-items: stretch;
+  gap: 14px;
   margin-bottom: 22px;
 }
 
 .dyn-kpi-card {
-  padding: 14px 16px;
-  border-radius: 12px;
+  min-width: 0;
+  padding: 16px 18px;
+  border-radius: 8px;
   background: var(--paper);
   border: 1px solid var(--line);
   box-shadow: 0 2px 8px rgba(68,53,34,.05);
+  overflow: hidden;
 }
 
 .dyn-kpi-label {
@@ -1247,10 +1257,15 @@ th {
 }
 
 .dyn-kpi-value {
-  font-size: 22px;
+  max-width: 100%;
+  font-size: clamp(19px, 1.7vw, 24px);
   font-weight: 700;
   color: var(--ink);
-  line-height: 1.1;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
 }
 
 .dyn-kpi-delta {
@@ -1259,15 +1274,15 @@ th {
   margin-top: 3px;
 }
 
+.dyn-kpi-context {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
 .dyn-kpi-delta.up   { color: var(--ok); }
 .dyn-kpi-delta.down { color: var(--danger); }
 .dyn-kpi-delta.flat { color: var(--muted); }
-
-.dyn-kpi-context {
-  font-size: 11px;
-  margin-top: 5px;
-  line-height: 1.3;
-}
 
 .dyn-viz {
   margin-top: 22px;

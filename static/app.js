@@ -3270,7 +3270,7 @@ function renderDynKpis(kpiSet) {
     return `
       <div class="dyn-kpi-card">
         <div class="dyn-kpi-label">${escapeHtml(k.label)}</div>
-        <div class="dyn-kpi-value">${fmtVal}</div>
+        <div class="dyn-kpi-value">${escapeHtml(fmtVal)}</div>
         ${delta}
         <div class="dyn-kpi-context muted">${escapeHtml(k.context || "")}</div>
       </div>`;
