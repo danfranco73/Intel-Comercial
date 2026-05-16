@@ -163,6 +163,7 @@ def _extract_churn(result, domain, priority):
     total      = result.get("total_clients", 1)
     active_pct = result.get("active_pct", 0.0)
     rec_pct    = result.get("recurring_pct", 0.0)
+    freq       = result.get("purchase_frequency_monthly", 0.0)
     avg_t      = result.get("avg_ticket", 0.0)
     at_risk    = result.get("churn_at_risk_sales", 0.0)
     by_status  = result.get("by_status", {})
@@ -177,12 +178,16 @@ def _extract_churn(result, domain, priority):
                      context=f"{by_status.get('Activo',0)} activos de {total}"))
     kpis.append(_kpi("recurring_pct",  "Recurrencia (≥4m)",   rec_pct,    "pct",   domain, priority,
                      context="Compraron ≥4 meses en últimos 12m"))
+    kpis.append(_kpi("purchase_frequency_monthly", "Frecuencia compra", f"{freq:.2f} veces/mes", "text", domain, priority,
+                     context=f"{result.get('orders12m', 0)} pedidos / {result.get('buyers12m', 0)} clientes compradores"))
     kpis.append(_kpi("avg_ticket",     "Ticket promedio",     avg_t,      "money", domain, priority))
     kpis.append(_kpi("churn_at_risk",  "Venta en riesgo",     at_risk,    "money", domain, priority,
                      context=f"{dormant+react} clientes dormidos/reactivables"))
 
     rat["active_pct"]    = active_pct
     rat["recurring_pct"] = rec_pct
+    rat["purchase_frequency_monthly"] = freq
+    rat["purchase_frequency_universe_monthly"] = result.get("purchase_frequency_universe_monthly", 0.0)
     rat["churn_pct"]     = churn_pct
     rat["at_risk_sales"] = round(at_risk, 2)
 

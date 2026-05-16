@@ -890,6 +890,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 supplier_focus=data.get("supplierFocus"),
             )
         except ValueError as exc:
+            _log_error("analyze_validation", exc, {"filters": data.get("filters", {}), "datasets": list(datasets.keys())})
             self.send_json({"error": str(exc)}, status=422)
             return
         except Exception as exc:

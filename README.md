@@ -127,6 +127,7 @@ Esto permite elevar mucho la presentación sin reescribir el backend analítico.
 - Calcula ventas históricas con contexto territorial y de mix
 - Detecta clientes activos, dormidos, reactivables y perdidos
 - Calcula ratios comerciales clave
+- Calcula frecuencia de compra mensual por cliente comprador y sobre el padrón total para dimensionar carga de atención comercial
 - Estima potencial de mejora por recuperación, cross-sell y ruteo
 - Genera proyecciones de la próxima ventana comparable
 - Muestra un dashboard ejecutivo con ECharts

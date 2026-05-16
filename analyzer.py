@@ -125,6 +125,7 @@ FILTER_DEFINITIONS = {
     "brand": {"label": "Marca", "kind": "text"},
     "business_unit": {"label": "Unidad de negocio", "kind": "text"},
     "supplier": {"label": "Proveedor", "kind": "text"},
+    "product_name": {"label": "Producto", "kind": "text"},
     "sales_force": {"label": "Fuerza de ventas", "kind": "text"},
     "route_description": {"label": "Ruta", "kind": "text"},
     "seller_name": {"label": "Vendedor", "kind": "text"},
@@ -235,14 +236,6 @@ def analyze_datasets(datasets, filters=None, supplier_focus=None):
     if not enriched_sales:
         raise ValueError("No quedaron ventas válidas para analizar")
 
-    schema = detect_schema(enriched_sales)
-    tasks  = resolve_tasks(schema)
-    engine = AnalysisEngine()
-    engine_results = engine.run_all(tasks, enriched_sales)
-    kpi_set      = generate_kpis(engine_results, tasks)
-    viz_configs  = build_all_viz(tasks, engine_results)
-    dyn_insights = write_insights(kpi_set, engine_results, tasks)
-
     sales_context = resolve_period_context(loaded["sales"], enriched_sales)
     selected_unfiltered_sales = records_between(
         enriched_sales,
@@ -250,15 +243,22 @@ def analyze_datasets(datasets, filters=None, supplier_focus=None):
         sales_context["selectedEnd"],
     )
 
-    base_filters = remove_filter_field(filters or {}, "supplier")
+    normalized_filters = remove_noop_filters(filters or {}, selected_unfiltered_sales, sales_context)
+    base_filters = remove_filter_field(normalized_filters, "supplier")
     _, supplier_context_sales = apply_filters(enriched_sales, base_filters)
     if not supplier_context_sales:
-        raise ValueError("No quedaron ventas para los filtros seleccionados")
+        base_filters = relax_broad_filters(base_filters, selected_unfiltered_sales, sales_context)
+        _, supplier_context_sales = apply_filters(enriched_sales, base_filters)
+        if not supplier_context_sales:
+            raise ValueError("No quedaron ventas para los filtros seleccionados")
 
-    effective_filters = merge_supplier_focus_filter(filters or {}, supplier_focus)
+    effective_filters = merge_supplier_focus_filter(normalized_filters, supplier_focus)
     applied_filters, filtered_sales = apply_filters(enriched_sales, effective_filters)
     if not filtered_sales:
-        raise ValueError("No quedaron ventas para los filtros seleccionados")
+        effective_filters = relax_broad_filters(effective_filters, selected_unfiltered_sales, sales_context)
+        applied_filters, filtered_sales = apply_filters(enriched_sales, effective_filters)
+        if not filtered_sales:
+            raise ValueError("No quedaron ventas para los filtros seleccionados")
 
     filtered_sales.sort(key=lambda item: item["date"])
     supplier_context_sales.sort(key=lambda item: item["date"])
@@ -364,7 +364,7 @@ def analyze_datasets(datasets, filters=None, supplier_focus=None):
         supplier_focus,
     )
     summary = build_summary(current_period, previous_period, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, route_stats, coverage, sales_context)
-    ratios = build_ratios(current_period, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, coverage)
+    ratios = build_ratios(current_period, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, coverage, sales_context)
     forecast = build_forecast(current_period, previous_period, sales_context)
     opportunities = build_opportunities(client_stats, sales_force_stats, family_stats, route_stats, coverage, current_period)
     alerts = build_alerts(summary, coverage, opportunities, seller_stats, sales_force_stats, family_stats, brand_stats, channel_stats, sales_context)
@@ -373,7 +373,14 @@ def analyze_datasets(datasets, filters=None, supplier_focus=None):
     rankings = build_rankings(client_stats, seller_stats, sales_force_stats, route_stats, brand_stats, business_unit_stats, channel_stats, opportunities)
     insights = build_insights(summary, coverage, forecast, opportunities, alerts, sales_context)
     action_plan = build_action_plan(alerts, opportunities, forecast, coverage, sales_context)
-    available_filters = build_available_filters(current_period, sales_context)
+    available_filters = build_faceted_available_filters(selected_unfiltered_sales, applied_filters, sales_context)
+    schema = detect_schema(current_period)
+    tasks = resolve_tasks(schema)
+    engine = AnalysisEngine()
+    engine_results = engine.run_all(tasks, current_period)
+    kpi_set = generate_kpis(engine_results, tasks)
+    viz_configs = build_all_viz(tasks, engine_results)
+    dyn_insights = write_insights(kpi_set, engine_results, tasks)
 
     return {
         "meta": {
@@ -845,10 +852,12 @@ def build_summary(current_period, previous_period, client_stats, seller_stats, s
     current_orders = order_index(current_period)
     current_units = sum(item.get("quantity", 0) or 0 for item in current_period)
     current_order_count = len(current_orders)
+    period_months = period_month_count(period_context)
     avg_order_value = round(current_sales / max(current_order_count, 1), 2)
     avg_unit_price = round(current_sales / max(current_units, 1), 2)
     avg_units_per_order = round(current_units / max(current_order_count, 1), 2)
     active = sum(1 for item in client_stats.values() if item["status"] == "Activo")
+    buying_clients = len({item["client_key"] for item in current_period if clean_text(item.get("client_key"))})
     dormant = sum(1 for item in client_stats.values() if item["status"] == "Dormido")
     reactivable = sum(1 for item in client_stats.values() if item["status"] == "Reactivable")
     lost = sum(1 for item in client_stats.values() if item["status"] == "Perdido")
@@ -876,12 +885,16 @@ def build_summary(current_period, previous_period, client_stats, seller_stats, s
         "unitsPrevious": round(previous_units, 2),
         "unitsGrowthPct": pct_change(current_units, previous_units),
         "ordersCurrent": current_order_count,
+        "ordersPerMonth": round(current_order_count / period_months, 1),
         "unitsCurrent": round(current_units, 2),
         "avgOrderValue": avg_order_value,
         "avgUnitPrice": avg_unit_price,
         "avgUnitsPerOrder": avg_units_per_order,
         "activeClients": active,
+        "buyingClients": buying_clients,
         "activeRatioPct": round(active / total_clients * 100, 1),
+        "purchaseFrequencyMonthly": round(current_order_count / period_months / max(buying_clients, 1), 2),
+        "purchaseFrequencyUniverseMonthly": round(current_order_count / period_months / total_clients, 2),
         "dormantClients": dormant,
         "reactivableClients": reactivable,
         "lostClients": lost,
@@ -909,12 +922,18 @@ def build_summary(current_period, previous_period, client_stats, seller_stats, s
     }
 
 
-def build_ratios(records, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, coverage):
+def build_ratios(records, client_stats, seller_stats, sales_force_stats, family_stats, brand_stats, business_unit_stats, channel_stats, coverage, period_context=None):
     total_sales = sum(item["amount"] for item in records)
     total_clients = max(len(client_stats), 1)
     total_sellers = max(count_real_dimension_items(seller_stats, "seller"), 1)
     orders = order_index(records)
-    total_orders = max(len(orders), 1)
+    total_orders = len(orders)
+    if period_context:
+        month_count = period_month_count(period_context)
+    else:
+        month_count = max(len({item["date"].strftime("%Y-%m") for item in records}), 1)
+    buying_clients = len({item["client_key"] for item in records if clean_text(item.get("client_key"))})
+    safe_orders = max(total_orders, 1)
     total_units = sum(item.get("quantity", 0) or 0 for item in records)
     top_sales_force_share = concentration_share(sales_force_stats, 3, "sales")
     top_seller_share = concentration_share(seller_stats, 3, "sales")
@@ -925,9 +944,16 @@ def build_ratios(records, client_stats, seller_stats, sales_force_stats, family_
         "unitsPerClient": round(total_units / total_clients, 2),
         "unitsPerSeller": round(total_units / total_sellers, 2),
         "clientsPerSeller": round(total_clients / total_sellers, 1),
-        "ordersPerSeller": round(total_orders / total_sellers, 1),
-        "avgOrderValue": round(total_sales / total_orders, 2),
-        "avgUnitsPerOrder": round(total_units / total_orders, 2),
+        "ordersPerSeller": round(safe_orders / total_sellers, 1),
+        "totalOrders": total_orders,
+        "periodMonths": month_count,
+        "totalClients": total_clients,
+        "ordersPerMonth": round(total_orders / month_count, 1),
+        "purchaseFrequencyMonthly": round(total_orders / month_count / max(buying_clients, 1), 2),
+        "purchaseFrequencyUniverseMonthly": round(total_orders / month_count / total_clients, 2),
+        "buyingClients": buying_clients,
+        "avgOrderValue": round(total_sales / safe_orders, 2),
+        "avgUnitsPerOrder": round(total_units / safe_orders, 2),
         "avgUnitPrice": round(total_sales / max(total_units, 1), 2),
         "top3SalesForcesSharePct": round(top_sales_force_share, 1),
         "top3SellersSharePct": round(top_seller_share, 1),
@@ -940,6 +966,20 @@ def build_ratios(records, client_stats, seller_stats, sales_force_stats, family_
             1,
         ),
     }
+
+
+def period_month_count(period_context):
+    if not period_context:
+        return 1
+    periods = period_context.get("selectedPeriods")
+    if isinstance(periods, int):
+        return max(periods, 1)
+    if isinstance(periods, (list, tuple, set)):
+        return max(len(periods), 1)
+    try:
+        return max(int(periods), 1)
+    except (TypeError, ValueError):
+        return 1
 
 
 def build_supplier_focus(records, previous_records, period_context, supplier_name):
@@ -1396,36 +1436,58 @@ def apply_filters(records, raw_filters):
 def build_available_filters(records, period_context=None):
     filters = {}
     for field, meta in FILTER_DEFINITIONS.items():
-        counter = Counter()
-        labels = {}
-        for item in records:
-            value = filter_value(item, field)
-            if value in (None, ""):
-                continue
-            counter[value] += 1
-            labels[value] = filter_label(field, value)
-        ordered_values = list(sort_filter_values(field, counter.keys()))
-        if field in {"year", "month"} and period_context:
-            period_values = period_filter_values(field, period_context["selectedStart"], period_context["selectedEnd"])
-            for value in period_values:
-                counter.setdefault(value, 0)
-                labels[value] = filter_label(field, value)
-            ordered_values = list(sort_filter_values(field, counter.keys()))
-        options = [
-            {
-                "value": value,
-                "label": labels[value],
-                "count": counter[value],
-            }
-            for value in ordered_values
-        ]
-        if options:
+        config = build_filter_config(records, field, meta, period_context)
+        if config:
+            filters[field] = config
+    return filters
+
+
+def build_faceted_available_filters(records, applied_filters=None, period_context=None):
+    filters = {}
+    applied_filters = applied_filters or {}
+    for field, meta in FILTER_DEFINITIONS.items():
+        facet_filters = remove_filter_field(applied_filters, field)
+        _, facet_records = apply_filters(records, facet_filters)
+        config = build_filter_config(facet_records, field, meta, period_context)
+        if config:
             filters[field] = {
-                "label": meta["label"],
-                "kind": meta["kind"],
-                "options": options,
+                **config,
+                "constrainedBy": sorted(f for f in facet_filters if facet_filters.get(f)),
             }
     return filters
+
+
+def build_filter_config(records, field, meta, period_context=None):
+    counter = Counter()
+    labels = {}
+    for item in records:
+        value = filter_value(item, field)
+        if value in (None, ""):
+            continue
+        counter[value] += 1
+        labels[value] = filter_label(field, value)
+    ordered_values = list(sort_filter_values(field, counter.keys()))
+    if field in {"year", "month"} and period_context:
+        period_values = period_filter_values(field, period_context["selectedStart"], period_context["selectedEnd"])
+        for value in period_values:
+            counter.setdefault(value, 0)
+            labels[value] = filter_label(field, value)
+        ordered_values = list(sort_filter_values(field, counter.keys()))
+    options = [
+        {
+            "value": value,
+            "label": labels[value],
+            "count": counter[value],
+        }
+        for value in ordered_values
+    ]
+    if not options:
+        return None
+    return {
+        "label": meta["label"],
+        "kind": meta["kind"],
+        "options": options,
+    }
 
 
 def summarize_filters(applied_filters):
@@ -1449,6 +1511,73 @@ def remove_filter_field(raw_filters, field):
         for key, value in (raw_filters or {}).items()
         if key != field
     }
+
+
+def remove_noop_filters(raw_filters, universe_records, period_context=None):
+    if not raw_filters:
+        return {}
+    cleaned = {}
+    available = build_available_filter_values(universe_records, period_context)
+    for field, raw_values in (raw_filters or {}).items():
+        if field not in FILTER_DEFINITIONS:
+            continue
+        values = normalize_filter_values(field, raw_values)
+        if not values:
+            cleaned[field] = values
+            continue
+        available_values = available.get(field, set())
+        selected_markers = {filter_compare_marker(field, value) for value in values}
+        if available_values and selected_markers >= available_values:
+            continue
+        cleaned[field] = values
+    return cleaned
+
+
+def relax_broad_filters(raw_filters, universe_records, period_context=None):
+    if not raw_filters:
+        return {}
+    available = build_available_filter_values(universe_records, period_context)
+    relaxed = {}
+    for field, raw_values in (raw_filters or {}).items():
+        values = normalize_filter_values(field, raw_values)
+        if not values:
+            relaxed[field] = values
+            continue
+        available_values = available.get(field, set())
+        selected_markers = {filter_compare_marker(field, value) for value in values}
+        selected_count = len(selected_markers)
+        available_count = len(available_values)
+        broad_route_filter = field == "route_description" and selected_count >= 25
+        broad_dimension_filter = available_count and selected_count / max(available_count, 1) >= 0.85
+        if broad_route_filter or broad_dimension_filter:
+            continue
+        relaxed[field] = values
+    return relaxed
+
+
+def build_available_filter_values(records, period_context=None):
+    available = {}
+    for field in FILTER_DEFINITIONS:
+        values = {
+            filter_compare_marker(field, value)
+            for value in (filter_value(item, field) for item in records)
+            if value not in (None, "")
+        }
+        if field in {"year", "month"} and period_context:
+            values.update(
+                filter_compare_marker(field, value)
+                for value in period_filter_values(field, period_context["selectedStart"], period_context["selectedEnd"])
+            )
+        if values:
+            available[field] = values
+    return available
+
+
+def filter_compare_marker(field, value):
+    if field in {"year", "month"}:
+        parsed = parse_year(value) if field == "year" else parse_month(value)
+        return parsed
+    return normalize_text(value)
 
 
 def merge_supplier_focus_filter(raw_filters, supplier_focus):

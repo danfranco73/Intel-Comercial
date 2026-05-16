@@ -19,7 +19,7 @@ const state = {
 };
 
 const datasetOrder = ["sales"];
-const filterOrder = ["year", "month", "family", "line", "brand", "business_unit", "supplier", "sales_force", "route_description", "seller_name", "channel"];
+const filterOrder = ["year", "month", "family", "line", "brand", "business_unit", "supplier", "product_name", "sales_force", "route_description", "seller_name", "channel"];
 const ERP_KEEPALIVE_MS = 4 * 60 * 1000;
 const appSurface = document.body.dataset.surface || "admin";
 const isAdminSurface = appSurface === "admin";
@@ -29,7 +29,7 @@ const dashboardState = { charts: {}, table: null };
 
 const filterGroups = [
   { id: "tiempo",     label: "Período",       fields: ["year", "month"] },
-  { id: "producto",   label: "Producto",      fields: ["family", "line", "brand", "business_unit", "supplier"] },
+  { id: "producto",   label: "Producto",      fields: ["family", "line", "brand", "business_unit", "supplier", "product_name"] },
   { id: "comercial",  label: "Comercial",     fields: ["sales_force", "route_description", "seller_name"] },
   { id: "canal",      label: "Canal",         fields: ["channel"] },
 ];
@@ -2104,13 +2104,14 @@ function renderSummaryCards(summary, meta = {}, mode = "mixed") {
     ["Bultos del período", decimalNumber(summary.unitsCurrent), `base ${decimalNumber(summary.unitsPrevious || 0)} · ${summary.unitsGrowthPct}%`],
     ["Venta del período", money(summary.salesCurrent), `base ${money(summary.salesPrevious || 0)} · ${summary.salesGrowthPct}%`],
     ["Pedidos", intNumber(summary.ordersCurrent), `${decimalNumber(summary.avgUnitsPerOrder)} bultos por pedido · ${money(summary.avgOrderValue)} por pedido`],
+    ["Frecuencia de compra", `${decimalNumber(summary.purchaseFrequencyMonthly)} veces por mes`, `${decimalNumber(summary.purchaseFrequencyUniverseMonthly)} sobre padrón · ${decimalNumber(summary.ordersPerMonth)} pedidos/mes`],
     ["Precio promedio / bulto", money(summary.avgUnitPrice), `${money(summary.avgTicket)} ticket cliente`],
     ["Productividad comercial", `${decimalNumber(summary.unitsPerActiveSeller)} bultos`, `${money(summary.salesPerActiveSeller)} por vendedor activo`],
     ["Clientes activos", intNumber(summary.activeClients), `${summary.activeRatioPct}% del padrón`],
-    ["Mix activo", `${summary.brandCount} marcas`, `${summary.businessUnitCount} unidades negocio · ${summary.channelCount} canales`],
   ] : mode === "units" ? [
     ["Bultos del período", decimalNumber(summary.unitsCurrent), `vs ${comparisonLabel.toLowerCase()} ${summary.unitsGrowthPct}% · base ${decimalNumber(summary.unitsPrevious || 0)}`],
     ["Pedidos", intNumber(summary.ordersCurrent), `${decimalNumber(summary.avgUnitsPerOrder)} bultos por pedido`],
+    ["Frecuencia de compra", `${decimalNumber(summary.purchaseFrequencyMonthly)} veces por mes`, `${decimalNumber(summary.purchaseFrequencyUniverseMonthly)} sobre padrón · ${decimalNumber(summary.ordersPerMonth)} pedidos/mes`],
     ["Venta del período", money(summary.salesCurrent), `base ${money(summary.salesPrevious || 0)} · vs ${comparisonLabel.toLowerCase()} ${summary.salesGrowthPct}%`],
     ["Precio promedio / bulto", money(summary.avgUnitPrice), `${money(summary.avgTicket)} ticket cliente`],
     ["Clientes activos", intNumber(summary.activeClients), `${summary.activeRatioPct}% del padrón`],
@@ -2120,6 +2121,7 @@ function renderSummaryCards(summary, meta = {}, mode = "mixed") {
   ] : [
     ["Venta del período", money(summary.salesCurrent), `vs ${comparisonLabel.toLowerCase()} ${summary.salesGrowthPct}% · base ${money(summary.salesPrevious || 0)}`],
     ["Pedidos", intNumber(summary.ordersCurrent), `${money(summary.avgOrderValue)} por pedido`],
+    ["Frecuencia de compra", `${decimalNumber(summary.purchaseFrequencyMonthly)} veces por mes`, `${decimalNumber(summary.purchaseFrequencyUniverseMonthly)} sobre padrón · ${decimalNumber(summary.ordersPerMonth)} pedidos/mes`],
     ["Unidades", decimalNumber(summary.unitsCurrent), `${decimalNumber(summary.avgUnitsPerOrder)} por pedido`],
     ["Precio promedio / unidad", money(summary.avgUnitPrice), `${money(summary.avgTicket)} ticket cliente`],
     ["Clientes activos", intNumber(summary.activeClients), `${summary.activeRatioPct}% del padrón`],
@@ -2128,12 +2130,23 @@ function renderSummaryCards(summary, meta = {}, mode = "mixed") {
     ["Cobertura BI", `${summary.articleCoveragePct}%`, `${summary.routeCoveragePct}% rutas · ${summary.sellerCoveragePct}% vendedores`],
   ];
   document.getElementById("summaryCards").innerHTML = cards.map(([label, value, sub]) => `
-    <article class="card">
+    <article class="card summary-card">
       <div class="label">${label}</div>
-      <div class="value">${value}</div>
+      <div class="value ${summaryValueClass(value)}">${value}</div>
       <div class="sub">${sub}</div>
     </article>
   `).join("");
+}
+
+function summaryValueClass(value) {
+  const text = String(value ?? "");
+  if (text.length >= 24) {
+    return "value-xs";
+  }
+  if (text.length >= 15 || text.includes("\n")) {
+    return "value-sm";
+  }
+  return "";
 }
 
 function renderSemaphores(items, summary = {}, forecast = {}, meta = {}, mode = "mixed") {
@@ -2240,9 +2253,16 @@ function renderRatios(ratios, opportunities, supplierFocus = {}, mode = "mixed")
     title.textContent = "Ratios y potencial";
   }
 
+  const frequencyDetail = `Frecuencia de compra: ${decimalNumber(ratios.purchaseFrequencyMonthly)} pedidos por cliente comprador por mes (${intNumber(ratios.totalOrders)} pedidos / ${intNumber(ratios.periodMonths)} meses / ${intNumber(ratios.buyingClients)} clientes compradores)`;
+  const universeFrequencyDetail = `Frecuencia sobre padrón: ${decimalNumber(ratios.purchaseFrequencyUniverseMonthly)} pedidos por cliente por mes (${intNumber(ratios.totalClients)} clientes del universo)`;
+  const monthlyOrdersDetail = `Pedidos mensuales del período: ${decimalNumber(ratios.ordersPerMonth)} (${intNumber(ratios.totalOrders)} pedidos / ${intNumber(ratios.periodMonths)} meses)`;
+
   const items = mode === "mixed" ? [
     `Bultos por cliente: ${decimalNumber(ratios.unitsPerClient)}`,
     `Venta por cliente: ${money(ratios.salesPerClient)}`,
+    frequencyDetail,
+    universeFrequencyDetail,
+    monthlyOrdersDetail,
     `Bultos por vendedor: ${decimalNumber(ratios.unitsPerSeller)}`,
     `Venta por vendedor: ${money(ratios.salesPerSeller)}`,
     `Pedidos por vendedor: ${ratios.ordersPerSeller}`,
@@ -2257,6 +2277,9 @@ function renderRatios(ratios, opportunities, supplierFocus = {}, mode = "mixed")
     `Potencial total estimado: ${money(opportunities.totalPotential)}`,
   ] : mode === "units" ? [
     `Bultos por cliente: ${decimalNumber(ratios.unitsPerClient)}`,
+    frequencyDetail,
+    universeFrequencyDetail,
+    monthlyOrdersDetail,
     `Bultos por vendedor: ${decimalNumber(ratios.unitsPerSeller)}`,
     `Clientes por vendedor: ${ratios.clientsPerSeller}`,
     `Pedidos por vendedor: ${ratios.ordersPerSeller}`,
@@ -2277,6 +2300,9 @@ function renderRatios(ratios, opportunities, supplierFocus = {}, mode = "mixed")
     `Potencial total estimado: ${money(opportunities.totalPotential)}`,
   ] : [
     `Venta por cliente: ${money(ratios.salesPerClient)}`,
+    frequencyDetail,
+    universeFrequencyDetail,
+    monthlyOrdersDetail,
     `Venta por vendedor: ${money(ratios.salesPerSeller)}`,
     `Clientes por vendedor: ${ratios.clientsPerSeller}`,
     `Pedidos por vendedor: ${ratios.ordersPerSeller}`,

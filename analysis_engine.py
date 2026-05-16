@@ -300,6 +300,7 @@ class AnalysisEngine:
         if isinstance(max_date, datetime):
             max_date = max_date.date()
         cut12 = max_date - timedelta(days=364)
+        months_window = 12
 
         # Agrupar por cliente
         grouped = defaultdict(list)
@@ -311,6 +312,8 @@ class AnalysisEngine:
         by_status     = defaultdict(int)
         status_sales  = defaultdict(float)
         client_rows   = []
+        total_orders12 = 0
+        buyers12 = 0
 
         for ckey, items in grouped.items():
             rec_dates = [r.get(date_fld) for r in items if isinstance(r.get(date_fld), (date, datetime))]
@@ -334,7 +337,11 @@ class AnalysisEngine:
             ref      = items12 or items
             sales12  = round(sum(_num(r.get(metric_fld)) for r in items12), 2)
             sales_all = round(sum(_num(r.get(metric_fld)) for r in items), 2)
-            orders   = len({_str_val(r.get(invoice_fld)) for r in ref})
+            orders   = len({_str_val(r.get(invoice_fld)) or _str_val(r.get(date_fld)) for r in ref})
+            orders12 = len({_str_val(r.get(invoice_fld)) or _str_val(r.get(date_fld)) for r in items12})
+            if items12:
+                buyers12 += 1
+                total_orders12 += orders12
             months_a = len({(r[date_fld].date() if isinstance(r[date_fld], datetime) else r[date_fld]).strftime("%Y-%m")
                             for r in items12 if isinstance(r.get(date_fld), (date, datetime))})
 
@@ -352,6 +359,7 @@ class AnalysisEngine:
                 "recencyDays":   recency,
                 "avgGapDays":    round(avg_gap, 1),
                 "monthsActive":  months_a,
+                "purchaseFrequencyMonthly": round(orders12 / months_window, 2),
                 "avgTicket":     round(sales_all / max(orders, 1), 2),
                 "orders":        orders,
                 "segment":       seg_val,
@@ -374,6 +382,10 @@ class AnalysisEngine:
             "total_clients":       total,
             "active_pct":          round(active / total * 100, 1),
             "recurring_pct":       round(recurring / total * 100, 1),
+            "purchase_frequency_monthly": round(total_orders12 / months_window / max(buyers12, 1), 2),
+            "purchase_frequency_universe_monthly": round(total_orders12 / months_window / total, 2),
+            "orders12m":           total_orders12,
+            "buyers12m":           buyers12,
             "avg_ticket":          avg_ticket,
             "churn_at_risk_sales": round(churn_at_risk, 2),
             "client_field":        client_fld,
