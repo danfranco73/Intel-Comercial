@@ -23,6 +23,7 @@ DEFAULT_PAGE_SIZE = 1000
 DEFAULT_ARTICLE_PAGE_SIZE = 100
 DEFAULT_BRANCH = 1
 DEFAULT_ROUTE_SALES_FORCE = 1
+DEFAULT_ROUTE_SALES_FORCES = "1,2,3,4"
 DEFAULT_RETRIES = 3
 DEFAULT_RETRY_DELAY = 0.75
 DEFAULT_SESSION_TTL = 1200
@@ -52,6 +53,7 @@ def get_erp_config():
         "verify_ssl": (os.getenv("CHESS_ERP_VERIFY_SSL") or "true").strip().lower() not in {"0", "false", "no"},
         "branch": _parse_int_env("CHESS_ERP_SUCURSAL", DEFAULT_BRANCH),
         "route_sales_force": _parse_int_env("CHESS_ERP_ROUTE_SALES_FORCE", DEFAULT_ROUTE_SALES_FORCE),
+        "route_sales_forces": _parse_int_list_env("CHESS_ERP_ROUTE_SALES_FORCES", DEFAULT_ROUTE_SALES_FORCES),
         "retries": max(1, _parse_int_env("CHESS_ERP_RETRIES", DEFAULT_RETRIES)),
         "retry_delay": _parse_float_env("CHESS_ERP_RETRY_DELAY", DEFAULT_RETRY_DELAY),
         "session_ttl": max(60.0, _parse_float_env("CHESS_ERP_SESSION_TTL", DEFAULT_SESSION_TTL)),
@@ -288,18 +290,26 @@ def fetch_staff_dataset(cookie=None):
 
 def fetch_routes_dataset(cookie=None):
     config = get_erp_config()
-    page = fetch_routes_page(config["branch"], config["route_sales_force"], cookie=cookie)
-    rows = ((page.get("RutasVenta") or {}).get("eRutasVenta") or (page.get("RutaVenta") or {}).get("eRutas") or [])
+    rows = []
     headers = list(rows[0].keys()) if rows else []
+    for sales_force in config.get("route_sales_forces") or [config["route_sales_force"]]:
+        page = fetch_routes_page(config["branch"], sales_force, cookie=cookie)
+        page_rows = ((page.get("RutasVenta") or {}).get("eRutasVenta") or (page.get("RutaVenta") or {}).get("eRutas") or [])
+        if page_rows and not headers:
+            headers = list(page_rows[0].keys())
+        rows.extend(page_rows)
 
     unique_records = {}
     for record in (normalize_erp_route_row(row) for row in rows):
         if not record:
             continue
-        key = "|".join([record.get("branch_key") or "", record.get("route_key") or "", record.get("seller_key") or ""])
+        key = "|".join([record.get("branch_key") or "", record.get("sales_scheme_key") or "", record.get("route_key") or "", record.get("seller_key") or ""])
         current = unique_records.get(key)
         if _route_priority(record) >= _route_priority(current):
+            record["client_keys"] = _merge_client_keys(current, record)
             unique_records[key] = record
+        elif current:
+            current["client_keys"] = _merge_client_keys(current, record)
 
     records = sorted(unique_records.values(), key=lambda item: (item.get("sales_force") or "", item.get("route_description") or "", item.get("seller_name") or ""))
     if not records:
@@ -434,9 +444,19 @@ def normalize_erp_sale_row(row):
         or row.get("fechaAlta")
         or row.get("fechaPedido")
     )
+    amount_final = _pick_number(row.get("subtotalFinal"), row.get("totalFinal"), row.get("importeFinal"))
+    amount_net = _pick_number(row.get("subtotalNeto"), row.get("totalNeto"), row.get("importeNeto"))
+    internal_taxes = _pick_number(
+        row.get("subtotalImpuestosInternos"),
+        row.get("impuestosInternos"),
+        row.get("impuestoInterno"),
+        row.get("impInterno"),
+        row.get("impInternos"),
+        0,
+    ) or 0
     amount = _pick_number(
-        row.get("subtotalFinal"),
-        row.get("subtotalNeto"),
+        amount_final,
+        amount_net,
         row.get("subtotalBruto"),
     )
     client_key = _standard_key(row.get("idCliente"))
@@ -445,7 +465,9 @@ def normalize_erp_sale_row(row):
 
     seller_key = _standard_key(row.get("idVendedor"))
     seller_name = _clean_text(row.get("dsVendedor"))
-    route_description = _clean_text(row.get("planillaCarga")) or _clean_text(row.get("desRuta")) or _clean_text(row.get("dsSucursal"))
+    commercial_route = _clean_text(row.get("desRuta"))
+    route_sheet = _clean_text(row.get("planillaCarga"))
+    route_description = commercial_route or route_sheet
     product_key = _standard_key(row.get("idArticuloEstadistico")) or _standard_key(row.get("idArticulo"))
     product_name = _clean_text(row.get("dsArticuloEstadistico")) or _clean_text(row.get("dsArticulo"))
     segment_name = _clean_text(row.get("dsSegmentoMkt"))
@@ -476,8 +498,12 @@ def normalize_erp_sale_row(row):
         "client_key": client_key,
         "client_name": _clean_text(row.get("nombreCliente")) or client_key,
         "route_description": route_description,
+        "commercial_route": commercial_route,
+        "route_sheet": route_sheet,
         "seller_key": seller_key,
         "seller_name": seller_name,
+        "sales_scheme_key": _standard_key(row.get("idFuerzaVentas")),
+        "sales_scheme_name": _clean_text(row.get("dsFuerzaVentas")),
         "sales_force_key": _standard_key(row.get("idFuerzaVentas")),
         "sales_force": _clean_text(row.get("dsFuerzaVentas")),
         "product_key": product_key,
@@ -488,6 +514,10 @@ def normalize_erp_sale_row(row):
         "invoice": _build_invoice(row),
         "channel": channel,
         "amount": amount,
+        "amount_net": amount_net if amount_net is not None else amount,
+        "amount_final": amount_final if amount_final is not None else amount,
+        "internal_taxes": internal_taxes,
+        "amount_net_internal": (amount_net if amount_net is not None else amount) + internal_taxes,
         "quantity": quantity,
         "source": "ChessERP",
     }
@@ -531,6 +561,8 @@ def normalize_erp_staff_row(row):
         "row_version": row.get("rowVersion") or row.get("rowversion"),
         "seller_key": seller_key,
         "seller_name": seller_name,
+        "sales_scheme_key": _standard_key(row.get("idFuerzaVentas")),
+        "sales_scheme_name": _clean_text(row.get("desFuerzaVentas")),
         "sales_force_key": _standard_key(row.get("idFuerzaVentas")),
         "sales_force": _clean_text(row.get("desFuerzaVentas")),
         "branch_key": _standard_key(row.get("idSucursal")),
@@ -558,11 +590,18 @@ def normalize_erp_route_row(row):
         and not bool(row.get("anulado"))
     )
     clients = row.get("eClientesRutas") or []
+    client_keys = [
+        key
+        for key in (_standard_key(client.get("idCliente")) for client in clients)
+        if key
+    ]
     return {
         "route_key": route_key,
         "route_description": route_description or route_key,
         "seller_key": _standard_key(row.get("idPersonal")),
         "seller_name": _clean_text(row.get("desPersonal")),
+        "sales_scheme_key": _standard_key(row.get("idFuerzaVentas")),
+        "sales_scheme_name": _clean_text(row.get("desFuerzaVentas")),
         "sales_force_key": _standard_key(row.get("idFuerzaVentas")),
         "sales_force": _clean_text(row.get("desFuerzaVentas")),
         "branch_key": _standard_key(row.get("idSucursal")),
@@ -572,6 +611,7 @@ def normalize_erp_route_row(row):
         "delivery_days": _clean_text(row.get("diasEntrega")),
         "valid_from": valid_from.isoformat() if valid_from else None,
         "valid_to": valid_to.isoformat() if valid_to else None,
+        "client_keys": sorted(set(client_keys), key=_natural_key),
         "client_count": len(clients),
         "is_active": is_active,
         "source": "ChessERP",
@@ -649,6 +689,20 @@ def _route_priority(record):
         record.get("valid_from") or "",
         record.get("client_count") or 0,
     )
+
+
+def _merge_client_keys(*records):
+    keys = set()
+    for record in records:
+        for key in (record or {}).get("client_keys") or []:
+            if key:
+                keys.add(str(key))
+    return sorted(keys, key=_natural_key)
+
+
+def _natural_key(value):
+    text = str(value)
+    return (0, int(text)) if text.isdigit() else (1, text)
 
 
 def _request_json(url, method="GET", payload=None, headers=None):
@@ -798,6 +852,20 @@ def _parse_int_env(name, default_value):
         return int(str(value).strip())
     except ValueError:
         return default_value
+
+
+def _parse_int_list_env(name, default_value):
+    raw = os.getenv(name) or default_value
+    values = []
+    for item in str(raw).replace(";", ",").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            values.append(int(item))
+        except ValueError:
+            continue
+    return values or [DEFAULT_ROUTE_SALES_FORCE]
 
 
 def _parse_float_env(name, default_value):

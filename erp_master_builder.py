@@ -7,6 +7,8 @@ def derive_sellers_records(sales_records: list[dict]) -> list[dict]:
         seller_key = row.get("seller_key")
         seller_name = row.get("seller_name")
         sales_force = row.get("sales_force")
+        sales_scheme_key = row.get("sales_scheme_key")
+        sales_scheme_name = row.get("sales_scheme_name")
         route_description = row.get("route_description")
         if not seller_key and not seller_name:
             continue
@@ -16,6 +18,8 @@ def derive_sellers_records(sales_records: list[dict]) -> list[dict]:
             "seller_key": seller_key or current.get("seller_key"),
             "seller_name": seller_name or current.get("seller_name") or seller_key,
             "route_description": route_description or current.get("route_description"),
+            "sales_scheme_key": sales_scheme_key or current.get("sales_scheme_key"),
+            "sales_scheme_name": sales_scheme_name or current.get("sales_scheme_name"),
             "sales_force": sales_force or current.get("sales_force"),
             "source": "ChessERP",
         }
@@ -28,6 +32,8 @@ def derive_routes_records(sales_records: list[dict]) -> list[dict]:
         seller_name = row.get("seller_name")
         route_description = row.get("route_description")
         sales_force = row.get("sales_force")
+        sales_scheme_key = row.get("sales_scheme_key")
+        sales_scheme_name = row.get("sales_scheme_name")
         if not seller_name and not route_description:
             continue
         key = normalize_key(route_description or seller_name)
@@ -36,6 +42,8 @@ def derive_routes_records(sales_records: list[dict]) -> list[dict]:
             "sales_force": sales_force or current.get("sales_force"),
             "seller_name": seller_name or current.get("seller_name") or route_description,
             "route_description": route_description or current.get("route_description") or seller_name,
+            "sales_scheme_key": sales_scheme_key or current.get("sales_scheme_key"),
+            "sales_scheme_name": sales_scheme_name or current.get("sales_scheme_name"),
             "source": "ChessERP",
         }
     return sorted(routes.values(), key=lambda item: (item.get("route_description") or "", item.get("seller_name") or ""))

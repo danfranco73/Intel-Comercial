@@ -58,13 +58,59 @@
 
         <div class="cards" id="summaryCards"></div>
 
-        <section class="panel inner-panel dashboard-panel">
+        <section class="panel inner-panel dashboard-selector-panel">
+          <div class="subpanel-header">
+            <div>
+              <h2>Dashboards especializados</h2>
+              <div class="muted" id="dashboardViewSummary">Elegí la vista ejecutiva que quieras priorizar.</div>
+            </div>
+          </div>
+          <div id="dashboardViewSelector" class="dashboard-view-selector"></div>
+        </section>
+
+        <section class="panel inner-panel dashboard-panel hidden" data-dashboard-panel="direction">
+          <div class="subpanel-header">
+            <div>
+              <h2>Tablero de dirección</h2>
+              <div class="muted" id="directionDashboardSummary">Cierre ejecutivo automático, alertas priorizadas y agenda de decisión.</div>
+            </div>
+          </div>
+          <div id="directionDashboardKpis" class="executive-kpis"></div>
+          <div class="two-col dashboard-notes">
+            <div class="panel inner-panel">
+              <h3>Cierre ejecutivo</h3>
+              <div id="directionDashboardClose" class="insight-list"></div>
+            </div>
+            <div class="panel inner-panel">
+              <h3>Alertas priorizadas</h3>
+              <div id="directionDashboardAlerts" class="insight-list"></div>
+            </div>
+          </div>
+          <div class="executive-grid">
+            <div class="panel inner-panel chart-panel">
+              <h3>Frentes críticos</h3>
+              <div id="directionDashChartPriority" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel table-panel">
+              <div class="subpanel-header">
+                <div>
+                  <h3>Agenda de dirección</h3>
+                  <div class="muted">Prioridades sugeridas por impacto, urgencia y responsable.</div>
+                </div>
+              </div>
+              <div id="directionDashboardTable" class="tabulator-host"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel inner-panel dashboard-panel" data-dashboard-panel="executive">
           <div class="subpanel-header">
             <div>
               <h2>Dashboard ejecutivo</h2>
               <div class="muted" id="executiveDashboardSummary">Vista ejecutiva del período actual.</div>
             </div>
           </div>
+          <div id="executiveKpis" class="executive-kpis"></div>
           <div class="executive-grid">
             <div class="panel inner-panel chart-panel">
               <h3 id="execTrendTitle">Evolución del período</h3>
@@ -83,6 +129,67 @@
               <div id="execBrandChart" class="echart-host"></div>
             </div>
           </div>
+          <div class="two-col dashboard-notes">
+            <div class="panel inner-panel">
+              <h3>Palancas de cierre</h3>
+              <div id="executiveObjectiveSummary" class="insight-list"></div>
+              <div id="executiveSensitivityKpis" class="executive-kpis compact-kpis"></div>
+            </div>
+            <div class="panel inner-panel">
+              <h3>Alertas ejecutivas</h3>
+              <div id="executiveRoleAlerts" class="insight-list"></div>
+            </div>
+          </div>
+          <div class="two-col dashboard-notes">
+            <div class="panel inner-panel">
+              <h3>Metas y simulador</h3>
+              <div class="muted">Definí una meta global y elegí la palanca principal para simular el cierre.</div>
+              <div id="planningControls" class="planning-controls"></div>
+            </div>
+            <div class="panel inner-panel">
+              <h3>Resumen simulado</h3>
+              <div id="planningSummaryKpis" class="executive-kpis compact-kpis"></div>
+              <div id="planningInsights" class="insight-list"></div>
+            </div>
+          </div>
+          <div class="panel inner-panel table-panel">
+            <div class="subpanel-header">
+              <div>
+                <h3>Palancas configuradas</h3>
+                <div class="muted">Subí o bajá la meta por canal, vendedor o familia y luego actualizá el informe.</div>
+              </div>
+            </div>
+            <div id="planningTargetsTable" class="tabulator-host"></div>
+          </div>
+          <div class="two-col dashboard-notes">
+            <div class="panel inner-panel">
+              <h3>Seguimiento por responsable</h3>
+              <div id="ownerTrackingKpis" class="executive-kpis compact-kpis"></div>
+              <div id="ownerTrackingInsights" class="insight-list"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3>Desvío vs plan</h3>
+              <div id="ownerTrackingChart" class="echart-host"></div>
+            </div>
+          </div>
+          <div class="panel inner-panel table-panel">
+            <div class="subpanel-header">
+              <div>
+                <h3>Plan mensual por responsable</h3>
+                <div class="muted">Editá la meta % por vendedor y seguí su gap mensual contra plan.</div>
+              </div>
+            </div>
+            <div id="ownerTrackingTable" class="tabulator-host"></div>
+          </div>
+          <div class="panel inner-panel table-panel">
+            <div class="subpanel-header">
+              <div>
+                <h3>Sensibilidad de cierre</h3>
+                <div class="muted">Escenarios simples para medir cuánto hay que corregir el ritmo del mes.</div>
+              </div>
+            </div>
+            <div id="executiveSensitivityTable" class="tabulator-host"></div>
+          </div>
           <div class="panel inner-panel table-panel">
             <div class="subpanel-header">
               <div>
@@ -91,6 +198,270 @@
               </div>
             </div>
             <div id="executiveTable" class="tabulator-host"></div>
+          </div>
+        </section>
+
+        <section class="panel inner-panel dashboard-panel hidden" data-dashboard-panel="sellers">
+          <div class="subpanel-header">
+            <div>
+              <h2>Dashboard de vendedores</h2>
+              <div class="muted" id="sellerDashboardSummary">Desempeño comercial, concentración y productividad por vendedor.</div>
+            </div>
+          </div>
+          <div id="sellerDashboardKpis" class="executive-kpis"></div>
+          <div class="executive-grid">
+            <div class="panel inner-panel chart-panel">
+              <h3>Venta por vendedor</h3>
+              <div id="sellerDashChartSales" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3>Variación vs período anterior</h3>
+              <div id="sellerDashChartGrowth" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3>Cartera atendida</h3>
+              <div id="sellerDashChartClients" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3>Dependencia en pocos clientes</h3>
+              <div id="sellerDashChartConcentration" class="echart-host"></div>
+            </div>
+          </div>
+          <div class="two-col dashboard-notes">
+            <div class="panel inner-panel">
+              <h3>Insights vendedores</h3>
+              <div id="sellerDashboardInsights" class="insight-list"></div>
+            </div>
+            <div class="panel inner-panel">
+              <h3>Alertas vendedores</h3>
+              <div id="sellerDashboardAlerts" class="insight-list"></div>
+            </div>
+          </div>
+          <div class="panel inner-panel table-panel">
+            <div class="subpanel-header">
+              <div>
+                <h3>Detalle por vendedor</h3>
+                <div class="muted">Lectura operativa de crecimiento, cartera, productividad y concentración.</div>
+              </div>
+            </div>
+            <div id="sellerDashboardTable" class="tabulator-host"></div>
+          </div>
+        </section>
+
+        <section class="panel inner-panel dashboard-panel hidden" data-dashboard-panel="interactive">
+          <div class="subpanel-header">
+            <div>
+              <h2>Informe filtrable</h2>
+              <div class="muted" id="interactiveReportSummary">Evolución mensual con segmentadores y selector de métrica.</div>
+            </div>
+          </div>
+          <div class="interactive-report-layout">
+            <div class="panel inner-panel chart-panel interactive-report-chart">
+              <div class="subpanel-header compact-header">
+                <div>
+                  <h3 id="interactiveReportTitle">Evolución mensual</h3>
+                  <div class="muted" id="interactiveReportSubtitle">Elegí métrica y apertura para recalcular el gráfico.</div>
+                </div>
+                <div class="interactive-report-controls">
+                  <label>
+                    <span>Métrica</span>
+                    <select id="interactiveMetricSelect"></select>
+                  </label>
+                  <label>
+                    <span>Apertura</span>
+                    <select id="interactiveDimensionSelect"></select>
+                  </label>
+                </div>
+              </div>
+              <div id="interactiveReportChart" class="echart-host xl-chart"></div>
+            </div>
+            <div class="panel inner-panel interactive-slicers">
+              <div class="subpanel-header compact-header">
+                <div>
+                  <h3>Segmentadores</h3>
+                  <div class="muted">Marcá las opciones y aplicá para recalcular.</div>
+                </div>
+                <button type="button" id="interactiveApplyFiltersBtn" class="primary">Aplicar</button>
+              </div>
+              <div id="interactiveSlicers"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel inner-panel dashboard-panel hidden" data-dashboard-panel="clients">
+          <div class="subpanel-header">
+            <div>
+              <h2>Dashboard de clientes</h2>
+              <div class="muted" id="clientDashboardSummary">Cartera activa, riesgo, recuperación y concentración de cuentas.</div>
+            </div>
+          </div>
+          <div id="clientDashboardKpis" class="executive-kpis"></div>
+          <div class="executive-grid">
+            <div class="panel inner-panel chart-panel">
+              <h3>Estados de cartera</h3>
+              <div id="clientDashChartStatus" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3>Top clientes por venta</h3>
+              <div id="clientDashChartTopSales" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3>Clientes en riesgo</h3>
+              <div id="clientDashChartRisk" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3>Profundidad de mix</h3>
+              <div id="clientDashChartMix" class="echart-host"></div>
+            </div>
+          </div>
+          <div class="two-col dashboard-notes">
+            <div class="panel inner-panel">
+              <h3>Insights clientes</h3>
+              <div id="clientDashboardInsights" class="insight-list"></div>
+            </div>
+            <div class="panel inner-panel">
+              <h3>Alertas clientes</h3>
+              <div id="clientDashboardAlerts" class="insight-list"></div>
+            </div>
+          </div>
+          <div class="panel inner-panel table-panel">
+            <div class="subpanel-header">
+              <div>
+                <h3>Detalle por cliente</h3>
+                <div class="muted">Priorización comercial de cuentas activas, recuperadas y en riesgo.</div>
+              </div>
+            </div>
+            <div id="clientDashboardTable" class="tabulator-host"></div>
+          </div>
+        </section>
+
+        <section class="panel inner-panel dashboard-panel hidden" data-dashboard-panel="history">
+          <div class="subpanel-header">
+            <div>
+              <h2>Dashboard histórico</h2>
+              <div class="muted" id="historyDashboardSummary">Evolución, cohortes, Pareto y concentración estructural.</div>
+            </div>
+          </div>
+          <div id="historyDashboardKpis" class="executive-kpis"></div>
+          <div class="two-col dashboard-notes">
+            <div class="panel inner-panel">
+              <h3>Presupuesto histórico</h3>
+              <div class="muted">Cargá presupuesto mensual total y elegí una apertura para compararlo contra el real.</div>
+              <div id="historyBudgetControls" class="planning-controls"></div>
+            </div>
+            <div class="panel inner-panel">
+              <h3>Plan vs real</h3>
+              <div id="historyBudgetKpis" class="executive-kpis compact-kpis"></div>
+              <div id="historyBudgetInsights" class="insight-list"></div>
+            </div>
+          </div>
+          <div class="executive-grid">
+            <div class="panel inner-panel chart-panel">
+              <h3>Evolución mensual</h3>
+              <div id="historyDashChartMonthly" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3>Cohortes de clientes</h3>
+              <div id="historyDashChartCohorts" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3>Pareto de clientes</h3>
+              <div id="historyDashChartPareto" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3>HHI y dependencia</h3>
+              <div id="historyDashChartHHI" class="echart-host"></div>
+            </div>
+          </div>
+          <div class="executive-grid">
+            <div class="panel inner-panel chart-panel">
+              <h3>Real vs presupuesto</h3>
+              <div id="historyDashChartBudget" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel table-panel">
+              <div class="subpanel-header">
+                <div>
+                  <h3>Distribución presupuestaria</h3>
+                  <div class="muted">Participación objetivo por canal, vendedor o familia para el último período visible.</div>
+                </div>
+              </div>
+              <div id="historyBudgetDimensionTable" class="tabulator-host"></div>
+            </div>
+          </div>
+          <div class="two-col dashboard-notes">
+            <div class="panel inner-panel">
+              <h3>Insights históricos</h3>
+              <div id="historyDashboardInsights" class="insight-list"></div>
+            </div>
+            <div class="panel inner-panel">
+              <h3>Alertas estructurales</h3>
+              <div id="historyDashboardAlerts" class="insight-list"></div>
+            </div>
+          </div>
+          <div class="panel inner-panel table-panel">
+            <div class="subpanel-header">
+              <div>
+                <h3>Detalle mensual</h3>
+                <div class="muted">Ventas, volumen, clientes y tendencias móviles por período.</div>
+              </div>
+            </div>
+            <div id="historyDashboardTable" class="tabulator-host"></div>
+          </div>
+          <div class="panel inner-panel table-panel">
+            <div class="subpanel-header">
+              <div>
+                <h3>Presupuesto mensual</h3>
+                <div class="muted">Editá el presupuesto total por mes visible y luego aplicá para consolidar el plan.</div>
+              </div>
+            </div>
+            <div id="historyBudgetMonthlyTable" class="tabulator-host"></div>
+          </div>
+        </section>
+
+        <section class="panel inner-panel dashboard-panel hidden" data-dashboard-panel="opportunities">
+          <div class="subpanel-header">
+            <div>
+              <h2>Dashboard de oportunidades</h2>
+              <div class="muted" id="opportunityDashboardSummary">Clientes, vendedores y canales con potencial de mejora accionable.</div>
+            </div>
+          </div>
+          <div id="opportunityDashboardKpis" class="executive-kpis"></div>
+          <div class="executive-grid">
+            <div class="panel inner-panel chart-panel">
+              <h3>Potencial priorizado</h3>
+              <div id="opportunityDashChartTop" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3>Clientes a desarrollar</h3>
+              <div id="opportunityDashChartClients" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3>Canales con potencial</h3>
+              <div id="opportunityDashChartChannels" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3>Vendedores a desarrollar</h3>
+              <div id="opportunityDashChartSellers" class="echart-host"></div>
+            </div>
+          </div>
+          <div class="two-col dashboard-notes">
+            <div class="panel inner-panel">
+              <h3>Insights de oportunidad</h3>
+              <div id="opportunityDashboardInsights" class="insight-list"></div>
+            </div>
+            <div class="panel inner-panel">
+              <h3>Alertas de oportunidad</h3>
+              <div id="opportunityDashboardAlerts" class="insight-list"></div>
+            </div>
+          </div>
+          <div class="panel inner-panel table-panel">
+            <div class="subpanel-header">
+              <div>
+                <h3>Backlog accionable</h3>
+                <div class="muted">Priorización integrada de oportunidades por potencial y responsable comercial.</div>
+              </div>
+            </div>
+            <div id="opportunityDashboardTable" class="tabulator-host"></div>
           </div>
         </section>
 
@@ -152,7 +523,7 @@
             <h2 id="chartCoverageTitle">Volumen por canal</h2>
             <div id="chartCoverage"></div>
           </div>
-          <div class="panel inner-panel">
+          <div class="panel inner-panel supplier-coverage-panel chart-span-full">
             <h2 id="chartSupplierCoverageTitle">Cobertura mensual de clientes</h2>
             <div id="chartSupplierCoverage"></div>
           </div>

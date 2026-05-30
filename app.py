@@ -1,15 +1,18 @@
-import cgi
 import json
 import os
 import traceback
 from collections import defaultdict, deque
 from datetime import date, datetime, timedelta, timezone
+from email import policy
+from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 from pathlib import Path
 from threading import Lock
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
-from analyzer import DATASET_DEFINITIONS, analyze_datasets, suggest_mappings
+from analyzer import DATASET_DEFINITIONS, analyze_datasets, build_consistency_report, build_tactical_month_report, suggest_mappings
 from schema_detector import detect_schema_from_raw
 from rule_engine import resolve_tasks, tasks_by_domain
 from analysis_engine import AnalysisEngine
@@ -24,6 +27,7 @@ from clickhouse_client import (
 from mongo_client import (
     get_db,
     get_erp_prefilter_options,
+    get_erp_sales_uncovered_ranges,
     get_erp_storage_status,
     get_mongo_sales_retention_cutoff,
     load_erp_articles_dataset,
@@ -109,6 +113,18 @@ def _build_sales_analysis_window(fecha_desde, fecha_hasta):
         "loadStart": comparison_start.isoformat(),
         "loadEnd": end.isoformat(),
         "days": days,
+    }
+
+
+def _build_tactical_month_window(fecha_desde, fecha_hasta):
+    base_window = _build_sales_analysis_window(fecha_desde, fecha_hasta)
+    selected_end = _parse_iso_date(base_window["selectedEnd"], "fechaHasta")
+    previous_month_start = (selected_end.replace(day=1) - timedelta(days=1)).replace(day=1)
+    previous_year_start = date(selected_end.year - 1, selected_end.month, 1)
+    load_start = min(_parse_iso_date(base_window["loadStart"], "loadStart"), previous_month_start, previous_year_start)
+    return {
+        **base_window,
+        "loadStart": load_start.isoformat(),
     }
 
 
@@ -207,6 +223,28 @@ def _iter_date_chunks(fecha_desde, fecha_hasta, chunk_days=None):
         cursor = chunk_end + timedelta(days=1)
 
 
+def _parse_multipart_files(headers, body, field_name="files"):
+    content_type = headers.get("Content-Type", "")
+    message = BytesParser(policy=policy.default).parsebytes(
+        f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8") + body
+    )
+    if not message.is_multipart():
+        return []
+
+    files = []
+    for part in message.iter_parts():
+        if part.get_content_disposition() != "form-data":
+            continue
+        if part.get_param("name", header="content-disposition") != field_name:
+            continue
+        filename = part.get_filename()
+        if not filename:
+            continue
+        payload = part.get_payload(decode=True) or b""
+        files.append(SimpleNamespace(filename=filename, file=BytesIO(payload)))
+    return files
+
+
 def _fetch_sales_dataset_chunked(fecha_desde, fecha_hasta, detailed=True, cookie=None):
     records = []
     headers = []
@@ -279,7 +317,37 @@ def _mongo_sync_overlap(fecha_desde: str, fecha_hasta: str):
     return overlap_start.isoformat(), end.isoformat()
 
 
-def _sync_sales_range_chunked(fecha_desde, fecha_hasta, cookie=None):
+def _sync_sales_range_chunked(fecha_desde, fecha_hasta, cookie=None, force_refresh=False):
+    uncovered_ranges = [(fecha_desde, fecha_hasta)] if force_refresh else get_erp_sales_uncovered_ranges(fecha_desde, fecha_hasta)
+    reused_ranges = _invert_ranges(fecha_desde, fecha_hasta, uncovered_ranges)
+    if not uncovered_ranges:
+        summary = {
+            "range": {"fechaDesde": fecha_desde, "fechaHasta": fecha_hasta},
+            "rowsRead": 0,
+            "rowsValid": 0,
+            "recordsReceived": 0,
+            "rowVersions": 0,
+            "deleted": 0,
+            "upserted": 0,
+            "modified": 0,
+            "matched": 0,
+            "mongoStored": 0,
+            "clickhouseStored": 0,
+            "mongoChunkCount": 0,
+            "chunkCount": 0,
+            "chunkDays": _erp_sales_chunk_days(),
+            "warning": None,
+            "warnings": [],
+            "chunks": [],
+            "origin": "api_sync_batch",
+            "reusedExistingRange": True,
+            "forceRefresh": force_refresh,
+            "fetchedRanges": [],
+            "reusedCoveredRanges": reused_ranges,
+            "message": "El rango solicitado ya estaba cubierto en la base persistida. No se consultó nuevamente ChessERP.",
+        }
+        return record_erp_sync_summary("sales_batch", summary)
+
     chunk_summaries = []
     warnings = []
     total_rows_read = 0
@@ -293,70 +361,80 @@ def _sync_sales_range_chunked(fecha_desde, fecha_hasta, cookie=None):
     total_mongo_stored = 0
     mongo_chunk_count = 0
 
-    for index, (chunk_start, chunk_end) in enumerate(_iter_date_chunks(fecha_desde, fecha_hasta), start=1):
-        dataset = fetch_sales_dataset(chunk_start, chunk_end, detailed=True, cookie=cookie)
-        mongo_overlap = _mongo_sync_overlap(chunk_start, chunk_end)
-        if mongo_overlap:
-            mongo_start, mongo_end = mongo_overlap
-            mongo_records = [
-                record for record in dataset["records"]
-                if record.get("date") and mongo_start <= record.get("date").isoformat() <= mongo_end
-            ]
-            sync_summary = sync_erp_sales(
-                mongo_records,
-                mongo_start,
-                mongo_end,
+    chunk_index = 0
+    for uncovered_start, uncovered_end in uncovered_ranges:
+        for chunk_start, chunk_end in _iter_date_chunks(uncovered_start, uncovered_end):
+            chunk_index += 1
+            dataset = fetch_sales_dataset(chunk_start, chunk_end, detailed=True, cookie=cookie)
+            mongo_overlap = _mongo_sync_overlap(chunk_start, chunk_end)
+            if mongo_overlap:
+                mongo_start, mongo_end = mongo_overlap
+                mongo_records = [
+                    record for record in dataset["records"]
+                    if record.get("date") and mongo_start <= record.get("date").isoformat() <= mongo_end
+                ]
+                sync_summary = sync_erp_sales(
+                    mongo_records,
+                    mongo_start,
+                    mongo_end,
+                    origin="api_sync_chunk",
+                    rows_read=dataset.get("rowsRead", 0),
+                    warning=dataset.get("warning"),
+                    empty_confirmed=not mongo_records,
+                )
+                mongo_chunk_count += 1
+                total_mongo_stored += sync_summary.get("recordsStored", 0)
+            else:
+                sync_summary = {
+                    "range": {"fechaDesde": chunk_start, "fechaHasta": chunk_end},
+                    "deleted": 0,
+                    "upserted": 0,
+                    "modified": 0,
+                    "matched": 0,
+                    "recordsStored": 0,
+                    "recordsReceived": 0,
+                    "storageMode": "clickhouse_only",
+                }
+            clickhouse_summary = sync_erp_sales_clickhouse(
+                dataset["records"],
+                chunk_start,
+                chunk_end,
                 origin="api_sync_chunk",
                 rows_read=dataset.get("rowsRead", 0),
                 warning=dataset.get("warning"),
-                empty_confirmed=not mongo_records,
             )
-            mongo_chunk_count += 1
-            total_mongo_stored += sync_summary.get("recordsStored", 0)
-        else:
-            sync_summary = {
+            chunk_summary = {
+                "index": chunk_index,
                 "range": {"fechaDesde": chunk_start, "fechaHasta": chunk_end},
-                "deleted": 0,
-                "upserted": 0,
-                "modified": 0,
-                "matched": 0,
-                "recordsStored": 0,
-                "recordsReceived": 0,
-                "storageMode": "clickhouse_only",
+                "rowsRead": dataset.get("rowsRead", 0),
+                "rowsValid": dataset.get("rowsValid", 0),
+                "deleted": sync_summary.get("deleted", 0),
+                "upserted": sync_summary.get("upserted", 0),
+                "modified": sync_summary.get("modified", 0),
+                "matched": sync_summary.get("matched", 0),
+                "mongoStored": sync_summary.get("recordsStored", 0),
+                "clickhouseStored": clickhouse_summary.get("recordsStored", 0) if clickhouse_summary.get("configured") else 0,
+                "storageMode": "mongo_and_clickhouse" if mongo_overlap else "clickhouse_only",
             }
-        clickhouse_summary = sync_erp_sales_clickhouse(
-            dataset["records"],
-            chunk_start,
-            chunk_end,
-            origin="api_sync_chunk",
-            rows_read=dataset.get("rowsRead", 0),
-            warning=dataset.get("warning"),
-        )
-        chunk_summary = {
-            "index": index,
-            "range": {"fechaDesde": chunk_start, "fechaHasta": chunk_end},
-            "rowsRead": dataset.get("rowsRead", 0),
-            "rowsValid": dataset.get("rowsValid", 0),
-            "deleted": sync_summary.get("deleted", 0),
-            "upserted": sync_summary.get("upserted", 0),
-            "modified": sync_summary.get("modified", 0),
-            "matched": sync_summary.get("matched", 0),
-            "mongoStored": sync_summary.get("recordsStored", 0),
-            "clickhouseStored": clickhouse_summary.get("recordsStored", 0) if clickhouse_summary.get("configured") else 0,
-            "storageMode": "mongo_and_clickhouse" if mongo_overlap else "clickhouse_only",
-        }
-        if dataset.get("warning"):
-            chunk_summary["warning"] = dataset["warning"]
-            warnings.append(f"{chunk_start} a {chunk_end}: {dataset['warning']}")
-        chunk_summaries.append(chunk_summary)
-        total_rows_read += dataset.get("rowsRead", 0)
-        total_rows_valid += dataset.get("rowsValid", 0)
-        total_deleted += sync_summary.get("deleted", 0)
-        total_upserted += sync_summary.get("upserted", 0)
-        total_modified += sync_summary.get("modified", 0)
-        total_matched += sync_summary.get("matched", 0)
-        total_row_versions += sync_summary.get("rowVersions", 0)
-        total_clickhouse_stored += clickhouse_summary.get("recordsStored", 0) if clickhouse_summary.get("configured") else 0
+            if dataset.get("warning"):
+                chunk_summary["warning"] = dataset["warning"]
+                warnings.append(f"{chunk_start} a {chunk_end}: {dataset['warning']}")
+            chunk_summaries.append(chunk_summary)
+            if os.getenv("APP_SYNC_PROGRESS_STDOUT", "").strip().lower() in {"1", "true", "yes"}:
+                print(
+                    f"[sync] tramo {chunk_index}: {chunk_start} a {chunk_end} "
+                    f"rows={dataset.get('rowsValid', 0)} clickhouse={chunk_summary['clickhouseStored']} "
+                    f"mongo={chunk_summary['mongoStored']}",
+                    flush=True,
+                )
+            total_rows_read += dataset.get("rowsRead", 0)
+            total_rows_valid += dataset.get("rowsValid", 0)
+            total_deleted += sync_summary.get("deleted", 0)
+            total_upserted += sync_summary.get("upserted", 0)
+            total_modified += sync_summary.get("modified", 0)
+            total_matched += sync_summary.get("matched", 0)
+            total_row_versions += sync_summary.get("rowVersions", 0)
+            total_clickhouse_stored += clickhouse_summary.get("recordsStored", 0) if clickhouse_summary.get("configured") else 0
 
     summary = {
         "range": {"fechaDesde": fecha_desde, "fechaHasta": fecha_hasta},
@@ -377,8 +455,30 @@ def _sync_sales_range_chunked(fecha_desde, fecha_hasta, cookie=None):
         "warnings": warnings,
         "chunks": chunk_summaries,
         "origin": "api_sync_batch",
+        "reusedExistingRange": False,
+        "forceRefresh": force_refresh,
+        "fetchedRanges": [{"fechaDesde": start, "fechaHasta": end} for start, end in uncovered_ranges],
+        "reusedCoveredRanges": reused_ranges,
     }
     return record_erp_sync_summary("sales_batch", summary)
+
+
+def _invert_ranges(fecha_desde, fecha_hasta, uncovered_ranges):
+    start = _parse_iso_date(fecha_desde, "fechaDesde")
+    end = _parse_iso_date(fecha_hasta, "fechaHasta")
+    if not uncovered_ranges:
+        return [{"fechaDesde": fecha_desde, "fechaHasta": fecha_hasta}]
+    covered = []
+    cursor = start
+    for current_start, current_end in uncovered_ranges:
+        range_start = _parse_iso_date(current_start, "fechaDesde")
+        range_end = _parse_iso_date(current_end, "fechaHasta")
+        if cursor < range_start:
+            covered.append({"fechaDesde": cursor.isoformat(), "fechaHasta": (range_start - timedelta(days=1)).isoformat()})
+        cursor = max(cursor, range_end + timedelta(days=1))
+    if cursor <= end:
+        covered.append({"fechaDesde": cursor.isoformat(), "fechaHasta": end.isoformat()})
+    return covered
 
 
 class AppHandler(BaseHTTPRequestHandler):
@@ -518,6 +618,12 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/analyze":
             self.handle_analyze()
+            return
+        if parsed.path == "/api/bi/consistency":
+            self.handle_bi_consistency()
+            return
+        if parsed.path == "/api/bi/tactical-month":
+            self.handle_bi_tactical_month()
             return
         if parsed.path == "/api/analyze-dynamic":
             self.handle_analyze_dynamic()
@@ -672,13 +778,19 @@ class AppHandler(BaseHTTPRequestHandler):
         fecha_desde = data.get("fechaDesde")
         fecha_hasta = data.get("fechaHasta")
         refresh_masters = bool(data.get("refreshMasters"))
+        force_refresh_sales = bool(data.get("forceRefreshSales"))
         if not fecha_desde or not fecha_hasta:
             self.send_json({"error": "Faltan fechaDesde o fechaHasta"}, status=400)
             return
         try:
             erp_session = erp_login()
             erp_cookie = erp_session.get("cookie")
-            sync_summary = _sync_sales_range_chunked(fecha_desde, fecha_hasta, cookie=erp_cookie)
+            sync_summary = _sync_sales_range_chunked(
+                fecha_desde,
+                fecha_hasta,
+                cookie=erp_cookie,
+                force_refresh=force_refresh_sales,
+            )
             storage = get_erp_storage_status()
             should_sync_masters = refresh_masters or not _erp_masters_available(storage)
             articles = sellers_dataset = routes_dataset = marketing_dataset = None
@@ -709,6 +821,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     "warning": sync_summary.get("warning"),
                     "warnings": sync_summary.get("warnings") or [],
                     "mastersSynced": should_sync_masters,
+                    "forceRefreshSales": force_refresh_sales,
                     "articleRowsRead": articles["rowsRead"] if articles else 0,
                     "articleRowsValid": articles["rowsValid"] if articles else 0,
                     "sellerRowsValid": sellers_dataset["rowsValid"] if sellers_dataset else 0,
@@ -724,6 +837,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     "fechaDesde": fecha_desde,
                     "fechaHasta": fecha_hasta,
                     "refreshMasters": refresh_masters,
+                    "forceRefreshSales": force_refresh_sales,
                 },
             )
             self.send_json({"error": str(exc)}, status=500)
@@ -737,23 +851,12 @@ class AppHandler(BaseHTTPRequestHandler):
         if content_length > _max_upload_body_bytes():
             self.send_json({"error": "Upload demasiado grande"}, status=413)
             return
-        ctype, _ = cgi.parse_header(self.headers.get("content-type", ""))
-        if ctype != "multipart/form-data":
+        if self.headers.get_content_type() != "multipart/form-data":
             self.send_json({"error": "El upload debe enviarse como multipart/form-data"}, status=400)
             return
 
-        form = cgi.FieldStorage(
-            fp=self.rfile,
-            headers=self.headers,
-            environ={
-                "REQUEST_METHOD": "POST",
-                "CONTENT_TYPE": self.headers.get("Content-Type", ""),
-            },
-        )
-
-        items = form["files"] if "files" in form else []
-        if not isinstance(items, list):
-            items = [items]
+        body = self.rfile.read(content_length)
+        items = _parse_multipart_files(self.headers, body)
         if not items:
             self.send_json({"error": "No llegaron archivos"}, status=400)
             return
@@ -888,6 +991,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 resolved,
                 filters=data.get("filters", {}),
                 supplier_focus=data.get("supplierFocus"),
+                planning=data.get("planning"),
             )
         except ValueError as exc:
             _log_error("analyze_validation", exc, {"filters": data.get("filters", {}), "datasets": list(datasets.keys())})
@@ -913,8 +1017,74 @@ class AppHandler(BaseHTTPRequestHandler):
                 pass  # No bloquear la respuesta si falla MongoDB
 
         # Persistir configuración de datasets en sesión
-        save_session(data.get("datasets", {}))
+        save_session(data.get("datasets", {}), planning=data.get("planning"))
 
+        self.send_json(result)
+
+    def handle_bi_consistency(self):
+        try:
+            data = self._read_json_body()
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=400)
+            return
+        datasets = data.get("datasets", {})
+        if not datasets:
+            self.send_json({"error": "No llegaron datasets para validar"}, status=400)
+            return
+        try:
+            resolved = _resolve_datasets(datasets)
+            result = build_consistency_report(resolved)
+        except ValueError as exc:
+            _log_error("bi_consistency_validation", exc, {"datasets": list(datasets.keys())})
+            self.send_json({"error": str(exc)}, status=422)
+            return
+        except Exception as exc:
+            _log_error("bi_consistency", exc, {"datasets": list(datasets.keys())})
+            self.send_json({"error": str(exc)}, status=500)
+            return
+        self.send_json(result)
+
+    def handle_bi_tactical_month(self):
+        try:
+            data = self._read_json_body()
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=400)
+            return
+        datasets = data.get("datasets", {})
+        if not datasets:
+            self.send_json({"error": "No llegaron datasets para construir el dashboard táctico"}, status=400)
+            return
+        try:
+            tactical_datasets = json.loads(json.dumps(datasets))
+            if "sales" in tactical_datasets and isinstance(tactical_datasets["sales"], dict):
+                tactical_datasets["sales"]["loadStrategy"] = "tactical_month"
+                tactical_datasets["sales"]["allowPartialCoverage"] = True
+                sales_config = tactical_datasets["sales"]
+                sales_start = sales_config.get("fechaDesde") or (sales_config.get("erp") or {}).get("fechaDesde")
+                sales_end = sales_config.get("fechaHasta") or (sales_config.get("erp") or {}).get("fechaHasta")
+                if sales_config.get("source") == "auto" and sales_start and sales_end:
+                    try:
+                        load_erp_sales_dataset(sales_start, sales_end, require_coverage=True)
+                        sales_config["source"] = "mongo"
+                        if isinstance(sales_config.get("erp"), dict):
+                            sales_config["erp"]["enabled"] = False
+                    except Exception:
+                        pass
+            resolved = _resolve_datasets(tactical_datasets)
+            result = build_tactical_month_report(
+                resolved,
+                filters=data.get("filters", {}),
+                supplier_focus=data.get("supplierFocus"),
+                planning=data.get("planning"),
+            )
+        except ValueError as exc:
+            _log_error("bi_tactical_month_validation", exc, {"datasets": list(datasets.keys())})
+            self.send_json({"error": str(exc)}, status=422)
+            return
+        except Exception as exc:
+            _log_error("bi_tactical_month", exc, {"datasets": list(datasets.keys())})
+            self.send_json({"error": str(exc)}, status=500)
+            return
         self.send_json(result)
 
     def handle_get_session(self):
@@ -932,7 +1102,7 @@ class AppHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self.send_json({"error": str(exc)}, status=400)
             return
-        ok = save_session(data.get("datasets", {}))
+        ok = save_session(data.get("datasets", {}), planning=data.get("planning"))
         self.send_json({"saved": ok})
 
     def handle_list_analyses(self, parsed):
@@ -1106,6 +1276,9 @@ def _resolve_datasets(datasets):
             use_auto = config.get("source") == "auto"
             use_mongo = config.get("source") == "mongo"
             use_clickhouse = config.get("source") == "clickhouse"
+            exact_range_only = bool(config.get("exactRangeOnly"))
+            load_strategy = config.get("loadStrategy")
+            allow_partial_coverage = bool(config.get("allowPartialCoverage"))
             use_erp = not use_mongo and not use_clickhouse and (
                 config.get("source") == "erp" or erp_config.get("enabled")
             )
@@ -1113,7 +1286,16 @@ def _resolve_datasets(datasets):
             fecha_hasta = config.get("fechaHasta") or erp_config.get("fechaHasta")
             analysis_window = None
             if fecha_desde and fecha_hasta and (use_auto or use_mongo or use_clickhouse or use_erp):
-                analysis_window = _build_sales_analysis_window(fecha_desde, fecha_hasta)
+                if load_strategy == "tactical_month":
+                    analysis_window = _build_tactical_month_window(fecha_desde, fecha_hasta)
+                else:
+                    analysis_window = _build_sales_analysis_window(fecha_desde, fecha_hasta)
+                if exact_range_only:
+                    analysis_window = {
+                        **analysis_window,
+                        "loadStart": analysis_window["selectedStart"],
+                        "loadEnd": analysis_window["selectedEnd"],
+                    }
             if use_auto:
                 dataset, sales_source = _load_commercial_sales_dataset(analysis_window["loadStart"], analysis_window["loadEnd"])
                 resolved[dataset_type] = _attach_sales_analysis_window(dataset, analysis_window)
@@ -1125,7 +1307,11 @@ def _resolve_datasets(datasets):
                 sales_source = "erp"
                 continue
             if use_mongo:
-                dataset = load_erp_sales_dataset(analysis_window["loadStart"], analysis_window["loadEnd"])
+                dataset = load_erp_sales_dataset(
+                    analysis_window["loadStart"],
+                    analysis_window["loadEnd"],
+                    require_coverage=not allow_partial_coverage,
+                )
                 resolved[dataset_type] = _attach_sales_analysis_window(dataset, analysis_window)
                 sales_source = "mongo"
                 continue
@@ -1179,7 +1365,12 @@ def _resolve_datasets(datasets):
             else:
                 resolved["articles"] = load_erp_articles_dataset()
         except Exception:
-            pass
+            if sales_source in {"mongo", "clickhouse"}:
+                try:
+                    erp_cookie = erp_cookie or erp_login().get("cookie")
+                    resolved["articles"] = fetch_articles_dataset(cookie=erp_cookie)
+                except Exception:
+                    pass
     if "sellers" not in resolved and sales_source in {"erp", "mongo", "clickhouse"}:
         try:
             if sales_source == "erp":
@@ -1194,6 +1385,12 @@ def _resolve_datasets(datasets):
                     resolved["sellers"] = build_dataset("sellers", "ChessERP vendedores derivados", "Ventas ERP", records, source_kind="erp")
                 except Exception:
                     pass
+            elif sales_source in {"mongo", "clickhouse"}:
+                try:
+                    erp_cookie = erp_cookie or erp_login().get("cookie")
+                    resolved["sellers"] = fetch_staff_dataset(cookie=erp_cookie)
+                except Exception:
+                    pass
     if "routes" not in resolved and sales_source in {"erp", "mongo", "clickhouse"}:
         try:
             if sales_source == "erp":
@@ -1201,6 +1398,14 @@ def _resolve_datasets(datasets):
                 resolved["routes"] = fetch_routes_dataset(cookie=erp_cookie)
             else:
                 resolved["routes"] = load_erp_routes_dataset()
+                if not _routes_have_client_keys(resolved["routes"]):
+                    try:
+                        erp_cookie = erp_cookie or erp_login().get("cookie")
+                        live_routes = fetch_routes_dataset(cookie=erp_cookie)
+                        if _routes_have_client_keys(live_routes):
+                            resolved["routes"] = live_routes
+                    except Exception:
+                        pass
         except Exception:
             if sales_source == "erp":
                 try:
@@ -1208,7 +1413,17 @@ def _resolve_datasets(datasets):
                     resolved["routes"] = build_dataset("routes", "ChessERP rutas derivadas", "Ventas ERP", records, source_kind="erp")
                 except Exception:
                     pass
+            elif sales_source in {"mongo", "clickhouse"}:
+                try:
+                    erp_cookie = erp_cookie or erp_login().get("cookie")
+                    resolved["routes"] = fetch_routes_dataset(cookie=erp_cookie)
+                except Exception:
+                    pass
     return resolved
+
+
+def _routes_have_client_keys(dataset):
+    return any(item.get("client_keys") for item in (dataset or {}).get("records", []))
 
 
 def _load_commercial_sales_dataset(fecha_desde: str, fecha_hasta: str):

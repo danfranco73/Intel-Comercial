@@ -34,10 +34,18 @@ COMPACT_SALE_FIELDS = (
     "client_name",
     "route_description",
     "seller_key",
+    "seller_name",
+    "sales_scheme_key",
+    "sales_scheme_name",
+    "sales_force",
     "product_key",
     "invoice",
     "channel",
     "amount",
+    "amount_net",
+    "amount_final",
+    "internal_taxes",
+    "amount_net_internal",
     "quantity",
 )
 _client = None
@@ -190,6 +198,7 @@ def _sale_document_id(record: dict) -> str:
                 str(record.get("invoice") or record.get("document_key") or ""),
                 str(record.get("product_key") or ""),
                 str(record.get("seller_key") or ""),
+                str(record.get("sales_scheme_key") or ""),
                 str(record.get("route_description") or ""),
                 str(record.get("channel") or ""),
             ]
@@ -259,7 +268,7 @@ def _compact_sale_record(record: dict) -> dict:
         if field in {"date", "year", "month"}:
             continue
         value = record.get(field)
-        if field in {"amount", "quantity"}:
+        if field in {"amount", "amount_net", "amount_final", "internal_taxes", "amount_net_internal", "quantity"}:
             compact[field] = value or 0
         elif value not in (None, ""):
             compact[field] = value
@@ -288,8 +297,8 @@ def sync_erp_sales(
         if current is None:
             documents_by_id[document["_id"]] = document
             continue
-        current["amount"] = round((current.get("amount") or 0) + (document.get("amount") or 0), 6)
-        current["quantity"] = round((current.get("quantity") or 0) + (document.get("quantity") or 0), 6)
+        for numeric_field in ("amount", "amount_net", "amount_final", "internal_taxes", "amount_net_internal", "quantity"):
+            current[numeric_field] = round((current.get(numeric_field) or 0) + (document.get(numeric_field) or 0), 6)
         for field, value in document.items():
             if field not in current or current.get(field) in (None, ""):
                 current[field] = value
@@ -495,7 +504,7 @@ def load_erp_sales_dataset(fecha_desde: str, fecha_hasta: str, require_coverage:
     }
 
 
-def _sales_range_covered(db, fecha_desde: str, fecha_hasta: str) -> tuple[bool, str | None, str | None]:
+def _sales_sync_intervals(db, fecha_desde: str, fecha_hasta: str) -> list[tuple[date, date]]:
     start = date.fromisoformat(fecha_desde)
     end = date.fromisoformat(fecha_hasta)
     sync_runs = list(
@@ -518,11 +527,33 @@ def _sales_range_covered(db, fecha_desde: str, fecha_hasta: str) -> tuple[bool, 
         range_end = current_range.get("fechaHasta")
         if not range_start or not range_end:
             continue
-        intervals.append((date.fromisoformat(range_start), date.fromisoformat(range_end)))
+        interval_start = max(date.fromisoformat(range_start), start)
+        interval_end = min(date.fromisoformat(range_end), end)
+        if interval_start > interval_end:
+            continue
+        intervals.append((interval_start, interval_end))
+
+    if not intervals:
+        return []
+
+    intervals.sort(key=lambda item: item[0])
+    merged = [intervals[0]]
+    for current_start, current_end in intervals[1:]:
+        previous_start, previous_end = merged[-1]
+        if current_start <= previous_end + timedelta(days=1):
+            merged[-1] = (previous_start, max(previous_end, current_end))
+        else:
+            merged.append((current_start, current_end))
+    return merged
+
+
+def _sales_range_covered(db, fecha_desde: str, fecha_hasta: str) -> tuple[bool, str | None, str | None]:
+    start = date.fromisoformat(fecha_desde)
+    end = date.fromisoformat(fecha_hasta)
+    intervals = _sales_sync_intervals(db, fecha_desde, fecha_hasta)
     if not intervals:
         return False, fecha_desde, fecha_hasta
 
-    intervals.sort(key=lambda item: item[0])
     cursor = start
     for interval_start, interval_end in intervals:
         if interval_end < cursor:
@@ -534,6 +565,31 @@ def _sales_range_covered(db, fecha_desde: str, fecha_hasta: str) -> tuple[bool, 
         if cursor > end:
             return True, None, None
     return False, cursor.isoformat(), end.isoformat()
+
+
+def get_erp_sales_uncovered_ranges(fecha_desde: str, fecha_hasta: str) -> list[tuple[str, str]]:
+    db = get_db()
+    if db is None:
+        return [(fecha_desde, fecha_hasta)]
+    _ensure_erp_indexes(db)
+
+    start = date.fromisoformat(fecha_desde)
+    end = date.fromisoformat(fecha_hasta)
+    intervals = _sales_sync_intervals(db, fecha_desde, fecha_hasta)
+    if not intervals:
+        return [(fecha_desde, fecha_hasta)]
+
+    uncovered = []
+    cursor = start
+    for interval_start, interval_end in intervals:
+        if interval_start > cursor:
+            uncovered.append((cursor.isoformat(), (interval_start - timedelta(days=1)).isoformat()))
+        cursor = max(cursor, interval_end + timedelta(days=1))
+        if cursor > end:
+            break
+    if cursor <= end:
+        uncovered.append((cursor.isoformat(), end.isoformat()))
+    return uncovered
 
 
 def get_erp_prefilter_options() -> dict:
@@ -560,6 +616,7 @@ def get_erp_prefilter_options() -> dict:
             {},
             {
                 "_id": 0,
+                "sales_scheme_name": 1,
                 "sales_force": 1,
                 "seller_name": 1,
             },
@@ -570,6 +627,7 @@ def get_erp_prefilter_options() -> dict:
             {},
             {
                 "_id": 0,
+                "sales_scheme_name": 1,
                 "route_description": 1,
             },
         )
@@ -581,6 +639,7 @@ def get_erp_prefilter_options() -> dict:
         "brand": "Marca",
         "business_unit": "Unidad de negocio",
         "supplier": "Proveedor",
+        "sales_scheme_name": "Esquema de ventas",
         "sales_force": "Fuerza de ventas",
         "route_description": "Ruta",
         "seller_name": "Vendedor",
@@ -591,6 +650,7 @@ def get_erp_prefilter_options() -> dict:
         "brand": articles,
         "business_unit": articles,
         "supplier": articles,
+        "sales_scheme_name": sellers + routes,
         "sales_force": sellers,
         "route_description": routes,
         "seller_name": sellers,
@@ -681,6 +741,7 @@ def sync_erp_routes(records: list[dict], origin: str = "manual") -> dict:
         lambda item: "|".join(
             [
                 str(item.get("branch_key") or ""),
+                str(item.get("sales_scheme_key") or ""),
                 str(item.get("route_key") or ""),
                 str(item.get("seller_key") or ""),
             ]
@@ -903,7 +964,7 @@ def _drop_index_if_exists(collection, name: str):
         pass
 
 
-def save_session(datasets: dict) -> bool:
+def save_session(datasets: dict, planning: dict | None = None) -> bool:
     """
     Persiste la configuración de datasets (archivos, hojas, mappings, headerRow)
     en la colección 'sessions'. Hace upsert sobre el id fijo.
@@ -918,11 +979,10 @@ def save_session(datasets: dict) -> bool:
     if db is None:
         return False
     try:
-        db["sessions"].update_one(
-            {"_id": _SESSION_ID},
-            {"$set": {"datasets": datasets}},
-            upsert=True,
-        )
+        payload = {"datasets": datasets}
+        if planning is not None:
+            payload["planning"] = planning
+        db["sessions"].update_one({"_id": _SESSION_ID}, {"$set": payload}, upsert=True)
         return True
     except Exception:
         return False
@@ -939,7 +999,7 @@ def load_session() -> dict | None:
     if db is None:
         return None
     try:
-        doc = db["sessions"].find_one({"_id": _SESSION_ID}, {"_id": 0, "datasets": 1})
+        doc = db["sessions"].find_one({"_id": _SESSION_ID}, {"_id": 0, "datasets": 1, "planning": 1})
         return doc if doc else None
     except Exception:
         return None

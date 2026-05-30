@@ -14,18 +14,27 @@ Los maestros de vendedores y rutas se derivan automáticamente de las ventas ERP
 ## Cómo usar
 
 1. Abrí una terminal en VS Code dentro de esta carpeta.
-2. Ejecutá:
+2. La primera vez, creá el entorno e instalá dependencias:
 
 ```bash
-python3 app.py
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
-3. Abrí `http://127.0.0.1:8765`
-4. Cargá o elegí los archivos para cada dataset.
-5. En `Venta por cliente` podés agregar varios archivos, por ejemplo uno por año.
-6. Elegí hoja y fila de encabezado por dataset o por archivo de ventas.
-7. Mapeá columnas según el tipo de archivo.
-8. Ejecutá el análisis.
+1. Ejecutá la app:
+
+```bash
+.venv/bin/python app.py
+```
+
+1. Abrí `http://127.0.0.1:8765`
+2. Cargá o elegí los archivos para cada dataset.
+3. En `Venta por cliente` podés agregar varios archivos, por ejemplo uno por año.
+4. Elegí hoja y fila de encabezado por dataset o por archivo de ventas.
+5. Mapeá columnas según el tipo de archivo.
+6. Ejecutá el análisis.
+
+Nota: el comando es `python3` todo junto, no `python 3`.
 
 ## Uso con ChessERP
 
@@ -52,13 +61,30 @@ CLICKHOUSE_MUTATION_TIMEOUT=180
 
 Si definís `APP_ADMIN_TOKEN`, la superficie `Admin` pedirá ese token para ejecutar syncs, uploads, limpieza de biblioteca, listar análisis y consultar errores operativos.
 
-2. En la tarjeta `Venta por cliente`, elegí `ChessERP`.
-3. Definí `Fecha desde` y `Fecha hasta`.
-4. Si querés persistir la información, usá `Sincronizar en MongoDB` o `Sincronizar en MongoDB + ClickHouse` según tu configuración.
-5. Esa sincronización guarda ventas ERP en MongoDB y, si ClickHouse está configurado, también escribe la versión compactada en `fact_sales_compact`.
+1. En la tarjeta `Venta por cliente`, elegí `ChessERP`.
+2. Definí `Fecha desde` y `Fecha hasta`.
+3. Si querés persistir la información, usá `Sincronizar en MongoDB` o `Sincronizar en MongoDB + ClickHouse` según tu configuración.
+4. Esa sincronización guarda ventas ERP en MongoDB y, si ClickHouse está configurado, también escribe la versión compactada en `fact_sales_compact`.
+5. Si el rango pedido ya estaba cubierto en la base persistida, la app reutiliza esa cobertura y no vuelve a consultar ChessERP para esos días; solo descarga huecos faltantes.
 6. Para trabajar sin depender del ERP ni del Excel, cambiá la fuente a `MongoDB` o `ClickHouse`.
 7. Si querés enriquecer todavía más el análisis, podés seguir cargando archivos manuales, pero ya no son obligatorios para ventas, artículos, vendedores y rutas.
 8. Ejecutá el análisis.
+
+También podés ejecutar la sync directo desde código, sin depender del navegador:
+
+```bash
+python3 scripts/erp_sync_range.py \
+  --from-date 2022-01-01 \
+  --to-date 2026-05-28 \
+  --force-refresh-sales \
+  --refresh-masters
+```
+
+Notas:
+
+- Si la fecha final pedida es futura respecto de la ejecución, el script la ajusta automáticamente a hoy.
+- MongoDB en este entorno tiene retención corta; el histórico completo queda pensado para ClickHouse.
+- Si no querés volver a consultar un rango ya cubierto, omití `--force-refresh-sales`.
 
 ## Persistencia en MongoDB
 
@@ -82,9 +108,11 @@ Si definís `APP_ADMIN_TOKEN`, la superficie `Admin` pedirá ese token para ejec
 La capa visual ahora queda separada en tres niveles:
 
 1. Informe base
+
 - KPIs, filtros, insights, rankings y planes de acción siguen usando el JSON consolidado del backend.
 
-2. Dashboard ejecutivo
+1. Dashboard ejecutivo
+
 - `Apache ECharts` renderiza las visualizaciones profesionales del tablero.
 - El dashboard toma el mismo resultado del análisis y lo expresa como:
   - evolución del período
@@ -92,7 +120,8 @@ La capa visual ahora queda separada en tres niveles:
   - mix por canal
   - mix por marca
 
-3. Mesa comercial
+1. Mesa comercial
+
 - `Tabulator` renderiza la tabla interactiva del período con:
   - filtros por columna
   - paginación
@@ -100,6 +129,7 @@ La capa visual ahora queda separada en tres niveles:
   - columnas movibles
 
 Flujo:
+
 - `MongoDB / ClickHouse / ERP`
 - `app.py`
 - `analyzer.py`
@@ -112,6 +142,12 @@ Flujo:
 - El selector `Mixto / Bultos / Pesos` gobierna también el dashboard.
 - En `Mixto`, el tablero muestra lectura dual.
 - En `Bultos` o `Pesos`, ECharts y Tabulator priorizan la métrica elegida.
+- La vista BI quedó separada en dashboards específicos:
+  - `Resumen`
+  - `Vendedores`
+  - `Clientes`
+  - `Histórico`
+  - `Oportunidades`
 - El dashboard se monta sobre:
   - `ECharts` desde CDN `jsDelivr`
   - `Tabulator 6.3.1` desde CDN `unpkg`
@@ -131,6 +167,14 @@ Esto permite elevar mucho la presentación sin reescribir el backend analítico.
 - Estima potencial de mejora por recuperación, cross-sell y ruteo
 - Genera proyecciones de la próxima ventana comparable
 - Muestra un dashboard ejecutivo con ECharts
+- Muestra dashboards tácticos y estructurales por vendedor, cliente, histórico y oportunidades
+- Calcula evolución mensual, MoM, YoY, promedios móviles, Pareto y HHI
+- Detecta oportunidades por cliente bajo benchmark, mix corto, canal con potencial y vendedor a desarrollar
+- Agrega sensibilidad de cierre mensual, benchmark del objetivo y alertas ejecutivas por rol
+- Permite definir metas globales y simular cierre por canal, vendedor o familia con persistencia en sesión
+- Agrega seguimiento mensual por responsable, con desvío contra plan y metas editables por vendedor
+- Permite cargar presupuesto mensual histórico y compararlo contra real, con apertura por canal, vendedor o familia
+- Suma un tablero de dirección con cierre ejecutivo automático, alertas priorizadas y agenda sugerida de decisión
 - Muestra una mesa comercial profesional con Tabulator
 - Redacta insights y planes de acción
 - Permite filtrar el informe por `Año`, `Mes`, `Familia`, `Línea`, `Proveedor`, `Fuerza de ventas`, `Ruta`, `Vendedor` y `Canal`

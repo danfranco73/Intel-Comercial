@@ -9,6 +9,11 @@ from analysis_engine import AnalysisEngine
 from kpi_generator import generate_kpis
 from viz_selector import build_all_viz
 from insight_writer import write_insights, insights_summary
+from bi.facts import enrich_sales_records
+from bi.consistency import evaluate_consistency
+from bi.focus_dashboards import build_focus_dashboards
+from bi.structural_dashboards import build_structural_dashboards
+from bi.tactical_month import build_tactical_month_dashboard
 
 
 DATASET_DEFINITIONS = {
@@ -24,11 +29,16 @@ DATASET_DEFINITIONS = {
             "route_description": {"label": "Ruta", "required": False},
             "seller_key": {"label": "Código vendedor", "required": False},
             "seller_name": {"label": "Nombre vendedor", "required": False},
+            "sales_scheme_key": {"label": "Código esquema de ventas", "required": False},
+            "sales_scheme_name": {"label": "Esquema de ventas", "required": False},
             "product_key": {"label": "Código artículo", "required": False},
             "product_name": {"label": "Descripción artículo", "required": False},
             "invoice": {"label": "Comprobante/Pedido", "required": False},
             "channel": {"label": "Canal", "required": False},
             "amount": {"label": "Importe", "required": True},
+            "amount_net": {"label": "Importe neto", "required": False},
+            "amount_final": {"label": "Importe final", "required": False},
+            "internal_taxes": {"label": "Impuestos internos", "required": False},
             "quantity": {"label": "Cantidad", "required": False},
         },
     },
@@ -82,11 +92,16 @@ KEYWORDS = {
         "route_description": ["ruta", "recorrido", "hoja de ruta", "descripcion ruta", "descripción ruta"],
         "seller_key": ["cod vendedor", "codigo vendedor", "id vendedor", "legajo vendedor"],
         "seller_name": ["vendedor", "asesor", "ejecutivo", "preventa", "rep"],
+        "sales_scheme_key": ["cod esquema", "codigo esquema", "id esquema", "id fuerza ventas", "id fuerza de ventas"],
+        "sales_scheme_name": ["esquema", "esquema ventas", "esquema de ventas", "fuerza ventas", "fuerza de ventas"],
         "product_key": ["cod articulo", "codigo articulo", "sku", "cod producto", "id producto"],
         "product_name": ["articulo", "artículo", "producto", "descripcion articulo", "descripción artículo"],
         "invoice": ["factura", "comprobante", "pedido", "documento", "ticket"],
         "channel": ["canal", "segmento", "subcanal"],
         "amount": ["importe", "venta", "total", "neto", "monto", "facturado"],
+        "amount_net": ["neto", "subtotal neto", "importe neto", "venta neta", "monto neto"],
+        "amount_final": ["final", "subtotal final", "importe final", "venta final", "total final", "facturado final"],
+        "internal_taxes": ["impuestos internos", "impuesto interno", "ii", "imp internos", "iibb interno"],
         "quantity": ["cantidad", "unidades", "qty", "cant"],
     },
     "articles": {
@@ -126,6 +141,7 @@ FILTER_DEFINITIONS = {
     "business_unit": {"label": "Unidad de negocio", "kind": "text"},
     "supplier": {"label": "Proveedor", "kind": "text"},
     "product_name": {"label": "Producto", "kind": "text"},
+    "sales_scheme_name": {"label": "Esquema de ventas", "kind": "text"},
     "sales_force": {"label": "Fuerza de ventas", "kind": "text"},
     "route_description": {"label": "Ruta", "kind": "text"},
     "seller_name": {"label": "Vendedor", "kind": "text"},
@@ -202,7 +218,7 @@ def analyze_sources(sources, mapping, filters=None):
     return analyze_datasets(datasets, filters=filters)
 
 
-def analyze_datasets(datasets, filters=None, supplier_focus=None):
+def load_bi_context(datasets):
     if "sales" not in datasets or not datasets["sales"]:
         raise ValueError("La venta por cliente es obligatoria para analizar")
 
@@ -218,21 +234,7 @@ def analyze_datasets(datasets, filters=None, supplier_focus=None):
         loaded[dataset_type] = load_dataset(dataset_type, source)
 
     sales_records = loaded["sales"]["records"]
-    article_map = {row["product_key"]: row for row in loaded.get("articles", {}).get("records", []) if row.get("product_key")}
-    route_seller_map = {
-        normalize_text(row["seller_name"]): row
-        for row in loaded.get("routes", {}).get("records", [])
-        if row.get("seller_name")
-    }
-    seller_key_map = {row["seller_key"]: row for row in loaded.get("sellers", {}).get("records", []) if row.get("seller_key")}
-    seller_name_map = {normalize_text(row["seller_name"]): row for row in loaded.get("sellers", {}).get("records", []) if row.get("seller_name")}
-    seller_route_map = {
-        normalize_text(row["route_description"]): row
-        for row in loaded.get("sellers", {}).get("records", [])
-        if row.get("route_description")
-    }
-
-    enriched_sales = enrich_sales(sales_records, article_map, route_seller_map, seller_key_map, seller_name_map, seller_route_map)
+    enriched_sales = enrich_sales_records(sales_records, loaded)
     if not enriched_sales:
         raise ValueError("No quedaron ventas válidas para analizar")
 
@@ -242,6 +244,61 @@ def analyze_datasets(datasets, filters=None, supplier_focus=None):
         sales_context["selectedStart"],
         sales_context["selectedEnd"],
     )
+    consistency = evaluate_consistency(loaded, enriched_sales, selected_unfiltered_sales, sales_context)
+    return {
+        "loaded": loaded,
+        "enrichedSales": enriched_sales,
+        "salesContext": sales_context,
+        "selectedUniverse": selected_unfiltered_sales,
+        "consistency": consistency,
+    }
+
+
+def build_consistency_report(datasets):
+    context = load_bi_context(datasets)
+    return {
+        "consistency": context["consistency"],
+        "meta": {
+            "periodStart": context["salesContext"]["selectedStart"].isoformat(),
+            "periodEnd": context["salesContext"]["selectedEnd"].isoformat(),
+            "datasets": build_dataset_meta(context["loaded"]),
+        },
+    }
+
+
+def build_tactical_month_report(datasets, filters=None, supplier_focus=None, planning=None):
+    context = load_bi_context(datasets)
+    enriched_sales = context["enrichedSales"]
+    sales_context = context["salesContext"]
+    normalized_filters = remove_noop_filters(filters or {}, context["selectedUniverse"], sales_context)
+    tactical_filters = remove_filter_field(remove_filter_field(normalized_filters, "year"), "month")
+    effective_filters = merge_supplier_focus_filter(tactical_filters, supplier_focus)
+    applied_filters, filtered_sales = apply_filters(enriched_sales, effective_filters)
+    if not filtered_sales:
+        effective_filters = relax_broad_filters(effective_filters, context["selectedUniverse"], sales_context)
+        applied_filters, filtered_sales = apply_filters(enriched_sales, effective_filters)
+        if not filtered_sales:
+            raise ValueError("No quedaron ventas para construir el dashboard ejecutivo del mes.")
+    filtered_sales.sort(key=lambda item: item["date"])
+    tactical = build_tactical_month_dashboard(filtered_sales, sales_context["selectedEnd"], planning=planning)
+    return {
+        "tacticalMonth": tactical,
+        "meta": {
+            "periodStart": sales_context["selectedStart"].isoformat(),
+            "periodEnd": sales_context["selectedEnd"].isoformat(),
+            "datasets": build_dataset_meta(context["loaded"]),
+        },
+        "appliedFilters": applied_filters,
+    }
+
+
+def analyze_datasets(datasets, filters=None, supplier_focus=None, planning=None):
+    context = load_bi_context(datasets)
+    loaded = context["loaded"]
+    enriched_sales = context["enrichedSales"]
+    sales_context = context["salesContext"]
+    selected_unfiltered_sales = context["selectedUniverse"]
+    consistency = context["consistency"]
 
     normalized_filters = remove_noop_filters(filters or {}, selected_unfiltered_sales, sales_context)
     base_filters = remove_filter_field(normalized_filters, "supplier")
@@ -369,10 +426,27 @@ def analyze_datasets(datasets, filters=None, supplier_focus=None):
     opportunities = build_opportunities(client_stats, sales_force_stats, family_stats, route_stats, coverage, current_period)
     alerts = build_alerts(summary, coverage, opportunities, seller_stats, sales_force_stats, family_stats, brand_stats, channel_stats, sales_context)
     semaphores = build_semaphores(summary, coverage, forecast, sales_context)
-    charts = build_charts(current_period, sales_force_stats, seller_stats, brand_stats, channel_stats, coverage, forecast)
+    charts = build_charts(current_period, sales_force_stats, seller_stats, brand_stats, channel_stats, coverage, forecast, sales_context)
+    interactive_report = build_interactive_filter_report(current_period, sales_context)
     rankings = build_rankings(client_stats, seller_stats, sales_force_stats, route_stats, brand_stats, business_unit_stats, channel_stats, opportunities)
     insights = build_insights(summary, coverage, forecast, opportunities, alerts, sales_context)
     action_plan = build_action_plan(alerts, opportunities, forecast, coverage, sales_context)
+    dashboards = build_focus_dashboards(current_period, previous_period, client_stats, opportunities, sales_context)
+    dashboards.update(
+        build_structural_dashboards(
+            filtered_sales,
+            current_period,
+            previous_period,
+            client_stats,
+            seller_stats,
+            family_stats,
+            brand_stats,
+            business_unit_stats,
+            channel_stats,
+            sales_context,
+            planning=planning,
+        )
+    )
     available_filters = build_faceted_available_filters(selected_unfiltered_sales, applied_filters, sales_context)
     schema = detect_schema(current_period)
     tasks = resolve_tasks(schema)
@@ -410,6 +484,7 @@ def analyze_datasets(datasets, filters=None, supplier_focus=None):
         "dynamicInsights": dyn_insights,
         "insightsSummary": insights_summary(dyn_insights),
         "summary": summary,
+        "consistency": consistency,
         "coverage": coverage,
         "supplierFocus": supplier_focus_data,
         "ratios": ratios,
@@ -418,9 +493,11 @@ def analyze_datasets(datasets, filters=None, supplier_focus=None):
         "alerts": alerts,
         "semaphores": semaphores,
         "charts": charts,
+        "interactiveReport": interactive_report,
         "rankings": rankings,
         "insights": insights,
         "actionPlan": action_plan,
+        "dashboards": dashboards,
         "availableFilters": available_filters,
         "appliedFilters": applied_filters,
     }
@@ -604,6 +681,9 @@ def normalize_sales_row(row, mapping, row_number, source_name):
     month_value = parse_month(cell_value(row, mapping.get("month")))
     date_value = parse_date(raw_date) or build_period_date(year_value, month_value)
     amount = parse_number(cell_value(row, mapping.get("amount")))
+    amount_net = parse_number(cell_value(row, mapping.get("amount_net")))
+    amount_final = parse_number(cell_value(row, mapping.get("amount_final")))
+    internal_taxes = parse_number(cell_value(row, mapping.get("internal_taxes")))
     client_key = standard_key(cell_value(row, mapping.get("client_key")))
     client_name = clean_text(cell_value(row, mapping.get("client_name"))) or client_key
     if not date_value or amount is None or not client_key:
@@ -614,6 +694,8 @@ def normalize_sales_row(row, mapping, row_number, source_name):
         month_value = date_value.month
     seller_key = standard_key(cell_value(row, mapping.get("seller_key")))
     seller_name = clean_text(cell_value(row, mapping.get("seller_name")))
+    sales_scheme_key = standard_key(cell_value(row, mapping.get("sales_scheme_key")))
+    sales_scheme_name = clean_text(cell_value(row, mapping.get("sales_scheme_name")))
     route_description = clean_text(cell_value(row, mapping.get("route_description")))
     product_key = standard_key(cell_value(row, mapping.get("product_key")))
     product_name = clean_text(cell_value(row, mapping.get("product_name")))
@@ -627,11 +709,17 @@ def normalize_sales_row(row, mapping, row_number, source_name):
         "route_description": route_description,
         "seller_key": seller_key,
         "seller_name": seller_name,
+        "sales_scheme_key": sales_scheme_key,
+        "sales_scheme_name": sales_scheme_name,
         "product_key": product_key,
         "product_name": product_name,
         "invoice": invoice,
         "channel": clean_text(cell_value(row, mapping.get("channel"))),
         "amount": amount,
+        "amount_net": amount_net if amount_net is not None else amount,
+        "amount_final": amount_final if amount_final is not None else amount,
+        "internal_taxes": internal_taxes or 0,
+        "amount_net_internal": (amount_net if amount_net is not None else amount) + (internal_taxes or 0),
         "quantity": parse_number(cell_value(row, mapping.get("quantity"))) or 0,
         "source": source_name,
     }
@@ -684,46 +772,22 @@ def normalize_seller_row(row, mapping, row_number, source_name):
 
 
 def enrich_sales(sales_records, article_map, route_seller_map, seller_key_map, seller_name_map, seller_route_map):
-    enriched = []
-    for row in sales_records:
-        product_key = row.get("product_key")
-        seller_key = row.get("seller_key")
-        route_description = row.get("route_description")
-        seller_name_raw = row.get("seller_name")
-        article = article_map.get(product_key, {})
-        seller_master = seller_key_map.get(seller_key, {}) if seller_key else {}
-        if not seller_master and route_description:
-            seller_master = seller_route_map.get(normalize_text(route_description), {})
-        if not seller_master and seller_name_raw:
-            seller_master = seller_name_map.get(normalize_text(seller_name_raw), {})
-        seller_name = first_non_empty(seller_name_raw, seller_master.get("seller_name"), seller_key, "Sin vendedor")
-        route = route_seller_map.get(normalize_text(seller_name), {})
-        sales_force = first_non_empty(row.get("sales_force"), route.get("sales_force"), seller_master.get("sales_force"), "Sin fuerza de ventas")
-        route_name = first_non_empty(route_description, route.get("route_description"), seller_master.get("route_description"), "Sin ruta")
-        enriched.append(
-            {
-                **row,
-                "client": row.get("client_name") or row.get("client_key"),
-                "seller_name": seller_name,
-                "sales_force": sales_force,
-                "family": first_non_empty(article.get("family"), "Sin familia"),
-                "line": first_non_empty(article.get("line"), "Sin línea"),
-                "brand": first_non_empty(article.get("brand"), "Sin marca"),
-                "business_unit": first_non_empty(article.get("business_unit"), "Sin unidad de negocio"),
-                "segment": first_non_empty(article.get("segment"), "Sin segmento"),
-                "division": first_non_empty(article.get("division"), "Sin división"),
-                "supplier": first_non_empty(article.get("supplier"), "Sin proveedor"),
-                "flavor": first_non_empty(article.get("flavor"), "Sin sabor"),
-                "uxb": first_non_empty(article.get("uxb"), "Sin UxB"),
-                "caliber": first_non_empty(article.get("caliber"), "Sin calibre"),
-                "channel": first_non_empty(row["channel"], "Sin canal"),
-                "route_description": route_name,
-                "has_article_match": bool(article),
-                "has_route_match": bool(route or row.get("route_description")),
-                "has_seller_match": bool(seller_master or seller_key or seller_name_raw),
-            }
-        )
-    return enriched
+    seller_records = {}
+    for source_map in (seller_key_map, seller_name_map, seller_route_map):
+        for record in source_map.values():
+            marker = (
+                record.get("seller_key")
+                or record.get("seller_name")
+                or record.get("route_description")
+            )
+            if marker:
+                seller_records[marker] = record
+    loaded = {
+        "articles": {"records": list(article_map.values())},
+        "routes": {"records": list(route_seller_map.values())},
+        "sellers": {"records": list(seller_records.values())},
+    }
+    return enrich_sales_records(sales_records, loaded)
 
 
 def aggregate_clients(records, current_start, current_end, previous_start=None, previous_end=None):
@@ -937,11 +1001,19 @@ def build_ratios(records, client_stats, seller_stats, sales_force_stats, family_
     total_units = sum(item.get("quantity", 0) or 0 for item in records)
     top_sales_force_share = concentration_share(sales_force_stats, 3, "sales")
     top_seller_share = concentration_share(seller_stats, 3, "sales")
+    top10_share = concentration_share(client_stats, 10, "sales12m")
+    dormant_clients = sum(1 for item in client_stats.values() if item["status"] == "Dormido")
+    reactivable_clients = sum(1 for item in client_stats.values() if item["status"] == "Reactivable")
+    lost_clients = sum(1 for item in client_stats.values() if item["status"] == "Perdido")
+    recurring_clients = sum(1 for item in client_stats.values() if item["monthsActive"] >= 4)
+    client_family_total = sum(item["families"] for item in client_stats.values())
     return {
         "volumeModeActive": total_units > 0,
         "salesPerClient": round(total_sales / total_clients, 2),
+        "salesPerBuyingClient": round(total_sales / max(buying_clients, 1), 2),
         "salesPerSeller": round(total_sales / total_sellers, 2),
         "unitsPerClient": round(total_units / total_clients, 2),
+        "unitsPerBuyingClient": round(total_units / max(buying_clients, 1), 2),
         "unitsPerSeller": round(total_units / total_sellers, 2),
         "clientsPerSeller": round(total_clients / total_sellers, 1),
         "ordersPerSeller": round(safe_orders / total_sellers, 1),
@@ -952,19 +1024,33 @@ def build_ratios(records, client_stats, seller_stats, sales_force_stats, family_
         "purchaseFrequencyMonthly": round(total_orders / month_count / max(buying_clients, 1), 2),
         "purchaseFrequencyUniverseMonthly": round(total_orders / month_count / total_clients, 2),
         "buyingClients": buying_clients,
+        "buyingClientRatioPct": round(buying_clients / total_clients * 100, 1),
         "avgOrderValue": round(total_sales / safe_orders, 2),
         "avgUnitsPerOrder": round(total_units / safe_orders, 2),
         "avgUnitPrice": round(total_sales / max(total_units, 1), 2),
         "top3SalesForcesSharePct": round(top_sales_force_share, 1),
         "top3SellersSharePct": round(top_seller_share, 1),
+        "top10ClientsSharePct": round(top10_share, 1),
         "topBrandSharePct": round(concentration_share(brand_stats, 1, "sales"), 1),
         "topBusinessUnitSharePct": round(concentration_share(business_unit_stats, 1, "sales"), 1),
         "topChannelSharePct": round(concentration_share(channel_stats, 1, "sales"), 1),
-        "familyBreadthPerClient": round(sum(item["families"] for item in client_stats.values()) / total_clients, 2),
+        "familyBreadthPerClient": round(client_family_total / total_clients, 2),
+        "familyBreadthPerBuyingClient": round(client_family_total / max(buying_clients, 1), 2),
+        "dormantClients": dormant_clients,
+        "reactivableClients": reactivable_clients,
+        "lostClients": lost_clients,
+        "recurringClients": recurring_clients,
+        "dormantRatioPct": round(dormant_clients / total_clients * 100, 1),
+        "reactivableRatioPct": round(reactivable_clients / total_clients * 100, 1),
+        "lostRatioPct": round(lost_clients / total_clients * 100, 1),
+        "recurringRatioPct": round(recurring_clients / total_clients * 100, 1),
         "mappedSalesPct": round(
             (total_sales - coverage["salesWithoutArticle"] - coverage["salesWithoutRoute"]) / max(total_sales, 1) * 100,
             1,
         ),
+        "routeLeakagePct": round(100 - coverage["routeCoveragePct"], 1),
+        "articleLeakagePct": round(100 - coverage["articleCoveragePct"], 1),
+        "sellerLeakagePct": round(100 - coverage["sellerCoveragePct"], 1),
     }
 
 
@@ -1003,7 +1089,7 @@ def build_supplier_focus(records, previous_records, period_context, supplier_nam
         if normalize_text(item.get("supplier")) == supplier_key
     ]
 
-    total_active_clients = len({item["client_key"] for item in records if clean_text(item.get("client_key"))})
+    period_unique_clients = len({item["client_key"] for item in records if clean_text(item.get("client_key"))})
     supplier_clients = len({item["client_key"] for item in current_supplier_records if clean_text(item.get("client_key"))})
     total_sales = sum(item["amount"] for item in records)
     supplier_sales = sum(item["amount"] for item in current_supplier_records)
@@ -1037,7 +1123,8 @@ def build_supplier_focus(records, previous_records, period_context, supplier_nam
             {
                 "label": label,
                 "supplierClients": month_supplier_clients,
-                "totalActiveClients": month_active_clients,
+                "monthlyActiveClients": month_active_clients,
+                "periodUniqueClients": period_unique_clients,
                 "coveragePct": round(month_supplier_clients / max(month_active_clients, 1) * 100, 1),
             }
         )
@@ -1045,9 +1132,14 @@ def build_supplier_focus(records, previous_records, period_context, supplier_nam
     latest_coverage = monthly_coverage[-1] if monthly_coverage else {
         "label": period_context["selectedEnd"].strftime("%Y-%m"),
         "supplierClients": supplier_clients,
-        "totalActiveClients": total_active_clients,
-        "coveragePct": round(supplier_clients / max(total_active_clients, 1) * 100, 1),
+        "monthlyActiveClients": period_unique_clients,
+        "periodUniqueClients": period_unique_clients,
+        "coveragePct": round(supplier_clients / max(period_unique_clients, 1) * 100, 1),
     }
+    avg_monthly_active_clients = round(
+        sum(item["monthlyActiveClients"] for item in monthly_coverage) / max(len(monthly_coverage), 1),
+        1,
+    ) if monthly_coverage else float(period_unique_clients)
 
     return {
         "selected": True,
@@ -1058,18 +1150,22 @@ def build_supplier_focus(records, previous_records, period_context, supplier_nam
             "units": round(supplier_units, 2),
             "clients": supplier_clients,
             "orders": supplier_orders,
-            "totalActiveClients": total_active_clients,
+            "totalActiveClients": latest_coverage["monthlyActiveClients"],
+            "periodUniqueClients": period_unique_clients,
+            "avgMonthlyActiveClients": avg_monthly_active_clients,
         },
         "ratios": {
-            "bultosCliente": round(supplier_units / max(total_active_clients, 1), 2),
-            "facturacionCliente": round(supplier_sales / max(total_active_clients, 1), 2),
-            "penetracionPct": round(supplier_clients / max(total_active_clients, 1) * 100, 1),
-            "rotacion": round(supplier_units / max(total_active_clients, 1), 2),
+            "bultosCliente": round(supplier_units / max(period_unique_clients, 1), 2),
+            "facturacionCliente": round(supplier_sales / max(period_unique_clients, 1), 2),
+            "penetracionPct": latest_coverage["coveragePct"],
+            "rotacion": round(supplier_units / max(period_unique_clients, 1), 2),
             "mixMarcaPct": round(supplier_sales / max(total_sales, 1) * 100, 1),
             "ticket": round(supplier_sales / max(supplier_orders, 1), 2),
             "growthPct": pct_change(supplier_sales_current_month, supplier_sales_previous_month),
-            "clientesCompradores": supplier_clients,
-            "clientesActivosTotales": total_active_clients,
+            "clientesCompradores": latest_coverage["supplierClients"],
+            "clientesActivosTotales": latest_coverage["monthlyActiveClients"],
+            "clientesCompradoresPeriodo": supplier_clients,
+            "clientesUnicosPeriodo": period_unique_clients,
             "facturacionMesActual": round(supplier_sales_current_month, 2),
             "facturacionMesAnterior": round(supplier_sales_previous_month, 2),
             "mesActual": trend_labels[-1],
@@ -1196,7 +1292,8 @@ def build_semaphores(summary, coverage, forecast, period_context):
     ]
 
 
-def build_charts(records, sales_force_stats, seller_stats, brand_stats, channel_stats, coverage, forecast):
+def build_charts(records, sales_force_stats, seller_stats, brand_stats, channel_stats, coverage, forecast, period_context):
+    trend_labels = month_labels_between(period_context["selectedStart"], period_context["selectedEnd"]) if period_context else []
     return {
         "salesByMonthMoney": forecast["series"],
         "salesByMonthUnits": forecast["seriesUnits"],
@@ -1210,7 +1307,109 @@ def build_charts(records, sales_force_stats, seller_stats, brand_stats, channel_
         "brandUnits": top_items(brand_stats, "quantity", "brand"),
         "channelMoney": top_items(channel_stats, "sales", "channel"),
         "channelUnits": top_items(channel_stats, "quantity", "channel"),
+        "sellerMonthlyMoney": build_dimension_monthly_series(records, "seller_name", "seller", "amount", trend_labels, missing_label="Sin vendedor"),
+        "sellerMonthlyUnits": build_dimension_monthly_series(records, "seller_name", "seller", "quantity", trend_labels, missing_label="Sin vendedor"),
+        "brandMonthlyMoney": build_dimension_monthly_series(records, "brand", "brand", "amount", trend_labels, missing_label="Sin marca"),
+        "brandMonthlyUnits": build_dimension_monthly_series(records, "brand", "brand", "quantity", trend_labels, missing_label="Sin marca"),
+        "channelMonthlyMoney": build_dimension_monthly_series(records, "channel", "channel", "amount", trend_labels, missing_label="Sin canal"),
+        "channelMonthlyUnits": build_dimension_monthly_series(records, "channel", "channel", "quantity", trend_labels, missing_label="Sin canal"),
     }
+
+
+INTERACTIVE_REPORT_METRICS = {
+    "quantity": {"label": "Volumen", "format": "number"},
+    "amount_net": {"label": "Pesos netos", "format": "money"},
+    "amount_final": {"label": "Pesos finales", "format": "money"},
+    "amount_net_internal": {"label": "Neto + impuestos internos", "format": "money"},
+}
+
+INTERACTIVE_REPORT_DIMENSIONS = [
+    "family",
+    "line",
+    "brand",
+    "business_unit",
+    "supplier",
+    "sales_scheme_name",
+    "seller_name",
+    "sales_force",
+    "route_description",
+    "channel",
+]
+
+
+def build_interactive_filter_report(records, period_context):
+    labels = month_labels_between(period_context["selectedStart"], period_context["selectedEnd"]) if period_context else sorted({item["period"] for item in records})
+    metrics = []
+    for metric, config in INTERACTIVE_REPORT_METRICS.items():
+        if any(metric_value(item, metric) for item in records) or metric != "quantity":
+            metrics.append({"key": metric, **config})
+    if not metrics:
+        metrics = [{"key": "amount_final", **INTERACTIVE_REPORT_METRICS["amount_final"]}]
+
+    dimensions = []
+    for field in INTERACTIVE_REPORT_DIMENSIONS:
+        values = {dimension_value(item, field) for item in records}
+        values.discard("")
+        if values:
+            dimensions.append({"key": field, "label": FILTER_DEFINITIONS.get(field, {}).get("label", field)})
+
+    return {
+        "labels": labels,
+        "metrics": metrics,
+        "dimensions": dimensions,
+        "totals": [
+            {
+                "metric": metric["key"],
+                "series": [{"label": label, "value": round(sum(metric_value(item, metric["key"]) for item in records if item["period"] == label), 2)} for label in labels],
+            }
+            for metric in metrics
+        ],
+        "byDimension": {
+            field: build_interactive_dimension_series(records, field, labels, metrics)
+            for field in [item["key"] for item in dimensions]
+        },
+    }
+
+
+def build_interactive_dimension_series(records, field, labels, metrics):
+    result = {}
+    for metric in metrics:
+        metric_key = metric["key"]
+        totals = defaultdict(float)
+        monthly = defaultdict(lambda: defaultdict(float))
+        for item in records:
+            label = item["period"]
+            dimension = dimension_value(item, field)
+            value = metric_value(item, metric_key)
+            totals[dimension] += value
+            monthly[dimension][label] += value
+        top_dimensions = [item[0] for item in sorted(totals.items(), key=lambda pair: pair[1], reverse=True)[:12]]
+        result[metric_key] = [
+            {
+                "name": dimension,
+                "total": round(totals[dimension], 2),
+                "data": [round(monthly[dimension].get(label, 0), 2) for label in labels],
+            }
+            for dimension in top_dimensions
+        ]
+    return result
+
+
+def dimension_value(item, field):
+    value = item.get(field)
+    return str(value or FILTER_DEFINITIONS.get(field, {}).get("missingLabel") or f"Sin {FILTER_DEFINITIONS.get(field, {}).get('label', field).lower()}").strip()
+
+
+def metric_value(item, metric):
+    if metric == "amount_net":
+        return float(item.get("amount_net") if item.get("amount_net") is not None else item.get("amount") or 0)
+    if metric == "amount_final":
+        return float(item.get("amount_final") if item.get("amount_final") is not None else item.get("amount") or 0)
+    if metric == "amount_net_internal":
+        if item.get("amount_net_internal") is not None:
+            return float(item.get("amount_net_internal") or 0)
+        return metric_value(item, "amount_net") + float(item.get("internal_taxes") or 0)
+    return float(item.get(metric) or 0)
 
 
 def build_rankings(client_stats, seller_stats, sales_force_stats, route_stats, brand_stats, business_unit_stats, channel_stats, opportunities):
@@ -1660,6 +1859,37 @@ def top_items(items, metric, label, abs_sort=False):
     else:
         ordered = sorted(items.values(), key=lambda item: item[metric], reverse=True)
     return [{"label": item[label], "value": round(item[metric], 2)} for item in ordered[:8]]
+
+
+def build_dimension_monthly_series(records, key, label_key, metric_field, labels=None, missing_label=None, limit=8):
+    if not records:
+        return []
+    labels = list(labels or sorted({item["date"].strftime("%Y-%m") for item in records}))
+    grouped_totals = defaultdict(float)
+    grouped_monthly = defaultdict(lambda: defaultdict(float))
+
+    for item in records:
+        name = item.get(key) or missing_label or f"Sin {label_key}"
+        value = item.get(metric_field, 0) if metric_field != "amount" else item.get("amount", 0)
+        value = float(value or 0)
+        grouped_totals[name] += value
+        grouped_monthly[name][item["date"].strftime("%Y-%m")] += value
+
+    ordered = sorted(grouped_totals.items(), key=lambda item: item[1], reverse=True)[:limit]
+    result = []
+    for name, total in ordered:
+        result.append(
+            {
+                "label": name,
+                "value": round(total, 2),
+                label_key: name,
+                "series": [
+                    {"label": label, "value": round(grouped_monthly[name].get(label, 0), 2)}
+                    for label in labels
+                ],
+            }
+        )
+    return result
 
 
 def concentration_share(items, limit, metric):

@@ -31,10 +31,18 @@ CLICKHOUSE_SALES_COLUMNS = [
     "client_name",
     "route_description",
     "seller_key",
+    "seller_name",
+    "sales_scheme_key",
+    "sales_scheme_name",
+    "sales_force",
     "product_key",
     "invoice",
     "channel",
     "amount",
+    "amount_net",
+    "amount_final",
+    "internal_taxes",
+    "amount_net_internal",
     "quantity",
     "sync_run_id",
     "origin",
@@ -113,10 +121,18 @@ def _ensure_schema():
             client_name String,
             route_description String,
             seller_key String,
+            seller_name String,
+            sales_scheme_key String,
+            sales_scheme_name String,
+            sales_force String,
             product_key String,
             invoice String,
             channel String,
             amount Float64,
+            amount_net Float64,
+            amount_final Float64,
+            internal_taxes Float64,
+            amount_net_internal Float64,
             quantity Float64,
             sync_run_id String,
             origin LowCardinality(String),
@@ -131,6 +147,14 @@ def _ensure_schema():
     client.command(
         f"ALTER TABLE {_qualified_table()} ADD COLUMN IF NOT EXISTS sync_run_id String DEFAULT ''"
     )
+    for column in ("seller_name", "sales_scheme_key", "sales_scheme_name", "sales_force"):
+        client.command(f"ALTER TABLE {_qualified_table()} ADD COLUMN IF NOT EXISTS {column} String DEFAULT ''")
+    for column in ("amount_net", "amount_final", "internal_taxes", "amount_net_internal"):
+        client.command(
+            f"ALTER TABLE {_qualified_table()} ADD COLUMN IF NOT EXISTS {column} Float64 DEFAULT amount"
+            if column != "internal_taxes"
+            else f"ALTER TABLE {_qualified_table()} ADD COLUMN IF NOT EXISTS {column} Float64 DEFAULT 0"
+        )
     _schema_ready = True
 
 
@@ -153,6 +177,7 @@ def _compact_records(records):
             str(record.get("invoice") or record.get("document_key") or ""),
             str(record.get("product_key") or ""),
             str(record.get("seller_key") or ""),
+            str(record.get("sales_scheme_key") or ""),
             str(record.get("route_description") or ""),
             str(record.get("channel") or ""),
         )
@@ -166,15 +191,27 @@ def _compact_records(records):
                 "client_name": str(record.get("client_name") or record.get("client_key") or ""),
                 "route_description": str(record.get("route_description") or ""),
                 "seller_key": str(record.get("seller_key") or ""),
+                "seller_name": str(record.get("seller_name") or ""),
+                "sales_scheme_key": str(record.get("sales_scheme_key") or ""),
+                "sales_scheme_name": str(record.get("sales_scheme_name") or record.get("sales_force") or ""),
+                "sales_force": str(record.get("sales_force") or record.get("sales_scheme_name") or ""),
                 "product_key": str(record.get("product_key") or ""),
                 "invoice": str(record.get("invoice") or record.get("document_key") or ""),
                 "channel": str(record.get("channel") or ""),
                 "amount": float(record.get("amount") or 0),
+                "amount_net": float(record.get("amount_net") if record.get("amount_net") is not None else record.get("amount") or 0),
+                "amount_final": float(record.get("amount_final") if record.get("amount_final") is not None else record.get("amount") or 0),
+                "internal_taxes": float(record.get("internal_taxes") or 0),
+                "amount_net_internal": float(record.get("amount_net_internal") if record.get("amount_net_internal") is not None else (record.get("amount_net") if record.get("amount_net") is not None else record.get("amount") or 0) + (record.get("internal_taxes") or 0)),
                 "quantity": float(record.get("quantity") or 0),
             }
             grouped[key] = current
             continue
         current["amount"] = round(current["amount"] + float(record.get("amount") or 0), 6)
+        current["amount_net"] = round(current["amount_net"] + float(record.get("amount_net") if record.get("amount_net") is not None else record.get("amount") or 0), 6)
+        current["amount_final"] = round(current["amount_final"] + float(record.get("amount_final") if record.get("amount_final") is not None else record.get("amount") or 0), 6)
+        current["internal_taxes"] = round(current["internal_taxes"] + float(record.get("internal_taxes") or 0), 6)
+        current["amount_net_internal"] = round(current["amount_net_internal"] + float(record.get("amount_net_internal") if record.get("amount_net_internal") is not None else (record.get("amount_net") if record.get("amount_net") is not None else record.get("amount") or 0) + (record.get("internal_taxes") or 0)), 6)
         current["quantity"] = round(current["quantity"] + float(record.get("quantity") or 0), 6)
         if not current["client_name"]:
             current["client_name"] = str(record.get("client_name") or record.get("client_key") or "")
@@ -230,10 +267,18 @@ def sync_erp_sales_clickhouse(records, fecha_desde, fecha_hasta, origin="manual"
                 item["client_name"],
                 item["route_description"],
                 item["seller_key"],
+                item["seller_name"],
+                item["sales_scheme_key"],
+                item["sales_scheme_name"],
+                item["sales_force"],
                 item["product_key"],
                 item["invoice"],
                 item["channel"],
                 float(item["amount"]),
+                float(item["amount_net"]),
+                float(item["amount_final"]),
+                float(item["internal_taxes"]),
+                float(item["amount_net_internal"]),
                 float(item["quantity"]),
                 sync_run_id,
                 origin,
@@ -291,10 +336,18 @@ def load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta):
             client_name,
             route_description,
             seller_key,
+            seller_name,
+            sales_scheme_key,
+            sales_scheme_name,
+            sales_force,
             product_key,
             invoice,
             channel,
             amount,
+            amount_net,
+            amount_final,
+            internal_taxes,
+            amount_net_internal,
             quantity
         FROM {_qualified_table()}
         WHERE date >= toDate('{fecha_desde}')
@@ -316,13 +369,19 @@ def load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta):
                 "client_name": row[4],
                 "route_description": row[5],
                 "seller_key": row[6],
-                "seller_name": "",
-                "sales_force": "",
-                "product_key": row[7],
-                "invoice": row[8],
-                "channel": row[9],
-                "amount": float(row[10]),
-                "quantity": float(row[11]),
+                "seller_name": row[7],
+                "sales_scheme_key": row[8],
+                "sales_scheme_name": row[9],
+                "sales_force": row[10],
+                "product_key": row[11],
+                "invoice": row[12],
+                "channel": row[13],
+                "amount": float(row[14]),
+                "amount_net": float(row[15]),
+                "amount_final": float(row[16]),
+                "internal_taxes": float(row[17]),
+                "amount_net_internal": float(row[18]),
+                "quantity": float(row[19]),
                 "source": "ClickHouse",
             }
         )

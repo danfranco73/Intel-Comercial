@@ -50,6 +50,7 @@ FIELD_ROLES = {
     "client_name":       ("DIMENSIÓN",      "DIM_CLIENTE"),
     # Dimensiones de vendedor / territorio
     "seller_name":       ("DIMENSIÓN",      "DIM_VENDEDOR"),
+    "sales_scheme_name": ("DIMENSIÓN",      "DIM_ESQUEMA_VENTAS"),
     "sales_force":       ("DIMENSIÓN",      "DIM_FUERZA"),
     "route_description": ("DIMENSIÓN",      "DIM_RUTA"),
     # Dimensiones de producto
