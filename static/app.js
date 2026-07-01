@@ -17,7 +17,7 @@ const state = {
   biConsistency: { pending: false, report: null, error: "", checkedAt: "" },
   adminAuth: { token: readStoredAdminToken() },
   reportView: { metricMode: readStoredMetricMode(), dashboardView: readStoredDashboardView(), lastData: null },
-  interactiveReport: { metric: "quantity", dimension: "family" },
+  interactiveReport: { metric: "quantity", dimension: "family", chartType: "line" },
   planning: null,
   planningDirty: false,
 };
@@ -2024,9 +2024,10 @@ function renderInteractiveReport(data) {
   const report = data.interactiveReport || {};
   const metricSelect = document.getElementById("interactiveMetricSelect");
   const dimensionSelect = document.getElementById("interactiveDimensionSelect");
+  const chartTypeSelect = document.getElementById("interactiveChartTypeSelect");
   const summaryNode = document.getElementById("interactiveReportSummary");
   const slicersNode = document.getElementById("interactiveSlicers");
-  if (!metricSelect || !dimensionSelect || !summaryNode || !slicersNode) {
+  if (!metricSelect || !dimensionSelect || !chartTypeSelect || !summaryNode || !slicersNode) {
     return;
   }
   const metrics = report.metrics || [];
@@ -2042,8 +2043,12 @@ function renderInteractiveReport(data) {
   if (!dimensions.some((item) => item.key === state.interactiveReport.dimension)) {
     state.interactiveReport.dimension = dimensions[0].key;
   }
+  if (!["line", "bar", "pie"].includes(state.interactiveReport.chartType)) {
+    state.interactiveReport.chartType = "line";
+  }
   metricSelect.innerHTML = metrics.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === state.interactiveReport.metric ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
   dimensionSelect.innerHTML = dimensions.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === state.interactiveReport.dimension ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+  chartTypeSelect.value = state.interactiveReport.chartType;
   metricSelect.onchange = () => {
     state.interactiveReport.metric = metricSelect.value;
     renderInteractiveReport(data);
@@ -2052,13 +2057,18 @@ function renderInteractiveReport(data) {
     state.interactiveReport.dimension = dimensionSelect.value;
     renderInteractiveReport(data);
   };
+  chartTypeSelect.onchange = () => {
+    state.interactiveReport.chartType = chartTypeSelect.value;
+    renderInteractiveReport(data);
+  };
 
   const metric = metrics.find((item) => item.key === state.interactiveReport.metric) || metrics[0];
   const dimension = dimensions.find((item) => item.key === state.interactiveReport.dimension) || dimensions[0];
   const series = report.byDimension?.[dimension.key]?.[metric.key] || [];
+  const chartTypeLabel = chartTypeSelect.options[chartTypeSelect.selectedIndex]?.textContent || "gráfico";
   summaryNode.textContent = `${metric.label} por ${dimension.label.toLowerCase()} para ${data.summary?.periodLabel || "el período seleccionado"}.`;
   document.getElementById("interactiveReportTitle").textContent = `${metric.label} por ${dimension.label}`;
-  document.getElementById("interactiveReportSubtitle").textContent = `${series.length} serie(s) principales visibles según los filtros aplicados.`;
+  document.getElementById("interactiveReportSubtitle").textContent = `${series.length} serie(s) principales visibles como ${chartTypeLabel.toLowerCase()} según los filtros aplicados.`;
 
   const slicerFields = ["family", "brand", "sales_scheme_name", "seller_name", "sales_force", "channel", "supplier", "year", "month"];
   slicersNode.innerHTML = `<div class="filter-fields-row interactive-filter-fields">${
@@ -2073,7 +2083,7 @@ function renderInteractiveReport(data) {
     document.getElementById("interactiveReportChart").innerHTML = "<div class='muted'>ECharts no está disponible en esta sesión.</div>";
     return;
   }
-  mountDashboardChart("interactiveReportChart", buildInteractiveReportOption(report.labels || [], series, metric));
+  mountDashboardChart("interactiveReportChart", buildInteractiveReportOption(report.labels || [], series, metric, state.interactiveReport.chartType));
 }
 
 function bindInteractiveSlicerEvents(meta) {
@@ -2106,33 +2116,76 @@ function bindInteractiveSlicerEvents(meta) {
   }
 }
 
-function buildInteractiveReportOption(labels, items, metric) {
+function buildInteractiveReportOption(labels, items, metric, chartType = "line") {
   const formatter = metric.format === "money" ? money : decimalNumber;
+  const axisFormatter = metric.format === "money" ? compactMoney : compactNumber;
   const colors = ["#0f766e", "#ea580c", "#2563eb", "#9333ea", "#16a34a", "#be123c", "#0891b2", "#ca8a04", "#4f46e5", "#64748b", "#db2777", "#059669"];
+  const visibleItems = (items || []).filter((item) => item?.name);
+  if (chartType === "pie") {
+    const pieData = visibleItems
+      .map((item) => ({
+        name: item.name,
+        value: (item.data || []).reduce((total, value) => total + (Number(value) || 0), 0),
+      }))
+      .filter((item) => item.value > 0)
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 14);
+    return {
+      color: colors,
+      tooltip: {
+        trigger: "item",
+        valueFormatter: (value) => formatter(value || 0),
+      },
+      legend: { type: "scroll", orient: "vertical", right: 8, top: 24, bottom: 24, textStyle: { color: "#475569" } },
+      series: [{
+        name: metric.label,
+        type: "pie",
+        radius: ["38%", "68%"],
+        center: ["42%", "52%"],
+        avoidLabelOverlap: true,
+        itemStyle: { borderColor: "#fffdf8", borderWidth: 3, borderRadius: 8 },
+        label: { formatter: "{b}\n{d}%", color: "#475569" },
+        data: pieData,
+      }],
+    };
+  }
+  const xLabelInterval = axisIntervalForCount(labels.length, 14);
+  const xLabelRotate = labels.length > 30 ? 45 : labels.length > 18 ? 28 : 0;
+  const isBar = chartType === "bar";
   return {
     color: colors,
     tooltip: {
       trigger: "axis",
+      axisPointer: { type: isBar ? "shadow" : "line" },
       valueFormatter: (value) => formatter(value || 0),
     },
     legend: { top: 0, type: "scroll", textStyle: { color: "#475569" } },
-    grid: { left: 72, right: 24, top: 52, bottom: 46 },
+    grid: { left: 72, right: 30, top: 58, bottom: xLabelRotate ? 80 : 50, containLabel: true },
     xAxis: {
       type: "category",
       data: labels,
-      axisLabel: { color: "#64748b", formatter: (value) => formatMonthAxisLabel(value) },
+      axisLabel: {
+        color: "#64748b",
+        interval: xLabelInterval,
+        rotate: xLabelRotate,
+        hideOverlap: true,
+        margin: 14,
+        formatter: (value) => formatMonthAxisLabel(value),
+      },
     },
     yAxis: {
       type: "value",
-      axisLabel: { color: "#64748b", formatter: (value) => compactNumber(value) },
+      axisLabel: { color: "#64748b", formatter: (value) => axisFormatter(value) },
       splitLine: { lineStyle: { color: "#e5e7eb" } },
     },
-    series: (items || []).map((item) => ({
+    series: visibleItems.map((item) => ({
       name: item.name,
-      type: "line",
-      smooth: true,
-      symbolSize: 6,
-      lineStyle: { width: 3 },
+      type: isBar ? "bar" : "line",
+      smooth: !isBar,
+      symbolSize: isBar ? 0 : 6,
+      barMaxWidth: isBar ? 34 : undefined,
+      lineStyle: isBar ? undefined : { width: 3 },
+      itemStyle: isBar ? { borderRadius: [7, 7, 0, 0] } : undefined,
       emphasis: { focus: "series" },
       data: item.data || [],
     })),
@@ -3072,6 +3125,19 @@ function mountDashboardChart(id, option) {
     dashboardState.charts[id] = chart;
   }
   chart.setOption(option, true);
+  chart.resize();
+}
+
+function axisIntervalForCount(count, maxVisible = 12) {
+  if (!count || count <= maxVisible) {
+    return 0;
+  }
+  return Math.ceil(count / maxVisible) - 1;
+}
+
+function truncateAxisLabel(value, max = 18) {
+  const text = String(value || "");
+  return text.length > max ? `${text.slice(0, Math.max(1, max - 1))}...` : text;
 }
 
 function buildTrendOption(data, mode) {
@@ -3081,6 +3147,8 @@ function buildTrendOption(data, mode) {
   const salesMap = indexSeriesByLabel(salesSeries);
   const unitsMap = indexSeriesByLabel(unitsSeries);
   const summary = data.summary || {};
+  const xLabelInterval = axisIntervalForCount(labels.length, 14);
+  const xLabelRotate = labels.length > 30 ? 45 : labels.length > 18 ? 28 : 0;
   document.getElementById("execTrendTitle").textContent = mode === "sales"
     ? "Evolución de ventas"
     : mode === "units"
@@ -3111,13 +3179,16 @@ function buildTrendOption(data, mode) {
   return {
     tooltip: { trigger: "axis" },
     legend: { top: 0, textStyle: { color: "#6b7280" } },
-    grid: { left: 56, right: mode === "mixed" ? 56 : 24, top: 42, bottom: 40 },
+    grid: { left: 64, right: mode === "mixed" ? 64 : 30, top: 52, bottom: xLabelRotate ? 76 : 46, containLabel: true },
     xAxis: {
       type: "category",
       data: labels,
       axisLabel: {
         color: "#6b7280",
-        interval: 0,
+        interval: xLabelInterval,
+        rotate: xLabelRotate,
+        hideOverlap: true,
+        margin: 14,
         formatter: (value) => formatMonthAxisLabel(value),
       },
     },
@@ -3143,9 +3214,13 @@ function buildSellerOption(data, mode) {
   document.getElementById("execSellerTitle").textContent = isSales ? "Top vendedores por pesos" : isMixed ? "Top vendedores por bultos" : "Top vendedores por bultos";
   return {
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
-    grid: { left: 140, right: 24, top: 18, bottom: 20 },
+    grid: { left: 168, right: 72, top: 18, bottom: 34, containLabel: true },
     xAxis: { type: "value", axisLabel: { color: "#6b7280", formatter: (value) => isSales ? compactMoney(value) : compactNumber(value) } },
-    yAxis: { type: "category", data: sellers.map((item) => item.seller), axisLabel: { color: "#6b7280" } },
+    yAxis: {
+      type: "category",
+      data: sellers.map((item) => item.seller),
+      axisLabel: { color: "#6b7280", formatter: (value) => truncateAxisLabel(value, 22) },
+    },
     series: [{
       type: "bar",
       data: sellers.map((item) => isSales ? item.sales : item.quantity),
@@ -3180,14 +3255,21 @@ function buildBarOption(data, mode, target) {
   const items = target === "brand"
     ? (isSales ? (data.rankings?.topBrandsBySales || []) : (data.rankings?.topBrandsByUnits || []))
     : [];
+  const xLabelInterval = axisIntervalForCount(items.length, 8);
   document.getElementById("execBrandTitle").textContent = isSales ? "Marcas por pesos" : mode === "mixed" ? "Marcas por bultos" : "Marcas por bultos";
   return {
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
-    grid: { left: 56, right: 24, top: 20, bottom: 52 },
+    grid: { left: 64, right: 30, top: 20, bottom: 82, containLabel: true },
     xAxis: {
       type: "category",
       data: items.map((item) => item.brand),
-      axisLabel: { color: "#6b7280", rotate: 22 },
+      axisLabel: {
+        color: "#6b7280",
+        interval: xLabelInterval,
+        rotate: 36,
+        hideOverlap: true,
+        formatter: (value) => truncateAxisLabel(value, 16),
+      },
     },
     yAxis: {
       type: "value",

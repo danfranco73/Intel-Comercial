@@ -367,9 +367,13 @@ table,
 
 .executive-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr));
   gap: 18px;
   margin-top: 18px;
+}
+
+.executive-grid .chart-panel {
+  min-width: 0;
 }
 
 .chart-panel,
@@ -379,7 +383,7 @@ table,
 
 .echart-host {
   width: 100%;
-  min-height: 340px;
+  min-height: 380px;
 }
 
 .echart-host.xl-chart {
@@ -412,7 +416,7 @@ table,
 .interactive-report-controls label {
   display: grid;
   gap: 5px;
-  min-width: 170px;
+  min-width: 145px;
   font-size: 12px;
   color: var(--muted);
 }
@@ -472,6 +476,12 @@ table,
 
 .dashboard-notes {
   margin-top: 18px;
+}
+
+@media (max-width: 1440px) {
+  .executive-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 1080px) {
@@ -1535,6 +1545,19 @@ th {
 
   .controls {
     grid-template-columns: 1fr;
+  }
+
+  .panel.inner-panel.dashboard-panel,
+  .panel.inner-panel.chart-panel {
+    padding: 14px;
+  }
+
+  .echart-host {
+    min-height: 430px;
+  }
+
+  .echart-host.xl-chart {
+    min-height: 560px;
   }
 }
 
