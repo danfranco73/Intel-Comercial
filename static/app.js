@@ -7,6 +7,8 @@ const state = {
   erpStatus: { configured: false, reachable: false, message: "" },
   erpStorage: { connected: false, available: false, message: "" },
   clickhouseStorage: { connected: false, available: false, configured: false, message: "" },
+  dataFreshness: { available: false, updatedAt: null, periodStart: null, periodEnd: null, source: null },
+  syncRuns: [],
   prefilters: { available: {}, selected: {} },
   filterSearch: {},
   erpSyncPending: false,
@@ -15,22 +17,102 @@ const state = {
   dynamic: { tasks: [], selectedTaskId: null },
   adminErrors: [],
   biConsistency: { pending: false, report: null, error: "", checkedAt: "" },
-  adminAuth: { token: readStoredAdminToken() },
+  auth: { user: null, csrfToken: "" },
   reportView: { metricMode: readStoredMetricMode(), dashboardView: readStoredDashboardView(), lastData: null },
   interactiveReport: { metric: "quantity", dimension: "family", chartType: "line" },
   planning: null,
   planningDirty: false,
+  objectives: [],
+  salesCoachDetail: null,
+  coachComparison: { fechaDesde: "", fechaHasta: "" },
+  coachRules: null,
+  coachAudits: [],
+  alerts: { rows: [], period: "", loading: false },
+  meetings: { rows: [], current: null, loading: false },
+  accessConfig: { companies: [], users: [], branches: [], suppliers: [], lines: [], deposits: [] },
 };
 
 const datasetOrder = ["sales"];
 const filterOrder = ["year", "month", "family", "line", "brand", "business_unit", "supplier", "product_name", "sales_scheme_name", "sales_force", "route_description", "seller_name", "channel"];
 const ERP_KEEPALIVE_MS = 4 * 60 * 1000;
+const UI_CACHE_DB = "codenoa_sales_coach_ui";
+const UI_CACHE_STORE = "reports";
+
+function uiCacheKey() {
+  const user = state.auth.user || {};
+  return String(user.id || user.email || "anonymous");
+}
+
+function openUiCache() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) {
+      reject(new Error("IndexedDB no disponible"));
+      return;
+    }
+    const request = window.indexedDB.open(UI_CACHE_DB, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(UI_CACHE_STORE)) {
+        db.createObjectStore(UI_CACHE_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function readCachedWorkspace() {
+  const db = await openUiCache();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(UI_CACHE_STORE, "readonly");
+    const request = transaction.objectStore(UI_CACHE_STORE).get(uiCacheKey());
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => db.close();
+  });
+}
+
+async function saveCachedWorkspace(report) {
+  const db = await openUiCache();
+  const snapshot = {
+    report,
+    savedAt: new Date().toISOString(),
+    ui: {
+      sourceMode: state.datasets.sales?.sourceMode || "auto",
+      fechaDesde: state.datasets.sales?.erp?.fechaDesde || "",
+      fechaHasta: state.datasets.sales?.erp?.fechaHasta || "",
+      coachComparison: { ...state.coachComparison },
+    },
+  };
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(UI_CACHE_STORE, "readwrite");
+    transaction.objectStore(UI_CACHE_STORE).put(snapshot, uiCacheKey());
+    transaction.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    transaction.onerror = () => reject(transaction.error);
+  });
+}
+
+async function clearCachedWorkspace() {
+  const db = await openUiCache();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(UI_CACHE_STORE, "readwrite");
+    transaction.objectStore(UI_CACHE_STORE).delete(uiCacheKey());
+    transaction.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    transaction.onerror = () => reject(transaction.error);
+  });
+}
 const appSurface = document.body.dataset.surface || "admin";
 const isAdminSurface = appSurface === "admin";
 const isBiSurface = appSurface === "bi";
 const REPORT_METRIC_MODES = ["mixed", "units", "sales"];
-const dashboardState = { charts: {}, tables: { direction: null, executive: null, executiveSensitivity: null, planningTargets: null, ownerTracking: null, history: null, historyBudgetMonthly: null, historyBudgetDimension: null, sellers: null, clients: null, opportunities: null } };
-const DASHBOARD_VIEWS = ["direction", "executive", "interactive", "sellers", "clients", "history", "opportunities"];
+const dashboardState = { charts: {}, tables: { direction: null, executive: null, executiveSensitivity: null, planningTargets: null, ownerTracking: null, history: null, historyBudgetMonthly: null, historyBudgetDimension: null, sellers: null, clients: null, opportunities: null, alerts: null, meetings: null } };
+const DASHBOARD_VIEWS = ["coach", "direction", "executive", "interactive", "sellers", "clients", "history", "opportunities", "alerts", "meetings"];
 
 const filterGroups = [
   { id: "tiempo",     label: "Período",       fields: ["year", "month"] },
@@ -286,7 +368,7 @@ function getStoredSalesStorage(sourceMode) {
 }
 
 function getCommercialStorageWindow() {
-  const windows = [state.erpStorage, state.clickhouseStorage]
+  const windows = [state.erpStorage, state.clickhouseStorage, state.dataFreshness]
     .filter((item) => item?.available && item?.periodStart && item?.periodEnd)
     .map((item) => ({ start: item.periodStart, end: item.periodEnd }));
   if (!windows.length) {
@@ -345,27 +427,6 @@ function getPersistedTargetsLabel() {
     : "MongoDB";
 }
 
-function readStoredAdminToken() {
-  try {
-    return sessionStorage.getItem("appAdminToken") || "";
-  } catch (_) {
-    return "";
-  }
-}
-
-function storeAdminToken(token) {
-  state.adminAuth.token = token || "";
-  try {
-    if (state.adminAuth.token) {
-      sessionStorage.setItem("appAdminToken", state.adminAuth.token);
-    } else {
-      sessionStorage.removeItem("appAdminToken");
-    }
-  } catch (_) {
-    // Ignorar almacenamiento no disponible.
-  }
-}
-
 function readStoredMetricMode() {
   try {
     const stored = localStorage.getItem("reportMetricMode") || "mixed";
@@ -387,15 +448,15 @@ function storeMetricMode(mode) {
 
 function readStoredDashboardView() {
   try {
-    const stored = localStorage.getItem("reportDashboardView") || "executive";
-    return DASHBOARD_VIEWS.includes(stored) ? stored : "executive";
+    const stored = localStorage.getItem("reportDashboardView") || "coach";
+    return DASHBOARD_VIEWS.includes(stored) ? stored : "coach";
   } catch (_) {
-    return "executive";
+    return "coach";
   }
 }
 
 function storeDashboardView(view) {
-  const nextView = DASHBOARD_VIEWS.includes(view) ? view : "executive";
+  const nextView = DASHBOARD_VIEWS.includes(view) ? view : "coach";
   state.reportView.dashboardView = nextView;
   try {
     localStorage.setItem("reportDashboardView", nextView);
@@ -404,24 +465,19 @@ function storeDashboardView(view) {
   }
 }
 
-function requestAdminToken() {
-  const token = window.prompt("Ingresá el token de admin para continuar:");
-  if (!token) {
-    throw new Error("La operación admin requiere un token válido.");
-  }
-  storeAdminToken(token.trim());
-}
-
-async function api(url, options, retryOnAuth = true) {
+async function api(url, options) {
   const headers = new Headers(options?.headers || {});
-  if (isAdminSurface && state.adminAuth.token) {
-    headers.set("X-Admin-Token", state.adminAuth.token);
+  const method = String(options?.method || "GET").toUpperCase();
+  const csrfRetry = Boolean(options?.csrfRetry);
+  if (method !== "GET" && state.auth.csrfToken) {
+    headers.set("X-CSRF-Token", state.auth.csrfToken);
   }
   const timeoutMs = Number(options?.timeoutMs || 0);
   const controller = timeoutMs > 0 ? new AbortController() : null;
   const timeoutId = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
   const fetchOptions = { ...(options || {}), headers };
   delete fetchOptions.timeoutMs;
+  delete fetchOptions.csrfRetry;
   if (controller) {
     fetchOptions.signal = controller.signal;
   }
@@ -439,9 +495,23 @@ async function api(url, options, retryOnAuth = true) {
     }
   }
   const data = await response.json();
-  if (response.status === 401 && isAdminSurface && retryOnAuth) {
-    requestAdminToken();
-    return api(url, options, false);
+  if (response.status === 401) {
+    window.location.replace("/login");
+    throw new Error("La sesión expiró.");
+  }
+  if (
+    response.status === 403
+    && method !== "GET"
+    && !csrfRetry
+    && String(data.error || "").toLowerCase().includes("csrf")
+  ) {
+    const authResponse = await fetch("/api/auth/me");
+    if (authResponse.ok) {
+      const authData = await authResponse.json();
+      state.auth.user = authData.user || state.auth.user;
+      state.auth.csrfToken = authData.csrfToken || "";
+      return api(url, { ...(options || {}), csrfRetry: true });
+    }
   }
   if (!response.ok) {
     const error = new Error(data.error || "Error inesperado");
@@ -453,8 +523,34 @@ async function api(url, options, retryOnAuth = true) {
   return data;
 }
 
+async function initializeAuthentication() {
+  const data = await api("/api/auth/me");
+  state.auth.user = data.user;
+  state.auth.csrfToken = data.csrfToken || "";
+  const label = document.getElementById("currentUser");
+  if (label) {
+    label.textContent = `${data.user?.name || data.user?.email || "Usuario"} · ${data.user?.role || ""}`;
+  }
+  const adminLink = document.querySelector("a[href='/admin']");
+  if (adminLink && data.user?.role !== "admin") {
+    adminLink.remove();
+  }
+}
+
+async function logout() {
+  await clearCachedWorkspace().catch(() => {});
+  await api("/api/auth/logout", { method: "POST" });
+  window.location.replace("/login");
+}
+
 async function boot() {
   setStatus("Preparando estructura de análisis...");
+  if (window.location.pathname.startsWith("/sales-coach")) {
+    document.querySelectorAll(".surface-switch a").forEach((link) => {
+      link.classList.toggle("active", link.getAttribute("href") === "/sales-coach");
+    });
+    state.reportView.dashboardView = "coach";
+  }
   const [
     filesResponse,
     schemaResponse,
@@ -462,8 +558,16 @@ async function boot() {
     erpStatus,
     erpStorage,
     clickhouseStorage,
+    dataFreshness,
     erpPrefilters,
     adminErrorsResponse,
+    syncRunsResponse,
+    objectivesResponse,
+    coachRulesResponse,
+    coachAuditsResponse,
+    accessCompaniesResponse,
+    accessUsersResponse,
+    accessOptionsResponse,
   ] = await Promise.all([
     api(`/api/files?scope=${encodeURIComponent(state.scope)}`),
     api("/api/datasets"),
@@ -471,18 +575,39 @@ async function boot() {
     api("/api/erp/status").catch(() => ({ configured: false, reachable: false, message: "ChessERP no disponible." })),
     api("/api/erp/storage-status").catch(() => ({ connected: false, available: false, message: "MongoDB ERP no disponible." })),
     api("/api/clickhouse/storage-status").catch(() => ({ connected: false, available: false, configured: false, message: "ClickHouse no disponible." })),
+    api("/api/data/freshness").catch(() => ({ available: false, updatedAt: null })),
     api("/api/erp/prefilter-options").catch(() => ({ filters: {} })),
     isAdminSurface ? api("/api/admin/errors?limit=20").catch(() => ({ errors: [] })) : Promise.resolve({ errors: [] }),
+    isAdminSurface ? api("/api/sync/runs?limit=10").catch(() => ({ runs: [] })) : Promise.resolve({ runs: [] }),
+    api("/api/objectives").catch(() => ({ objectives: [] })),
+    isAdminSurface ? api("/api/coach/rules").catch(() => ({ ruleSet: null })) : Promise.resolve({ ruleSet: null }),
+    isAdminSurface ? api("/api/coach/audits?limit=10").catch(() => ({ audits: [] })) : Promise.resolve({ audits: [] }),
+    isAdminSurface ? api("/api/access/companies").catch(() => ({ companies: [] })) : Promise.resolve({ companies: [] }),
+    isAdminSurface ? api("/api/users").catch(() => ({ users: [] })) : Promise.resolve({ users: [] }),
+    isAdminSurface ? api("/api/access/options").catch(() => ({ branches: [], suppliers: [], lines: [], deposits: [] })) : Promise.resolve({ branches: [], suppliers: [], lines: [], deposits: [] }),
   ]);
   state.files = filesResponse.files || [];
   state.schema = schemaResponse.datasets || {};
   state.erpStatus = erpStatus || { configured: false, reachable: false, message: "" };
   state.erpStorage = erpStorage || { connected: false, available: false, message: "" };
   state.clickhouseStorage = clickhouseStorage || { connected: false, available: false, configured: false, message: "" };
+  state.dataFreshness = dataFreshness || { available: false, updatedAt: null };
   state.prefilters.available = erpPrefilters?.filters || {};
   state.prefilters.selected = normalizeSelectedFilters({}, state.prefilters.available);
   normalizeSupplierFocusSelection();
   state.adminErrors = adminErrorsResponse?.errors || [];
+  state.syncRuns = syncRunsResponse?.runs || [];
+  state.objectives = objectivesResponse?.objectives || [];
+  state.coachRules = coachRulesResponse?.ruleSet || null;
+  state.coachAudits = coachAuditsResponse?.audits || [];
+  state.accessConfig = {
+    companies: accessCompaniesResponse?.companies || [],
+    users: accessUsersResponse?.users || [],
+    branches: accessOptionsResponse?.branches || [],
+    suppliers: accessOptionsResponse?.suppliers || [],
+    lines: accessOptionsResponse?.lines || [],
+    deposits: accessOptionsResponse?.deposits || [],
+  };
   initializeDatasets();
   state.planning = normalizePlanningConfig(sessionResponse?.planning);
   state.planningDirty = false;
@@ -491,7 +616,7 @@ async function boot() {
     restoreBiDefaults(sessionResponse.datasets, sessionResponse.planning);
     const commercialStorage = getCommercialStorageWindow();
     setStatus(commercialStorage.available
-      ? "Base comercial lista para analizar."
+      ? `Base comercial lista para analizar. Datos actualizados: ${state.dataFreshness.updatedAt || "fecha no informada"}.`
       : "Todavía no hay histórico comercial persistido disponible. Coordiná una sync desde Admin.");
   } else if (sessionResponse.datasets) {
     await restoreSession(sessionResponse.datasets);
@@ -502,11 +627,29 @@ async function boot() {
       : "Cargá uno o más archivos de venta por cliente y luego los maestros.");
   }
 
+  const cachedWorkspace = await readCachedWorkspace().catch(() => null);
+  if (cachedWorkspace?.ui && state.datasets.sales?.erp) {
+    state.datasets.sales.sourceMode = cachedWorkspace.ui.sourceMode || state.datasets.sales.sourceMode;
+    state.datasets.sales.erp.fechaDesde = cachedWorkspace.ui.fechaDesde || state.datasets.sales.erp.fechaDesde;
+    state.datasets.sales.erp.fechaHasta = cachedWorkspace.ui.fechaHasta || state.datasets.sales.erp.fechaHasta;
+    state.coachComparison = {
+      fechaDesde: cachedWorkspace.ui.coachComparison?.fechaDesde || "",
+      fechaHasta: cachedWorkspace.ui.coachComparison?.fechaHasta || "",
+    };
+  }
   renderFileLibrary();
   renderDatasetConfigs();
   renderCommercialGuide();
   renderPreview();
   renderAdminDiagnostics();
+  renderAccessConfiguration();
+  if (cachedWorkspace?.report) {
+    renderResults(cachedWorkspace.report);
+    const savedAt = cachedWorkspace.savedAt
+      ? new Date(cachedWorkspace.savedAt).toLocaleString("es-AR")
+      : "sin fecha";
+    setStatus(`Informe restaurado localmente (${savedAt}). Usá “Actualizar informe” cuando quieras consultar datos nuevos.`);
+  }
   startErpKeepalive();
 }
 
@@ -1018,6 +1161,8 @@ function renderClickHouseStorageSummary() {
       <div><strong>Tabla:</strong> ${escapeHtml(storage.table || "-")}</div>
       <div><strong>Rows activas:</strong> ${Number(storage.rows || 0).toLocaleString("es-AR")}</div>
       <div><strong>Storage estimado:</strong> ${Number(storage.storageMB || 0).toLocaleString("es-AR")} MB</div>
+      <div><strong>Última sincronización:</strong> ${escapeHtml(storage.lastSyncAt || "nunca")}</div>
+      <div><strong>Mutaciones pendientes:</strong> ${Number(storage.pendingMutations || 0).toLocaleString("es-AR")}</div>
     </div>
   `;
 }
@@ -1045,7 +1190,10 @@ function renderAdminDiagnostics() {
     `Último rango sincronizado: ${storage.lastRange ? `${storage.lastRange.fechaDesde} a ${storage.lastRange.fechaHasta}` : "sin sincronizaciones"}`,
     `Última sync con ventas: ${Number(storage.lastSyncRowsValid || 0).toLocaleString("es-AR")} filas`,
     `Ventas persistidas en ClickHouse: ${Number(clickhouse.records || 0).toLocaleString("es-AR")} filas`,
-    "Siguiente paso recomendado: mover el backfill histórico y las syncs recurrentes a procesos backend programados.",
+    `Fecha de actualización comercial: ${state.dataFreshness.updatedAt || "no disponible"}`,
+    `Scheduler: ${state.syncRuns[0]?.status || "sin corridas registradas"}`,
+    `Motor de comentarios: ${state.coachRules ? `${state.coachRules.rule_set_id} v${state.coachRules.version} · ${(state.coachRules.rules || []).length} reglas activas` : "sin configuración persistida"}`,
+    `Auditorías recientes de comentarios: ${state.coachAudits.length}`,
   ];
   summaryItems.push(...buildConsistencySummaryItems());
   summary.innerHTML = summaryItems.map((item) => `<div class="insight-item">${escapeHtml(item)}</div>`).join("");
@@ -1066,6 +1214,286 @@ function renderAdminDiagnostics() {
       </div>
     `;
   }).join("");
+}
+
+function renderAccessConfiguration() {
+  const companyForm = document.getElementById("companyAccessForm");
+  const userForm = document.getElementById("accessUserForm");
+  if (!companyForm || !userForm) return;
+  const config = state.accessConfig;
+  const syncFrom = document.getElementById("accessCatalogSyncFrom");
+  const syncTo = document.getElementById("accessCatalogSyncTo");
+  if (syncFrom && syncTo && !syncFrom.value && !syncTo.value) {
+    const today = new Date();
+    const prior = new Date(today);
+    prior.setDate(prior.getDate() - 90);
+    syncFrom.value = prior.toISOString().slice(0, 10);
+    syncTo.value = today.toISOString().slice(0, 10);
+  }
+  renderAccessCheckboxes("accessCompanyBranches", "branches", config.branches);
+  renderAccessCheckboxes("accessCompanySuppliers", "suppliers", config.suppliers);
+  renderAccessCheckboxes("accessCompanyLines", "lines", config.lines);
+  renderAccessCheckboxes("accessCompanyDeposits", "deposits", config.deposits);
+  document.getElementById("accessUserCompany").innerHTML = [
+    '<option value="">Grupo económico · acceso total</option>',
+    ...config.companies.filter((item) => item.is_active !== false).map((item) =>
+      `<option value="${escapeHtml(item.company_key)}">${escapeHtml(item.name)}</option>`
+    ),
+  ].join("");
+  document.getElementById("accessCompaniesList").innerHTML = config.companies.length
+    ? config.companies.map((item) => `<div class="insight-item"><strong>${escapeHtml(item.name)}</strong> <span class="pill">${escapeHtml(item.company_key)}</span><div>${intNumber((item.branch_keys || []).length)} sucursales · ${intNumber((item.suppliers || []).length)} proveedores · ${intNumber((item.lines || []).length)} líneas · ${intNumber((item.deposit_keys || []).length)} depósitos</div><button type="button" data-edit-access-company="${escapeHtml(item.company_key)}">Editar</button></div>`).join("")
+    : "<div class='muted'>Todavía no hay empresas configuradas.</div>";
+  document.getElementById("accessUsersList").innerHTML = config.users.length
+    ? config.users.map((item) => {
+      const company = config.companies.find((entry) => entry.company_key === item.company_key);
+      return `<div class="insight-item"><strong>${escapeHtml(item.name || item.email)}</strong><div>${escapeHtml(item.role)} · ${company ? escapeHtml(company.name) : "Grupo económico / acceso total"}</div></div>`;
+    }).join("")
+    : "<div class='muted'>No hay usuarios para mostrar.</div>";
+  companyForm.onsubmit = (event) => {
+    event.preventDefault();
+    saveAccessCompany().catch((error) => {
+      showCompanyAccessError(error);
+      showError(error);
+    });
+  };
+  userForm.onsubmit = (event) => {
+    event.preventDefault();
+    createAccessUser().catch(showError);
+  };
+  document.querySelectorAll("[data-access-toggle]").forEach((button) => {
+    button.onclick = () => {
+      const checked = button.dataset.action === "all";
+      document.querySelectorAll(`[data-access-group="${button.dataset.accessToggle}"]`).forEach((input) => {
+        input.checked = checked;
+      });
+      updateCompanyAccessReadiness();
+    };
+  });
+  companyForm.querySelectorAll("input").forEach((input) => {
+    input.addEventListener(input.type === "checkbox" ? "change" : "input", updateCompanyAccessReadiness);
+  });
+  document.querySelectorAll("[data-edit-access-company]").forEach((button) => {
+    button.onclick = () => editAccessCompany(button.dataset.editAccessCompany);
+  });
+  document.getElementById("addManualBranch").onclick = addManualBranchOption;
+  document.getElementById("addManualDeposit").onclick = addManualDepositOption;
+  document.getElementById("syncAccessCatalogs").onclick = () => syncAccessCatalogs().catch(showError);
+  updateCompanyAccessReadiness();
+}
+
+function renderAccessCheckboxes(targetId, group, items) {
+  document.getElementById(targetId).innerHTML = items.length
+    ? items.map((item) => `<label class="access-check-option"><input type="checkbox" data-access-group="${group}" data-access-label="${escapeHtml(item.name)}" value="${escapeHtml(item.key)}"><span>${escapeHtml(item.name)}</span>${item.name !== item.key ? `<small>${escapeHtml(item.key)}</small>` : ""}</label>`).join("")
+    : "<div class='muted'>No hay opciones sincronizadas.</div>";
+}
+
+function selectedAccessValues(group) {
+  return Array.from(document.querySelectorAll(`[data-access-group="${group}"]:checked`)).map((item) => item.value);
+}
+
+function selectedAccessLabels(group) {
+  return Object.fromEntries(
+    Array.from(document.querySelectorAll(`[data-access-group="${group}"]:checked`)).map(
+      (item) => [item.value, item.dataset.accessLabel || item.value]
+    )
+  );
+}
+
+function companyAccessReadiness() {
+  const missing = [];
+  if (!document.getElementById("accessCompanyKey").value.trim()) missing.push("código");
+  if (!document.getElementById("accessCompanyName").value.trim()) missing.push("nombre");
+  if (!selectedAccessValues("branches").length) missing.push("al menos una sucursal");
+  if (!selectedAccessValues("suppliers").length) missing.push("al menos un proveedor");
+  if (!selectedAccessValues("lines").length) missing.push("al menos una línea de producto");
+  if (!selectedAccessValues("deposits").length) missing.push("al menos un depósito");
+  return missing;
+}
+
+function updateCompanyAccessReadiness() {
+  const button = document.getElementById("saveAccessCompanyButton");
+  const validation = document.getElementById("companyAccessValidation");
+  if (!button || !validation) return;
+  const missing = companyAccessReadiness();
+  button.disabled = missing.length > 0;
+  validation.classList.remove("error", "ready");
+  if (missing.length) {
+    validation.textContent = `Para guardar falta: ${missing.join(", ")}.`;
+    return;
+  }
+  validation.classList.add("ready");
+  validation.textContent = "Configuración completa. Ya podés guardar la empresa.";
+}
+
+function showCompanyAccessError(error) {
+  const validation = document.getElementById("companyAccessValidation");
+  if (!validation) return;
+  validation.classList.remove("ready");
+  validation.classList.add("error");
+  validation.textContent = error?.message || "No se pudo guardar la empresa.";
+}
+
+function editAccessCompany(companyKey) {
+  const company = state.accessConfig.companies.find((item) => item.company_key === companyKey);
+  if (!company) return;
+  const keyInput = document.getElementById("accessCompanyKey");
+  keyInput.value = company.company_key;
+  keyInput.readOnly = true;
+  document.getElementById("accessCompanyName").value = company.name;
+  const selections = {
+    branches: new Set(company.branch_keys || []),
+    suppliers: new Set(company.suppliers || []),
+    lines: new Set(company.lines || []),
+    deposits: new Set(company.deposit_keys || []),
+  };
+  Object.entries(selections).forEach(([group, values]) => {
+    document.querySelectorAll(`[data-access-group="${group}"]`).forEach((input) => {
+      input.checked = values.has(input.value);
+    });
+  });
+  document.querySelector("#companyAccessForm button[type='submit']").textContent = "Guardar cambios";
+  updateCompanyAccessReadiness();
+  document.getElementById("companyAccessForm").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function addManualBranchOption() {
+  const keyInput = document.getElementById("manualBranchKey");
+  const nameInput = document.getElementById("manualBranchName");
+  const key = keyInput.value.trim();
+  const name = nameInput.value.trim() || key;
+  if (!key) {
+    setStatus("Ingresá el código de la sucursal.");
+    return;
+  }
+  const selected = new Set(selectedAccessValues("branches"));
+  selected.add(key);
+  if (!state.accessConfig.branches.some((item) => item.key === key)) {
+    state.accessConfig.branches.push({ key, name });
+    state.accessConfig.branches.sort((a, b) => a.name.localeCompare(b.name));
+  }
+  renderAccessCheckboxes("accessCompanyBranches", "branches", state.accessConfig.branches);
+  document.querySelectorAll('[data-access-group="branches"]').forEach((input) => {
+    input.checked = selected.has(input.value);
+  });
+  keyInput.value = "";
+  nameInput.value = "";
+  updateCompanyAccessReadiness();
+}
+
+function addManualDepositOption() {
+  const keyInput = document.getElementById("manualDepositKey");
+  const nameInput = document.getElementById("manualDepositName");
+  const key = keyInput.value.trim();
+  const name = nameInput.value.trim() || key;
+  if (!key) {
+    setStatus("Ingresá el código del depósito.");
+    return;
+  }
+  const selected = new Set(selectedAccessValues("deposits"));
+  selected.add(key);
+  if (!state.accessConfig.deposits.some((item) => item.key === key)) {
+    state.accessConfig.deposits.push({ key, name });
+    state.accessConfig.deposits.sort((a, b) => a.name.localeCompare(b.name));
+  }
+  renderAccessCheckboxes("accessCompanyDeposits", "deposits", state.accessConfig.deposits);
+  document.querySelectorAll('[data-access-group="deposits"]').forEach((input) => {
+    input.checked = selected.has(input.value);
+  });
+  keyInput.value = "";
+  nameInput.value = "";
+  updateCompanyAccessReadiness();
+}
+
+async function saveAccessCompany() {
+  const missing = companyAccessReadiness();
+  if (missing.length) {
+    throw new Error(`Para guardar falta: ${missing.join(", ")}.`);
+  }
+  const response = await api("/api/access/companies", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      company_key: document.getElementById("accessCompanyKey").value,
+      name: document.getElementById("accessCompanyName").value,
+      branch_keys: selectedAccessValues("branches"),
+      branch_names: selectedAccessLabels("branches"),
+      suppliers: selectedAccessValues("suppliers"),
+      lines: selectedAccessValues("lines"),
+      deposit_keys: selectedAccessValues("deposits"),
+      deposit_names: selectedAccessLabels("deposits"),
+      is_active: true,
+    }),
+  });
+  const company = response.company;
+  state.accessConfig.companies = [
+    ...state.accessConfig.companies.filter((item) => item.company_key !== company.company_key),
+    company,
+  ].sort((a, b) => a.name.localeCompare(b.name));
+  document.getElementById("companyAccessForm").reset();
+  document.getElementById("accessCompanyKey").readOnly = false;
+  document.querySelector("#companyAccessForm button[type='submit']").textContent = "Guardar empresa";
+  renderAccessConfiguration();
+  setStatus(`Empresa ${company.name} guardada con sucursales, proveedores, líneas y depósitos.`);
+}
+
+async function syncAccessCatalogs() {
+  const button = document.getElementById("syncAccessCatalogs");
+  const status = document.getElementById("accessCatalogSyncStatus");
+  button.disabled = true;
+  status.textContent = "Consultando ventas resumidas de Chess…";
+  try {
+    const result = await api("/api/erp/sync-access-catalogs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fechaDesde: document.getElementById("accessCatalogSyncFrom").value,
+        fechaHasta: document.getElementById("accessCatalogSyncTo").value,
+      }),
+      timeoutMs: 120000,
+    });
+    const options = await api("/api/access/options");
+    state.accessConfig.branches = options.branches || [];
+    state.accessConfig.suppliers = options.suppliers || [];
+    state.accessConfig.lines = options.lines || [];
+    state.accessConfig.deposits = options.deposits || [];
+    renderAccessConfiguration();
+    const catalogs = result.catalogs || {};
+    document.getElementById("accessCatalogSyncStatus").textContent =
+      `${intNumber(catalogs.branches || 0)} sucursales y ${intNumber(catalogs.deposits || 0)} depósitos detectados en ${intNumber(result.rowsRead || 0)} comprobantes.`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function createAccessUser() {
+  const role = document.getElementById("accessUserRole").value;
+  const sellerKey = document.getElementById("accessUserSellerKey").value.trim();
+  if (role === "seller" && !sellerKey) {
+    throw new Error("El rol vendedor requiere la clave de vendedor de Chess.");
+  }
+  const response = await api("/api/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: document.getElementById("accessUserName").value,
+      email: document.getElementById("accessUserEmail").value,
+      password: document.getElementById("accessUserPassword").value,
+      role,
+      company_key: document.getElementById("accessUserCompany").value || null,
+      seller_key: sellerKey || null,
+      branch_keys: [],
+      sales_force_keys: [],
+      is_active: true,
+    }),
+  });
+  state.accessConfig.users.push({
+    ...response.user,
+    name: document.getElementById("accessUserName").value,
+    company_key: document.getElementById("accessUserCompany").value || null,
+  });
+  document.getElementById("accessUserForm").reset();
+  renderAccessConfiguration();
+  setStatus(`Usuario ${response.user.email} creado correctamente.`);
 }
 
 function buildConsistencySummaryItems() {
@@ -1844,6 +2272,8 @@ async function analyze() {
       source: state.datasets.sales.sourceMode,
       fechaDesde,
       fechaHasta,
+      comparisonDesde: state.coachComparison.fechaDesde || undefined,
+      comparisonHasta: state.coachComparison.fechaHasta || undefined,
       erp: { enabled: state.datasets.sales.sourceMode === "erp", fechaDesde, fechaHasta },
     };
   } else {
@@ -1890,21 +2320,26 @@ async function analyze() {
             : "Relacionando ventas con maestros y recalculando el informe..."
   );
   const data = await withProgress(document.getElementById("status").textContent || "Procesando análisis...", async () => {
-    const [report, tactical] = await Promise.all([
-      api("/api/analyze", {
+    const report = await api("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const selectedDays = rangeDays(
+      state.datasets.sales.erp?.fechaDesde,
+      state.datasets.sales.erp?.fechaHasta,
+    );
+    const tactical = selectedDays > 0 && selectedDays <= 62
+      ? await api("/api/bi/tactical-month", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-      }),
-      api("/api/bi/tactical-month", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }).catch(() => null),
-    ]);
+      }).catch(() => null)
+      : null;
     if (tactical?.tacticalMonth) {
       report.tacticalMonth = tactical.tacticalMonth;
     }
+    report.salesCoachHome = buildSalesCoachHomeFromReport(report);
     return report;
   }, {
     operationType: "analyze",
@@ -1913,6 +2348,10 @@ async function analyze() {
     sourceMode: state.datasets.sales.sourceMode,
   });
   renderResults(data);
+  saveCachedWorkspace(data).catch(() => {
+    // El informe sigue siendo utilizable aunque el navegador bloquee el almacenamiento local.
+  });
+  openRequestedSalesCoachDetail().catch(showError);
   state.planningDirty = false;
   const comparisonLabel = data.meta?.comparison?.comparisonLabel;
   setStatus(
@@ -1920,6 +2359,29 @@ async function analyze() {
       ? `Análisis completo: ${data.meta.rowsAnalyzed} registros del período ${data.meta.periodStart} a ${data.meta.periodEnd}, comparados contra ${comparisonLabel}.`
       : `Análisis completo: ${data.meta.rowsAnalyzed} registros analizados entre ${data.meta.periodStart} y ${data.meta.periodEnd}.`
   );
+}
+
+function buildSalesCoachHomeFromReport(report) {
+  const rows = report.dashboards?.sellers?.rows || [];
+  const netSales = rows.reduce((total, item) => total + Number(item.sales || 0), 0);
+  const previousNetSales = rows.reduce((total, item) => total + Number(item.previousSales || 0), 0);
+  const quantity = rows.reduce((total, item) => total + Number(item.quantity || 0), 0);
+  const orders = rows.reduce((total, item) => total + Number(item.orders || 0), 0);
+  const activeObjectives = (state.objectives || []).filter((item) => item.status === "active" && item.progress);
+  const objectiveFulfillmentPct = activeObjectives.length
+    ? activeObjectives.reduce((total, item) => total + Number(item.progress.fulfillment_pct || 0), 0) / activeObjectives.length
+    : 0;
+  return {
+    summary: {
+      netSales,
+      quantity,
+      activeClients: Number(report.dashboards?.clients?.summary?.activeCount || 0),
+      avgTicket: netSales / Math.max(orders, 1),
+      valuePerQuantity: netSales / Math.max(quantity, 1),
+      growthPct: previousNetSales ? (netSales - previousNetSales) / Math.abs(previousNetSales) * 100 : (netSales ? 100 : 0),
+      objectiveFulfillmentPct,
+    },
+  };
 }
 
 function renderResults(data) {
@@ -1935,16 +2397,19 @@ function renderResults(data) {
 
 function renderReportData(data) {
   const mode = resolveMetricMode(data.summary);
-  renderSummaryCards(data.summary, data.meta, mode);
+  renderSummaryCards(data.summary, data.meta, mode, data.salesCoachHome?.summary);
   renderDashboardViewSelector(data);
   renderDashboardPanels();
   renderDirectionDashboard(data, mode);
   renderExecutiveDashboard(data, mode);
   renderInteractiveReport(data);
+  renderSellerBrief(data);
   renderSellerDashboard(data, mode);
   renderClientDashboard(data, mode);
   renderHistoryDashboard(data, mode);
   renderOpportunityDashboard(data, mode);
+  renderPersistentAlerts(data);
+  renderMeetings(data);
   renderSemaphores(data.semaphores, data.summary, data.forecast, data.meta, mode);
   renderCoverage(data.coverage, data.meta.datasets);
   renderInsights(data.insights, data.summary, data.meta, mode);
@@ -2448,6 +2913,33 @@ function renderPlanningSimulator(tactical) {
     seller: "Vendedor",
     family: "Familia",
   }[state.planning.focusDimension] || "Canal";
+  const objectivePeriod = String(tactical.meta?.asOfDate || "").slice(0, 7);
+  const persistedObjective = state.objectives.find((item) => (
+    item.period === objectivePeriod
+    && item.scope_type === "company"
+    && item.metric === "net_sales"
+  ));
+  const canGovernObjectives = ["admin", "commercial_director"].includes(state.auth.user?.role);
+  const objectiveActions = canGovernObjectives ? `
+    <div class="planning-field">
+      <label>&nbsp;</label>
+      <button id="saveCommercialObjectiveBtn" type="button">
+        ${persistedObjective?.status === "draft" ? "Actualizar objetivo borrador" : persistedObjective ? "Objetivo gobernado" : "Guardar objetivo borrador"}
+      </button>
+    </div>
+    ${persistedObjective?.status === "draft" ? `
+      <div class="planning-field">
+        <label>&nbsp;</label>
+        <button id="approveCommercialObjectiveBtn" type="button">Aprobar objetivo</button>
+      </div>
+    ` : ""}
+    ${persistedObjective?.status === "active" ? `
+      <div class="planning-field">
+        <label>&nbsp;</label>
+        <button id="closeCommercialObjectiveBtn" type="button">Cerrar objetivo</button>
+      </div>
+    ` : ""}
+  ` : "";
   controlsNode.innerHTML = `
     <div class="planning-form-grid">
       <div class="planning-field">
@@ -2470,12 +2962,17 @@ function renderPlanningSimulator(tactical) {
         <label>&nbsp;</label>
         <button id="applyPlanningBtn" class="primary" type="button">Aplicar metas</button>
       </div>
+      ${objectiveActions}
     </div>
     <div class="planning-hint">
-      ${state.planningDirty ? "Hay cambios pendientes. Aplicá metas para recalcular el simulador." : `Editá las metas por ${focusLabel.toLowerCase()} en la tabla y luego aplicá para recalcular.`}
+      ${persistedObjective
+        ? `Objetivo ${escapeHtml(persistedObjective.status)} v${Number(persistedObjective.version || 1)}: ${money(Number(persistedObjective.target_value || 0))} · cumplimiento ${pctNumber(persistedObjective.progress?.fulfillment_pct || 0)}.`
+        : state.planningDirty
+          ? "Hay cambios pendientes. Aplicá metas para recalcular el simulador."
+          : `Editá las metas por ${focusLabel.toLowerCase()} en la tabla y luego aplicá para recalcular.`}
     </div>
   `;
-  bindPlanningControls();
+  bindPlanningControls(tactical, persistedObjective);
   renderMetricTiles("planningSummaryKpis", [
     { label: "Meta global", value: pctNumber(preview.summary.globalTargetPct || 0), sub: "sobre objetivo estadístico", tone: "neutral" },
     { label: "Objetivo ajustado", value: money(preview.summary.adjustedObjectiveClose || 0), sub: "meta recalibrada", tone: "neutral" },
@@ -2629,7 +3126,7 @@ function buildOwnerTrackingOption(preview) {
   };
 }
 
-function bindPlanningControls() {
+function bindPlanningControls(tactical, persistedObjective) {
   const globalInput = document.getElementById("planningGlobalTarget");
   const recoveryInput = document.getElementById("planningRecoveryGoal");
   const focusSelect = document.getElementById("planningFocusDimension");
@@ -2664,6 +3161,75 @@ function bindPlanningControls() {
   if (applyButton) {
     applyButton.addEventListener("click", () => analyze().catch(showError));
   }
+  const saveObjectiveButton = document.getElementById("saveCommercialObjectiveBtn");
+  if (saveObjectiveButton) {
+    saveObjectiveButton.disabled = Boolean(persistedObjective && persistedObjective.status !== "draft");
+    saveObjectiveButton.addEventListener("click", () => {
+      persistCommercialObjective(tactical, persistedObjective).catch(showError);
+    });
+  }
+  const approveButton = document.getElementById("approveCommercialObjectiveBtn");
+  if (approveButton) {
+    approveButton.addEventListener("click", () => {
+      transitionCommercialObjective("approve", persistedObjective.objective_id).catch(showError);
+    });
+  }
+  const closeButton = document.getElementById("closeCommercialObjectiveBtn");
+  if (closeButton) {
+    closeButton.addEventListener("click", () => {
+      transitionCommercialObjective("close", persistedObjective.objective_id).catch(showError);
+    });
+  }
+}
+
+async function persistCommercialObjective(tactical, existing) {
+  const preview = buildPlanningPreview(tactical);
+  const targetValue = Number(preview.summary.adjustedObjectiveClose || 0);
+  const period = String(tactical.meta?.asOfDate || "").slice(0, 7);
+  if (!period || targetValue < 0) {
+    throw new Error("No se pudo determinar el período o importe del objetivo.");
+  }
+  const endpoint = existing ? "/api/objectives/update" : "/api/objectives";
+  const payload = existing
+    ? {
+        objective_id: existing.objective_id,
+        target_value: targetValue,
+        notes: "Objetivo mensual guardado desde el simulador comercial.",
+      }
+    : {
+        period,
+        scope_type: "company",
+        metric: "net_sales",
+        target_value: targetValue,
+        baseline_value: Number(tactical.summary?.objectiveSalesClose || 0),
+        notes: "Objetivo mensual creado desde el simulador comercial.",
+      };
+  await api(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  await refreshCommercialObjectives();
+  renderPlanningSimulator(tactical);
+  setStatus(`Objetivo ${period} guardado como borrador versionado.`);
+}
+
+async function transitionCommercialObjective(action, objectiveId) {
+  await api(`/api/objectives/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ objective_id: objectiveId }),
+  });
+  await refreshCommercialObjectives();
+  if (state.reportView.lastData?.tacticalMonth) {
+    renderPlanningSimulator(state.reportView.lastData.tacticalMonth);
+  }
+  setStatus(action === "approve" ? "Objetivo aprobado y activo." : "Objetivo cerrado.");
+}
+
+async function refreshCommercialObjectives() {
+  const response = await api("/api/objectives");
+  state.objectives = response.objectives || [];
 }
 
 function renderPlanningTargetsTable(preview) {
@@ -2768,6 +3334,7 @@ function renderDashboardViewSelector(data) {
     return;
   }
   const dashboardSummaries = {
+    coach: "Ficha clara para conversar con el vendedor: resultado, comparación, mix y tres acciones.",
     direction: "Vista de comité: cierre automático, alertas priorizadas y agenda de decisión comercial.",
     executive: "Resumen táctico del período, con ritmo, proyección y principales focos de gestión.",
     interactive: "Gráfico mensual con segmentadores al estilo Excel y selector de pesos o volumen.",
@@ -2775,8 +3342,11 @@ function renderDashboardViewSelector(data) {
     clients: "Cartera activa, cuentas en riesgo, recuperación y concentración de clientes.",
     history: "Evolución mensual, cohortes, Pareto y concentración estructural del negocio.",
     opportunities: "Palancas accionables en clientes, canales y vendedores con potencial de mejora.",
+    alerts: "Alertas persistentes con evidencia, responsable, vencimiento y seguimiento.",
+    meetings: "Preparación mensual, fichas individuales y PDF versionado para reuniones.",
   };
   const labels = {
+    coach: "Ficha vendedor",
     direction: "Dirección",
     executive: "Resumen",
     interactive: "Informe filtrable",
@@ -2784,14 +3354,19 @@ function renderDashboardViewSelector(data) {
     clients: "Clientes",
     history: "Histórico",
     opportunities: "Oportunidades",
+    alerts: "Alertas",
+    meetings: "Reuniones",
   };
   const counts = {
+    coach: data.dashboards?.sellers?.summary?.sellerCount || 0,
     direction: buildDirectionBoard(data).alerts.length,
     interactive: data.interactiveReport?.dimensions?.length || 0,
     sellers: data.dashboards?.sellers?.summary?.sellerCount || 0,
     clients: data.dashboards?.clients?.summary?.activeCount || 0,
     history: data.dashboards?.history?.summary?.monthsCovered || 0,
     opportunities: data.dashboards?.opportunities?.summary?.opportunityCount || 0,
+    alerts: state.alerts.rows.filter((item) => !["resolved", "dismissed"].includes(item.status)).length,
+    meetings: state.meetings.rows.length,
   };
   summary.textContent = dashboardSummaries[state.reportView.dashboardView] || dashboardSummaries.executive;
   selector.innerHTML = DASHBOARD_VIEWS.map((view) => {
@@ -2975,6 +3550,209 @@ function renderDirectionDashboardTable(board) {
   });
 }
 
+function renderSellerBrief(data) {
+  if (state.reportView.dashboardView !== "coach") return;
+  const dashboard = data.dashboards?.sellers;
+  if (!dashboard) return;
+  const rows = (dashboard.rows || []).filter((item) => item.seller !== "Sin vendedor");
+  const select = document.getElementById("sellerBriefSelect");
+  if (!select) return;
+  const comparison = data.meta?.comparison || {};
+  const comparisonFrom = document.getElementById("sellerBriefComparisonFrom");
+  const comparisonTo = document.getElementById("sellerBriefComparisonTo");
+  if (comparisonFrom && !comparisonFrom.value) comparisonFrom.value = comparison.comparisonStart || "";
+  if (comparisonTo && !comparisonTo.value) comparisonTo.value = comparison.comparisonEnd || "";
+  document.getElementById("sellerBriefCompareButton").onclick = () => {
+    if (!comparisonFrom.value || !comparisonTo.value) {
+      setStatus("Elegí ambas fechas para comparar.");
+      return;
+    }
+    state.coachComparison = { fechaDesde: comparisonFrom.value, fechaHasta: comparisonTo.value };
+    analyze().catch(showError);
+  };
+  document.getElementById("sellerBriefComparePrevious").onclick = () => {
+    state.coachComparison = { fechaDesde: "", fechaHasta: "" };
+    comparisonFrom.value = "";
+    comparisonTo.value = "";
+    analyze().catch(showError);
+  };
+  let storedSeller = "";
+  try {
+    storedSeller = sessionStorage.getItem(`coachSeller:${uiCacheKey()}`) || "";
+  } catch (_) {
+    // Continuar sin persistencia si el navegador la bloquea.
+  }
+  const previousSelection = select.value || storedSeller;
+  select.innerHTML = rows.map((item) =>
+    `<option value="${escapeHtml(String(item.sellerKey || item.seller))}">${escapeHtml(item.seller)}</option>`
+  ).join("");
+  const selected = rows.find((item) => String(item.sellerKey || item.seller) === previousSelection) || rows[0];
+  if (selected) select.value = String(selected.sellerKey || selected.seller);
+  select.onchange = () => {
+    const seller = rows.find((item) => String(item.sellerKey || item.seller) === select.value);
+    if (seller) {
+      try {
+        sessionStorage.setItem(`coachSeller:${uiCacheKey()}`, select.value);
+      } catch (_) {
+        // La selección sigue funcionando aunque no pueda persistirse.
+      }
+      renderSellerBriefSheet(seller, dashboard, data.meta || {});
+    }
+  };
+  renderSellerBriefTeam(dashboard);
+  if (selected) {
+    renderSellerBriefSheet(selected, dashboard, data.meta || {});
+  } else {
+    document.getElementById("sellerBriefMessage").textContent = "No hay vendedores con ventas para los filtros elegidos.";
+    document.getElementById("sellerBriefKpis").innerHTML = "";
+    document.getElementById("sellerBriefMix").innerHTML = "";
+  }
+}
+
+function renderSellerBriefTeam(dashboard) {
+  const summary = dashboard.summary || {};
+  renderMetricTiles("sellerBriefTeamKpis", [
+    { label: "$ neto equipo", value: money(summary.sales || 0), sub: `${pctNumber(summary.growthPct || 0)} vs. comparación`, tone: (summary.growthPct || 0) >= 0 ? "good" : "warn" },
+    { label: "Cantidades", value: decimalNumber(summary.quantity || 0), sub: `${decimalNumber(summary.unitsPerSeller || 0)} por vendedor`, tone: "neutral" },
+    { label: "$ / cantidad", value: money(summary.valuePerQuantity || 0), sub: "importe neto / cantidad", tone: "neutral" },
+    { label: "Vendedores", value: intNumber(summary.sellerCount || 0), sub: "dentro del filtro actual", tone: "neutral" },
+  ]);
+  const ranking = document.getElementById("sellerBriefRanking");
+  if (!ranking) return;
+  ranking.innerHTML = (dashboard.rows || []).filter((row) => row.seller !== "Sin vendedor").map((row) => `
+    <tr data-brief-seller="${escapeHtml(String(row.sellerKey || row.seller))}">
+      <td>#${intNumber(row.rankSales || 0)}</td>
+      <td><button type="button" class="coach-table-link">${escapeHtml(row.seller)}</button></td>
+      <td>${money(row.sales || 0)}</td>
+      <td>${pctNumber(row.sharePct || 0)}</td>
+      <td>${decimalNumber(row.quantity || 0)}</td>
+      <td>#${intNumber(row.rankQuantity || 0)}</td>
+      <td>${money(row.valuePerQuantity || 0)}</td>
+      <td class="${(row.growthPct || 0) < 0 ? "coach-negative" : "coach-positive"}">${pctNumber(row.growthPct || 0)}</td>
+    </tr>
+  `).join("");
+  ranking.querySelectorAll("[data-brief-seller]").forEach((row) => {
+    row.querySelector("button")?.addEventListener("click", () => {
+      const select = document.getElementById("sellerBriefSelect");
+      select.value = row.dataset.briefSeller;
+      select.dispatchEvent(new Event("change"));
+      document.querySelector('[data-dashboard-panel="coach"]')?.scrollIntoView({ behavior: "smooth" });
+    });
+  });
+}
+
+function sellerLineReading(line) {
+  if ((line.sales || 0) <= 0) return "Sin venta: abrir línea";
+  if ((line.rank || 999) <= 3 && (line.mixPct || 0) >= (line.teamMixPct || 0)) return "Fortaleza de línea";
+  if ((line.mixPct || 0) + 2 < (line.teamMixPct || 0)) {
+    return `Oportunidad: equipo ${pctNumber(line.teamMixPct || 0)}`;
+  }
+  if ((line.growthPct || 0) < 0) return "Recuperar ritmo";
+  return "Mantener y ampliar";
+}
+
+function renderSellerBriefSheet(seller, dashboard, meta) {
+  const sellerCount = dashboard.summary?.sellerCount || 0;
+  const comparison = meta.comparison?.comparisonLabel || "período comparativo";
+  const period = [meta.periodStart, meta.periodEnd].filter(Boolean).join(" al ");
+  document.getElementById("sellerBriefTitle").textContent = `Ficha individual · ${seller.seller}`;
+  document.getElementById("sellerBriefPeriod").textContent =
+    `${period || "Período seleccionado"} · comparación: ${comparison} · todos los números respetan los filtros aplicados.`;
+  document.getElementById("sellerBriefMessage").innerHTML =
+    `<strong>Mensaje para vos</strong><span>Tu trabajo no es solo tomar pedidos: cada punto de venta, cada línea que abrís y cada cantidad adicional construyen presencia y suman al resultado del equipo.</span>`;
+  renderMetricTiles("sellerBriefKpis", [
+    { label: "$ neto", value: money(seller.sales || 0), sub: `${pctNumber(seller.sharePct || 0)} del equipo filtrado`, tone: "neutral" },
+    { label: "Cantidades", value: decimalNumber(seller.quantity || 0), sub: `promedio equipo ${decimalNumber(dashboard.summary?.unitsPerSeller || 0)}`, tone: "neutral" },
+    { label: "$ / cantidad", value: money(seller.valuePerQuantity || 0), sub: "importe neto / cantidad", tone: "neutral" },
+    { label: "Ranking $ neto", value: `#${intNumber(seller.rankSales || 0)} / ${intNumber(sellerCount)}`, sub: `${pctNumber(seller.growthPct || 0)} vs. comparación`, tone: (seller.growthPct || 0) >= 0 ? "good" : "warn" },
+    { label: "Ranking cantidad", value: `#${intNumber(seller.rankQuantity || 0)} / ${intNumber(sellerCount)}`, sub: `${intNumber(seller.clients || 0)} clientes activos`, tone: "neutral" },
+    { label: "Objetivo mental", value: "+1 oferta", sub: "antes de cerrar cada pedido", tone: "good" },
+    { label: "Eficacia de venta", value: intNumber(seller.clients || 0), sub: "clientes con compra en el período", tone: "good" },
+    { label: "Clientes sin compra", value: intNumber(seller.clientsWithoutPurchase || 0), sub: "compraron en el período comparativo", tone: (seller.clientsWithoutPurchase || 0) > 0 ? "warn" : "good" },
+    { label: "Clientes nuevos", value: intNumber(seller.newClients || 0), sub: "con compra actual y sin compra comparativa", tone: "good" },
+  ]);
+  const mix = document.getElementById("sellerBriefMix");
+  mix.innerHTML = (seller.lineMix || []).map((line) => `
+    <tr class="${(line.sales || 0) <= 0 ? "coach-zero-row" : ""}">
+      <td><strong>${escapeHtml(line.line)}</strong></td>
+      <td>${money(line.sales || 0)}</td>
+      <td><span class="coach-mix-value">${pctNumber(line.mixPct || 0)}</span><span class="coach-mix-bar"><i style="width:${Math.min(100, Math.max(0, line.mixPct || 0))}%"></i></span></td>
+      <td>${decimalNumber(line.quantity || 0)}</td>
+      <td>${money(line.valuePerQuantity || 0)}</td>
+      <td>${line.rank ? `#${intNumber(line.rank)}` : "s/v"}</td>
+      <td class="${(line.growthPct || 0) < 0 ? "coach-negative" : "coach-positive"}">${pctNumber(line.growthPct || 0)}</td>
+      <td>${escapeHtml(sellerLineReading(line))}</td>
+    </tr>
+  `).join("");
+  const topClients = document.getElementById("sellerBriefTopClients");
+  topClients.innerHTML = (seller.topClients || []).length
+    ? seller.topClients.map((client, index) => `
+      <tr>
+        <td>#${index + 1}</td>
+        <td><strong>${escapeHtml(client.client || client.clientKey || "Sin cliente")}</strong></td>
+        <td>${money(client.sales || 0)}</td>
+        <td>${pctNumber(client.sharePct || 0)}</td>
+        <td>${decimalNumber(client.quantity || 0)}</td>
+        <td class="${(client.growthPct || 0) < 0 ? "coach-negative" : "coach-positive"}">${pctNumber(client.growthPct || 0)}</td>
+      </tr>
+    `).join("")
+    : "<tr><td colspan='6' class='muted'>No hay clientes con compra para este vendedor en el período.</td></tr>";
+  const strengths = (seller.strengths || []).slice(0, 3);
+  const opportunities = (seller.opportunities || []).slice(0, 3);
+  document.getElementById("sellerBriefStrengths").innerHTML = strengths.length
+    ? `<ul>${strengths.map((item) => `<li>${escapeHtml(item.message || item.action || "")}</li>`).join("")}</ul>`
+    : "<p>Tu actividad del período ya aporta una base concreta para crecer.</p>";
+  document.getElementById("sellerBriefOpportunities").innerHTML = opportunities.length
+    ? `<ul>${opportunities.map((item) => `<li>${escapeHtml(item.message || item.action || "")}</li>`).join("")}</ul>`
+    : "<p>Mantené el ritmo y buscá ampliar una línea en cada recorrido.</p>";
+  const targetLine = (seller.lineMix || []).find((line) => (line.sales || 0) > 0 && (line.mixPct || 0) < (line.teamMixPct || 0))
+    || (seller.lineMix || []).find((line) => (line.sales || 0) <= 0)
+    || (seller.lineMix || [])[0];
+  const unitValue = targetLine?.valuePerQuantity || seller.valuePerQuantity || 0;
+  const monthlyImpact = unitValue * 4 * 4;
+  document.getElementById("sellerBriefPlan").innerHTML = `
+    <ol>
+      <li>Antes de cerrar cada pedido, ofrecé una alternativa adicional${targetLine ? ` de <strong>${escapeHtml(targetLine.line)}</strong>` : ""}.</li>
+      <li>Elegí 4 puntos de venta y probá sumar una cantidad por semana. Potencial mensual orientativo: <strong>${money(monthlyImpact)}</strong>.</li>
+      <li>En la próxima reunión revisá resultado, mix y comparación usando los mismos filtros.</li>
+    </ol>
+    <p class="coach-closing">“Cada cliente cuenta. Cada cantidad cuenta. Cada vendedor cuenta.”</p>`;
+}
+
+function printSellerCoachSheet(kind) {
+  const dashboard = state.reportView.lastData?.dashboards?.sellers;
+  if (!dashboard) {
+    setStatus("Primero actualizá el informe para generar la ficha.");
+    return;
+  }
+  const isTeam = kind === "team";
+  const select = document.getElementById("sellerBriefSelect");
+  const selectedName = select?.selectedOptions?.[0]?.textContent?.trim() || "Vendedor";
+  const details = document.querySelector(".coach-team-details");
+  const title = document.getElementById("sellerBriefTitle");
+  const previousTitle = document.title;
+  const previousHeading = title?.textContent || "";
+  const detailsWasOpen = Boolean(details?.open);
+  if (details && isTeam) details.open = true;
+  if (title) {
+    title.textContent = isTeam
+      ? "Resumen y ranking del equipo"
+      : `Ficha individual · ${selectedName}`;
+  }
+  document.title = isTeam
+    ? "Codenoa_Sales_Coach_Equipo"
+    : `Codenoa_Sales_Coach_${selectedName.replace(/[^a-z0-9]+/gi, "_")}`;
+  document.body.classList.add("coach-print", isTeam ? "print-coach-team" : "print-coach-seller");
+  const cleanup = () => {
+    document.body.classList.remove("coach-print", "print-coach-team", "print-coach-seller");
+    document.title = previousTitle;
+    if (title) title.textContent = previousHeading;
+    if (details) details.open = detailsWasOpen;
+  };
+  window.addEventListener("afterprint", cleanup, { once: true });
+  window.requestAnimationFrame(() => window.print());
+}
+
 function renderSellerDashboard(data, mode) {
   const dashboard = data.dashboards?.sellers;
   if (!dashboard || state.reportView.dashboardView !== "sellers") {
@@ -3080,6 +3858,324 @@ function renderOpportunityDashboard(data, mode) {
   }
   renderOpportunityDashboardTable(dashboard);
 }
+
+async function renderPersistentAlerts(data, force = false) {
+  if (state.reportView.dashboardView !== "alerts" || state.alerts.loading) {
+    return;
+  }
+  const start = data.meta?.periodStart;
+  const end = data.meta?.comparison?.selectedEnd || data.meta?.periodEnd;
+  if (!start || !end) {
+    return;
+  }
+  const period = String(end).slice(0, 7);
+  state.alerts.loading = true;
+  const summary = document.getElementById("persistentAlertsSummary");
+  if (summary) {
+    summary.textContent = "Actualizando señales y recuperando la gestión persistida…";
+  }
+  try {
+    if (force || state.alerts.period !== period) {
+      if (state.auth.user?.role !== "viewer") {
+        await api("/api/alerts/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fechaDesde: start, fechaHasta: end }),
+        });
+      }
+      state.alerts.period = period;
+    }
+    const response = await api(`/api/alerts?period=${encodeURIComponent(period)}`);
+    state.alerts.rows = response.alerts || [];
+    renderPersistentAlertContent();
+  } catch (error) {
+    if (summary) {
+      summary.textContent = error.message || "No se pudieron cargar las alertas.";
+    }
+  } finally {
+    state.alerts.loading = false;
+  }
+}
+
+function renderPersistentAlertContent() {
+  const rows = state.alerts.rows || [];
+  const open = rows.filter((item) => !["resolved", "dismissed"].includes(item.status));
+  const critical = open.filter((item) => item.severity === "critical").length;
+  const overdue = open.filter((item) => item.status === "overdue").length;
+  const resolved = rows.filter((item) => item.status === "resolved").length;
+  const summary = document.getElementById("persistentAlertsSummary");
+  if (summary) {
+    summary.textContent = `${open.length} abiertas · ${critical} críticas · ${overdue} vencidas · ${resolved} resueltas en ${state.alerts.period}.`;
+  }
+  renderMetricTiles("persistentAlertsKpis", [
+    { label: "Abiertas", value: open.length, format: "int", sub: "requieren seguimiento", tone: open.length ? "warn" : "good" },
+    { label: "Críticas", value: critical, format: "int", sub: "prioridad inmediata", tone: critical ? "bad" : "good" },
+    { label: "Vencidas", value: overdue, format: "int", sub: "fuera de plazo", tone: overdue ? "bad" : "good" },
+    { label: "Resueltas", value: resolved, format: "int", sub: "con resultado registrado", tone: "good" },
+  ]);
+  renderPersistentAlertsTable(rows);
+}
+
+function renderPersistentAlertsTable(rows) {
+  const host = document.getElementById("persistentAlertsTable");
+  if (!host) {
+    return;
+  }
+  if (!window.Tabulator) {
+    host.innerHTML = "<div class='muted'>Tabulator no está disponible en esta sesión.</div>";
+    return;
+  }
+  const statusLabels = {
+    new: "Nueva", assigned: "Asignada", in_progress: "En gestión",
+    resolved: "Resuelta", dismissed: "Descartada", overdue: "Vencida",
+  };
+  const columns = [
+    { title: "Prioridad", field: "severity", width: 92, formatter: (cell) => ({ critical: "Crítica", warning: "Media", info: "Informativa" }[cell.getValue()] || cell.getValue()) },
+    { title: "Tipo", field: "type", minWidth: 150 },
+    { title: "Evidencia", field: "message", minWidth: 300, formatter: "textarea" },
+    { title: "Vendedor", field: "seller_name", minWidth: 150 },
+    { title: "Cliente", field: "client_name", minWidth: 160 },
+    { title: "Responsable", field: "assignee.name", minWidth: 145 },
+    { title: "Estado", field: "status", width: 112, formatter: (cell) => statusLabels[cell.getValue()] || cell.getValue() },
+    { title: "Vence", field: "due_date", width: 105 },
+    {
+      title: "Gestión", field: "alert_id", width: 210, headerSort: false,
+      formatter: (cell) => {
+        const item = cell.getRow().getData();
+        if (["resolved", "dismissed"].includes(item.status) || state.auth.user?.role === "viewer") {
+          return "";
+        }
+        const dismiss = state.auth.user?.role === "seller" ? "" : `<button type="button" class="table-action" data-alert-action="dismissed" data-alert-id="${escapeHtml(item.alert_id)}">Descartar</button>`;
+        return `<button type="button" class="table-action" data-alert-action="in_progress" data-alert-id="${escapeHtml(item.alert_id)}">Gestionar</button><button type="button" class="table-action" data-alert-action="resolved" data-alert-id="${escapeHtml(item.alert_id)}">Resolver</button>${dismiss}`;
+      },
+      cellClick: (_event, cell) => {
+        const button = _event.target.closest("[data-alert-action]");
+        if (button) {
+          managePersistentAlert(button.dataset.alertId, button.dataset.alertAction);
+        }
+      },
+    },
+  ];
+  if (dashboardState.tables.alerts) {
+    dashboardState.tables.alerts.destroy();
+  }
+  dashboardState.tables.alerts = new Tabulator(host, {
+    data: rows,
+    layout: "fitColumns",
+    height: "440px",
+    placeholder: "No hay alertas para el período",
+    columns,
+  });
+}
+
+async function managePersistentAlert(alertId, status) {
+  const needsResult = status === "resolved";
+  const promptLabel = needsResult ? "Resultado de la gestión:" : status === "dismissed" ? "Motivo del descarte:" : "Comentario de seguimiento (opcional):";
+  const value = window.prompt(promptLabel, "");
+  if (value === null) {
+    return;
+  }
+  if ((needsResult || status === "dismissed") && !value.trim()) {
+    window.alert("Es necesario registrar evidencia de cierre.");
+    return;
+  }
+  try {
+    await api("/api/alerts/transition", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        alert_id: alertId,
+        status,
+        comment: needsResult ? null : value,
+        result: needsResult ? value : null,
+      }),
+    });
+    const response = await api(`/api/alerts?period=${encodeURIComponent(state.alerts.period)}`);
+    state.alerts.rows = response.alerts || [];
+    renderPersistentAlertContent();
+  } catch (error) {
+    window.alert(error.message || "No se pudo actualizar la alerta.");
+  }
+}
+
+document.getElementById("refreshPersistentAlerts")?.addEventListener("click", () => {
+  if (state.reportView.lastData) {
+    renderPersistentAlerts(state.reportView.lastData, true);
+  }
+});
+
+async function renderMeetings(data) {
+  if (state.reportView.dashboardView !== "meetings" || state.meetings.loading) {
+    return;
+  }
+  state.meetings.loading = true;
+  try {
+    const response = await api("/api/meetings");
+    state.meetings.rows = response.reports || [];
+    renderMeetingReportsTable();
+    const summary = document.getElementById("meetingsSummary");
+    if (summary) {
+      summary.textContent = `${state.meetings.rows.length} informes versionados disponibles · período activo ${data.meta?.periodStart || ""} a ${data.meta?.comparison?.selectedEnd || data.meta?.periodEnd || ""}.`;
+    }
+  } catch (error) {
+    const summary = document.getElementById("meetingsSummary");
+    if (summary) {
+      summary.textContent = error.message || "No se pudieron cargar los informes.";
+    }
+  } finally {
+    state.meetings.loading = false;
+  }
+}
+
+async function createMeetingReport() {
+  const data = state.reportView.lastData;
+  if (!data || state.meetings.loading) {
+    return;
+  }
+  const start = data.meta?.periodStart;
+  const end = data.meta?.comparison?.selectedEnd || data.meta?.periodEnd;
+  const reportType = document.getElementById("meetingReportType")?.value || "general";
+  const allowedFilters = ["family", "brand", "supplier", "sales_force", "seller_name"];
+  const filters = {};
+  allowedFilters.forEach((field) => {
+    const values = state.filters.selected?.[field];
+    if (Array.isArray(values) && values.length) {
+      filters[field] = values;
+    }
+  });
+  state.meetings.loading = true;
+  const preview = document.getElementById("meetingPreview");
+  if (preview) {
+    preview.innerHTML = "<div class='muted'>Construyendo snapshot verificable…</div>";
+  }
+  try {
+    const response = await api("/api/meetings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        report_type: reportType,
+        fechaDesde: start,
+        fechaHasta: end,
+        filters,
+      }),
+      timeoutMs: 120000,
+    });
+    state.meetings.current = response.report;
+    state.meetings.rows.unshift({
+      ...response.report,
+      payload: undefined,
+    });
+    renderMeetingPreview(response.report);
+    renderMeetingReportsTable();
+  } catch (error) {
+    if (preview) {
+      preview.innerHTML = `<div class="insight-item alert high">${escapeHtml(error.message || "No se pudo generar el informe.")}</div>`;
+    }
+  } finally {
+    state.meetings.loading = false;
+  }
+}
+
+function renderMeetingPreview(report) {
+  const host = document.getElementById("meetingPreview");
+  if (!host) {
+    return;
+  }
+  const kpis = report.payload?.kpis || {};
+  host.innerHTML = [
+    `<div class="insight-item"><strong>Informe listo</strong><div>${escapeHtml(report.report_type === "seller_packet" ? "Informe general y fichas individuales" : "Informe general")} · versión ${intNumber(report.version)}</div></div>`,
+    `<div class="insight-item"><strong>Período y actualización</strong><div>${escapeHtml(report.period?.start || "")} a ${escapeHtml(report.period?.end || "")} · datos ${escapeHtml(report.data_updated_at || "sin fecha")}</div></div>`,
+    `<div class="insight-item"><strong>Cifras del snapshot</strong><div>${money(kpis.net_sales || 0)} · ${intNumber(kpis.active_clients || 0)} clientes · ${pctNumber(kpis.growth_pct || 0)} crecimiento</div></div>`,
+    `<div class="insight-item"><button type="button" class="primary" data-download-meeting="${escapeHtml(report.report_id)}">Descargar PDF A4</button> <button type="button" class="secondary" data-download-meeting-pptx="${escapeHtml(report.report_id)}">Descargar PPTX 16:9</button></div>`,
+  ].join("");
+  host.querySelector("[data-download-meeting]")?.addEventListener("click", (event) => {
+    downloadMeetingPdf(event.currentTarget.dataset.downloadMeeting);
+  });
+  host.querySelector("[data-download-meeting-pptx]")?.addEventListener("click", (event) => {
+    downloadMeetingPptx(event.currentTarget.dataset.downloadMeetingPptx);
+  });
+}
+
+function renderMeetingReportsTable() {
+  const host = document.getElementById("meetingReportsTable");
+  if (!host || !window.Tabulator) {
+    return;
+  }
+  const columns = [
+    { title: "Período", field: "period.end", width: 115 },
+    { title: "Tipo", field: "report_type", minWidth: 170, formatter: (cell) => cell.getValue() === "seller_packet" ? "General + vendedores" : "General" },
+    { title: "Versión", field: "version", width: 80 },
+    { title: "Vendedores", field: "seller_keys", width: 100, formatter: (cell) => (cell.getValue() || []).length },
+    { title: "Actualización", field: "data_updated_at", minWidth: 155 },
+    {
+      title: "Archivo", field: "report_id", width: 130, headerSort: false,
+      formatter: (cell) => `<button type="button" class="table-action" data-meeting-pdf="${escapeHtml(cell.getValue())}">PDF</button> <button type="button" class="table-action" data-meeting-pptx="${escapeHtml(cell.getValue())}">PPTX</button>`,
+      cellClick: (event) => {
+        const pdfButton = event.target.closest("[data-meeting-pdf]");
+        const pptxButton = event.target.closest("[data-meeting-pptx]");
+        if (pdfButton) {
+          downloadMeetingPdf(pdfButton.dataset.meetingPdf);
+        } else if (pptxButton) {
+          downloadMeetingPptx(pptxButton.dataset.meetingPptx);
+        }
+      },
+    },
+  ];
+  if (dashboardState.tables.meetings) {
+    dashboardState.tables.meetings.destroy();
+  }
+  dashboardState.tables.meetings = new Tabulator(host, {
+    data: state.meetings.rows,
+    layout: "fitColumns",
+    height: "330px",
+    placeholder: "Todavía no hay informes generados",
+    columns,
+  });
+}
+
+async function downloadMeetingPdf(reportId) {
+  return downloadMeetingFile(reportId, "pdf");
+}
+
+async function downloadMeetingPptx(reportId) {
+  return downloadMeetingFile(reportId, "pptx");
+}
+
+async function downloadMeetingFile(reportId, fileType) {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (state.auth.csrfToken) {
+    headers.set("X-CSRF-Token", state.auth.csrfToken);
+  }
+  const response = await fetch(`/api/meetings/${fileType}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ report_id: reportId }),
+  });
+  if (!response.ok) {
+    let message = `No se pudo descargar el ${fileType.toUpperCase()}.`;
+    try {
+      message = (await response.json()).error || message;
+    } catch (_) {
+      // Respuesta no JSON.
+    }
+    window.alert(message);
+    return;
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="([^"]+)"/);
+  const filename = match?.[1] || `codenoa_reunion_${reportId.slice(0, 8)}.${fileType}`;
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById("generateMeetingReport")?.addEventListener("click", createMeetingReport);
 
 function renderDashboardFallback() {
   [
@@ -3846,7 +4942,9 @@ function renderSellerDashboardTable(dashboard) {
   }
   const rows = dashboard.rows || [];
   const columns = [
-    { title: "Vendedor", field: "seller", minWidth: 180, headerFilter: "input" },
+    { title: "Vendedor", field: "seller", minWidth: 180, headerFilter: "input", cssClass: "coach-link" },
+    { title: "Rank venta", field: "rankSales", width: 88, hozAlign: "center" },
+    { title: "Rank cant.", field: "rankQuantity", width: 86, hozAlign: "center" },
     { title: "Estado", field: "status", width: 96, headerFilter: "list", headerFilterParams: { valuesLookup: true } },
     { title: "Pesos", field: "sales", width: 100, hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
     { title: "Vs ant.", field: "growthPct", width: 86, hozAlign: "right", formatter: (cell) => pctNumber(cell.getValue()) },
@@ -3869,6 +4967,12 @@ function renderSellerDashboardTable(dashboard) {
       placeholder: "Sin registros para mostrar",
       columns,
     });
+    dashboardState.tables.sellers.on("rowClick", (_event, row) => {
+      const data = row.getData();
+      if (data.sellerKey) {
+        openSellerCoach(data.sellerKey).catch(showError);
+      }
+    });
     return;
   }
   dashboardState.tables.sellers.setColumns(columns);
@@ -3886,7 +4990,7 @@ function renderClientDashboardTable(dashboard) {
   }
   const rows = dashboard.rows || [];
   const columns = [
-    { title: "Cliente", field: "client", minWidth: 220, headerFilter: "input" },
+    { title: "Cliente", field: "client", minWidth: 220, headerFilter: "input", cssClass: "coach-link" },
     { title: "Estado", field: "status", width: 110, headerFilter: "list", headerFilterParams: { valuesLookup: true } },
     { title: "Pesos", field: "sales", width: 100, hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
     { title: "Vs ant.", field: "growthPct", width: 86, hozAlign: "right", formatter: (cell) => pctNumber(cell.getValue()) },
@@ -3908,10 +5012,148 @@ function renderClientDashboardTable(dashboard) {
       placeholder: "Sin registros para mostrar",
       columns,
     });
+    dashboardState.tables.clients.on("rowClick", (_event, row) => {
+      const data = row.getData();
+      if (data.clientKey) {
+        openClientCoach(data.clientKey).catch(showError);
+      }
+    });
     return;
   }
   dashboardState.tables.clients.setColumns(columns);
   dashboardState.tables.clients.replaceData(rows);
+}
+
+function salesCoachRange() {
+  const erp = state.datasets.sales?.erp || {};
+  const report = state.reportView.lastData?.meta || {};
+  return {
+    fechaDesde: erp.fechaDesde || report.periodStart || "",
+    fechaHasta: erp.fechaHasta || report.periodEnd || "",
+  };
+}
+
+async function openSellerCoach(sellerKey, updateUrl = true) {
+  const { fechaDesde, fechaHasta } = salesCoachRange();
+  if (!fechaDesde || !fechaHasta) {
+    throw new Error("Primero seleccioná y analizá un período.");
+  }
+  setStatus("Construyendo ficha gobernada del vendedor...");
+  const data = await api(
+    `/api/sales-coach/seller?sellerKey=${encodeURIComponent(sellerKey)}&fechaDesde=${encodeURIComponent(fechaDesde)}&fechaHasta=${encodeURIComponent(fechaHasta)}`
+  );
+  state.salesCoachDetail = data;
+  renderSellerCoachDetail(data);
+  if (updateUrl) {
+    window.history.pushState({}, "", `/sales-coach/seller?sellerKey=${encodeURIComponent(sellerKey)}`);
+  }
+}
+
+async function openClientCoach(clientKey, updateUrl = true) {
+  const { fechaDesde, fechaHasta } = salesCoachRange();
+  if (!fechaDesde || !fechaHasta) {
+    throw new Error("Primero seleccioná y analizá un período.");
+  }
+  setStatus("Construyendo ficha gobernada del cliente...");
+  const data = await api(
+    `/api/sales-coach/client?clientKey=${encodeURIComponent(clientKey)}&fechaDesde=${encodeURIComponent(fechaDesde)}&fechaHasta=${encodeURIComponent(fechaHasta)}`
+  );
+  state.salesCoachDetail = data;
+  renderClientCoachDetail(data);
+  if (updateUrl) {
+    window.history.pushState({}, "", `/sales-coach/client?clientKey=${encodeURIComponent(clientKey)}`);
+  }
+}
+
+function renderSellerCoachDetail(data) {
+  const panel = document.getElementById("salesCoachDetailPanel");
+  if (!panel) return;
+  const id = data.identification || {};
+  const kpis = data.kpis || {};
+  document.getElementById("salesCoachDetailTitle").textContent = id.name || "Ficha de vendedor";
+  document.getElementById("salesCoachDetailSubtitle").textContent =
+    `${id.salesForce || "Sin fuerza"} · ${id.period || ""} · actualizado ${data.updatedAt || "sin fecha"}`;
+  renderMetricTiles("salesCoachDetailKpis", [
+    { label: "Venta neta", value: money(kpis.sales || 0), sub: `rank ${kpis.rankSales || "-"}`, tone: "neutral" },
+    { label: "Cantidad", value: decimalNumber(kpis.quantity || 0), sub: `rank ${kpis.rankQuantity || "-"}`, tone: "neutral" },
+    { label: "Crecimiento", value: pctNumber(kpis.growthPct || 0), sub: money(kpis.incrementalSales || 0), tone: (kpis.growthPct || 0) >= 0 ? "good" : "warn" },
+    { label: "Clientes activos", value: intNumber(kpis.clients || 0), sub: `${kpis.recoveredClients || 0} recuperados`, tone: "neutral" },
+    { label: "Ticket", value: money(kpis.avgTicket || 0), sub: `${kpis.mixCount || 0} de mix`, tone: "neutral" },
+    { label: "Concentración", value: pctNumber(kpis.top3ClientsSharePct || 0), sub: "top 3 clientes", tone: (kpis.top3ClientsSharePct || 0) >= 50 ? "warn" : "good" },
+    { label: "Estabilidad", value: pctNumber(kpis.stabilityPct || 0), sub: "variación mensual inversa", tone: (kpis.stabilityPct || 0) >= 80 ? "good" : "warn" },
+    { label: "Potencial", value: money(kpis.potentialEstimated || 0), sub: "fórmula visible en detalle", tone: "neutral" },
+  ]);
+  renderCoachEvidence("salesCoachStrengths", data.strengths || []);
+  renderCoachEvidence("salesCoachOpportunities", data.opportunities || []);
+  const comparisons = data.comparisons || {};
+  const objective = (data.objectives || [])[0];
+  document.getElementById("salesCoachDetailBody").innerHTML = [
+    `<div class="insight-item"><strong>Comparación:</strong> período anterior ${money(comparisons.previousPeriodSales || 0)} · promedio equipo ${money(comparisons.teamAverageSales || 0)} · top 25% desde ${money(comparisons.teamTop25Threshold || 0)} · mismo período año anterior ${money(comparisons.yearOverYearSales || 0)}.</div>`,
+    `<div class="insight-item"><strong>Objetivo:</strong> ${objective ? `${money(Number(objective.target_value || 0))} · cumplimiento ${pctNumber(objective.progress?.fulfillment_pct || 0)}` : "sin objetivo personal activo para el período"}.</div>`,
+    ...(data.actionPlan || []).map((item) => `<div class="insight-item"><strong>Acción ${item.priority}:</strong> ${escapeHtml(item.action)}<div class="evidence">${formatCoachEvidence(item.evidence)}</div></div>`),
+    `<div class="insight-item"><strong>Rankings:</strong> ${(data.rankingDefinitions || []).map((item) => `${escapeHtml(item.label)}: ${escapeHtml(item.formula)}`).join(" · ")}</div>`,
+    `<div class="insight-item"><strong>Motor determinista:</strong> reglas ${escapeHtml(data.commentAudit?.ruleSetId || "-")} v${Number(data.commentAudit?.ruleSetVersion || 0)} · auditoría ${escapeHtml(data.commentAudit?.auditId || "-")} · sin IA.</div>`,
+  ].join("");
+  panel.classList.remove("hidden");
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  setStatus(`Ficha de ${id.name || "vendedor"} generada con evidencia numérica.`);
+}
+
+function renderClientCoachDetail(data) {
+  const panel = document.getElementById("salesCoachDetailPanel");
+  if (!panel) return;
+  const id = data.identification || {};
+  const kpis = data.kpis || {};
+  document.getElementById("salesCoachDetailTitle").textContent = id.name || "Ficha de cliente";
+  document.getElementById("salesCoachDetailSubtitle").textContent =
+    `${id.seller || "Sin vendedor"} · ${id.route || "Sin ruta"} · actualizado ${data.updatedAt || "sin fecha"}`;
+  renderMetricTiles("salesCoachDetailKpis", [
+    { label: "Venta neta", value: money(kpis.sales || 0), sub: `vs ${money(kpis.previousSales || 0)}`, tone: "neutral" },
+    { label: "Crecimiento", value: pctNumber(kpis.growthPct || 0), sub: "vs período anterior", tone: (kpis.growthPct || 0) >= 0 ? "good" : "warn" },
+    { label: "Cantidad", value: decimalNumber(kpis.quantity || 0), sub: `${kpis.orders || 0} pedidos`, tone: "neutral" },
+    { label: "Ticket", value: money(kpis.avgTicket || 0), sub: `${kpis.frequency || 0} días con compra`, tone: "neutral" },
+    { label: "Mix", value: intNumber(kpis.mixProducts || 0), sub: `${kpis.mixFamilies || 0} familias`, tone: "neutral" },
+    { label: "Recencia", value: `${intNumber(kpis.recencyDays || 0)} días`, sub: kpis.lastPurchase || "-", tone: (kpis.recencyDays || 0) > 60 ? "warn" : "good" },
+  ]);
+  renderCoachEvidence("salesCoachStrengths", [{
+    message: `Historial disponible de ${(data.history || []).length} meses y mix de ${(data.products || []).length} productos.`,
+    evidence: { months: (data.history || []).length, products: (data.products || []).length },
+  }]);
+  renderCoachEvidence("salesCoachOpportunities", data.opportunities || []);
+  document.getElementById("salesCoachDetailBody").innerHTML = [
+    `<div class="insight-item"><strong>Riesgo:</strong> ${escapeHtml(data.risk?.level || "sin clasificar")}<div class="evidence">${formatCoachEvidence(data.risk?.evidence || {})}</div></div>`,
+    `<div class="insight-item"><strong>Familias:</strong> ${(data.families || []).map(escapeHtml).join(", ") || "sin maestro suficiente"}.</div>`,
+    `<div class="insight-item"><strong>Categorías ausentes:</strong> ${(data.absentCategories || []).map(escapeHtml).join(", ") || "sin brechas detectables con el maestro actual"}.</div>`,
+    `<div class="insight-item"><strong>Productos:</strong> ${(data.products || []).map(escapeHtml).join(", ") || "sin productos en el período"}.</div>`,
+  ].join("");
+  panel.classList.remove("hidden");
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  setStatus(`Ficha de ${id.name || "cliente"} generada con evidencia numérica.`);
+}
+
+function renderCoachEvidence(targetId, items) {
+  const node = document.getElementById(targetId);
+  if (!node) return;
+  node.innerHTML = items.length
+    ? items.map((item) => `<div class="insight-item">${escapeHtml(item.message || item.action || "")}<div class="evidence">${formatCoachEvidence(item.evidence || {})}</div></div>`).join("")
+    : "<div class='muted'>Sin observaciones para este período.</div>";
+}
+
+function formatCoachEvidence(evidence) {
+  return Object.entries(evidence || {})
+    .map(([key, value]) => `${escapeHtml(key)}: ${escapeHtml(String(value))}`)
+    .join(" · ");
+}
+
+async function openRequestedSalesCoachDetail() {
+  const path = window.location.pathname;
+  const params = new URLSearchParams(window.location.search);
+  if (path === "/sales-coach/seller" && params.get("sellerKey")) {
+    await openSellerCoach(params.get("sellerKey"), false);
+  }
+  if (path === "/sales-coach/client" && params.get("clientKey")) {
+    await openClientCoach(params.get("clientKey"), false);
+  }
 }
 
 function renderHistoryDashboardTable(dashboard) {
@@ -4355,9 +5597,18 @@ function renderSelectableField(kind, field, config, selectedValues) {
   `;
 }
 
-function renderSummaryCards(summary, meta = {}, mode = "mixed") {
+function renderSummaryCards(summary, meta = {}, mode = "mixed", coachSummary = null) {
   const comparisonLabel = meta?.comparison?.comparisonLabel || summary.comparisonLabel || "período anterior equivalente";
-  const cards = mode === "mixed" ? [
+  const cards = mode === "mixed" && coachSummary ? [
+    ["Venta neta", money(coachSummary.netSales || 0), `crecimiento ${pctNumber(coachSummary.growthPct || 0)}`],
+    ["Cantidad", decimalNumber(coachSummary.quantity || 0), "cantidad comercial normalizada"],
+    ["Clientes activos", intNumber(coachSummary.activeClients || 0), "clientes únicos con compra"],
+    ["Ticket promedio", money(coachSummary.avgTicket || 0), "venta neta por pedido"],
+    ["Valor por cantidad", money(coachSummary.valuePerQuantity || 0), "venta neta / cantidad"],
+    ["Cumplimiento", pctNumber(coachSummary.objectiveFulfillmentPct || 0), "objetivos activos autorizados"],
+    ["Mix", `${summary.brandCount || 0} marcas`, `${summary.familyCount || 0} familias`],
+    ["Período", summary.periodLabel || `${meta.periodStart} a ${meta.periodEnd}`, "Sales Coach"],
+  ] : mode === "mixed" ? [
     ["Período comparado", summary.periodLabel || `${meta.periodStart} a ${meta.periodEnd}`, `vs ${comparisonLabel.toLowerCase()}`],
     ["Bultos del período", decimalNumber(summary.unitsCurrent), `base ${decimalNumber(summary.unitsPrevious || 0)} · ${summary.unitsGrowthPct}%`],
     ["Venta del período", money(summary.salesCurrent), `base ${money(summary.salesPrevious || 0)} · ${summary.salesGrowthPct}%`],
@@ -4387,6 +5638,11 @@ function renderSummaryCards(summary, meta = {}, mode = "mixed") {
     ["Mix activo", `${summary.brandCount} marcas`, `${summary.businessUnitCount} unidades negocio · ${summary.channelCount} canales`],
     ["Cobertura BI", `${summary.articleCoveragePct}%`, `${summary.routeCoveragePct}% rutas · ${summary.sellerCoveragePct}% vendedores`],
   ];
+  cards.unshift([
+    "Actualización del dato",
+    state.dataFreshness.updatedAt || "No informada",
+    `${state.dataFreshness.source || "fuente local"} · cobertura hasta ${state.dataFreshness.periodEnd || meta.periodEnd || "-"}`,
+  ]);
   document.getElementById("summaryCards").innerHTML = cards.map(([label, value, sub]) => `
     <article class="card summary-card">
       <div class="label">${label}</div>
@@ -5465,6 +6721,10 @@ function showError(error) {
   progressDepth = 0;
   hideProgressModal();
   const message = String(error?.message || "Error inesperado");
+  if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
+    setStatus("No se pudo conectar con el servidor. Los filtros NO se aplicaron y el informe visible sigue siendo la copia anterior. Verificá que app.py esté ejecutándose y volvé a pulsar Aplicar.");
+    return;
+  }
   if (error?.status === 422 && /No quedaron ventas/i.test(message)) {
     const activeFilterCount = countConstrainedFields(state.filters.selected, state.filters.available);
     const supplierFocus = normalizeSupplierFocusSelection();
@@ -5837,12 +7097,57 @@ function renderScatterSVG(data, axes) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+function initializeVisualPreferences() {
+  let theme = "light";
+  try {
+    theme = localStorage.getItem("codenoa-theme") || "light";
+  } catch (_) {
+    // La interfaz sigue funcionando aunque el navegador bloquee storage.
+  }
+  document.documentElement.dataset.theme = theme;
+  const themeToggle = document.getElementById("themeToggle");
+  if (themeToggle) {
+    themeToggle.setAttribute("aria-pressed", String(theme === "dark"));
+    themeToggle.title = theme === "dark" ? "Usar modo claro" : "Usar modo oscuro";
+    themeToggle.addEventListener("click", () => {
+      const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+      document.documentElement.dataset.theme = next;
+      themeToggle.setAttribute("aria-pressed", String(next === "dark"));
+      themeToggle.title = next === "dark" ? "Usar modo claro" : "Usar modo oscuro";
+      try {
+        localStorage.setItem("codenoa-theme", next);
+      } catch (_) {
+        // Preferencia no persistente.
+      }
+    });
+  }
+  const toggleParameters = document.getElementById("toggleParameters");
+  const controls = document.querySelector(".controls-bi");
+  if (toggleParameters && controls) {
+    toggleParameters.addEventListener("click", () => {
+      const collapsed = controls.classList.toggle("parameters-collapsed");
+      toggleParameters.textContent = collapsed ? "Mostrar parámetros" : "Ocultar parámetros";
+      toggleParameters.setAttribute("aria-expanded", String(!collapsed));
+    });
+  }
+}
+
+initializeVisualPreferences();
 bindClick("uploadBtn", () => uploadFiles().catch(showError));
 bindClick("clearUploadsBtn", () => clearUploads().catch(showError));
 bindClick("refreshFiles", () => boot().catch(showError));
 bindClick("analyzeBtn", () => analyze().catch(showError));
+bindClick("printSellerBrief", () => printSellerCoachSheet("seller"));
+bindClick("printTeamBrief", () => printSellerCoachSheet("team"));
 bindClick("dynRunBtn", () => runDynamicTask().catch(showError));
 bindClick("refreshAdminErrors", () => refreshAdminErrors().catch(showError));
+bindClick("logoutBtn", () => logout().catch(showError));
+bindClick("closeSalesCoachDetail", () => {
+  const panel = document.getElementById("salesCoachDetailPanel");
+  if (panel) panel.classList.add("hidden");
+  state.salesCoachDetail = null;
+  window.history.pushState({}, "", "/sales-coach");
+});
 bindChange("libraryScope", async (event) => {
   state.scope = event.target.value;
   await boot().catch(showError);
@@ -5860,4 +7165,4 @@ window.addEventListener("resize", () => {
   });
 });
 
-boot().catch(showError);
+initializeAuthentication().then(boot).catch(showError);

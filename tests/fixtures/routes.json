@@ -1,0 +1,4 @@
+[
+  {"route_key": "R1", "route_description": "Ruta Norte", "seller_key": "S1", "seller_name": "Vendedora Norte", "sales_force": "Minorista", "client_keys": ["C1", "C3"]},
+  {"route_key": "R2", "route_description": "Ruta Sur", "seller_key": "S2", "seller_name": "Vendedor Sur", "sales_force": "Mayorista", "client_keys": ["C2"]}
+]

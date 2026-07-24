@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from threading import Lock, local
 from datetime import date, datetime, timezone
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -49,8 +50,9 @@ CLICKHOUSE_SALES_COLUMNS = [
     "synced_at",
 ]
 
-_client = None
+_client_state = local()
 _schema_ready = False
+_schema_lock = Lock()
 
 
 def _config():
@@ -81,12 +83,12 @@ def clickhouse_configured():
 
 
 def get_clickhouse_client():
-    global _client
     if not clickhouse_configured():
         return None
-    if _client is None:
+    client = getattr(_client_state, "client", None)
+    if client is None:
         cfg = _config()
-        _client = clickhouse_connect.get_client(
+        client = clickhouse_connect.get_client(
             host=cfg["host"],
             port=cfg["port"],
             username=cfg["username"],
@@ -96,7 +98,8 @@ def get_clickhouse_client():
             connect_timeout=cfg["timeout"],
             send_receive_timeout=cfg["timeout"],
         )
-    return _client
+        _client_state.client = client
+    return client
 
 
 def _qualified_table():
@@ -109,11 +112,14 @@ def _ensure_schema():
     client = get_clickhouse_client()
     if client is None or _schema_ready:
         return
-    cfg = _config()
-    client.command(f"CREATE DATABASE IF NOT EXISTS {cfg['database']}")
-    client.command(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_qualified_table()} (
+    with _schema_lock:
+        if _schema_ready:
+            return
+        cfg = _config()
+        client.command(f"CREATE DATABASE IF NOT EXISTS {cfg['database']}")
+        client.command(
+            f"""
+            CREATE TABLE IF NOT EXISTS {_qualified_table()} (
             date Date,
             year UInt16,
             month UInt8,
@@ -143,19 +149,19 @@ def _ensure_schema():
         ORDER BY (date, client_key, seller_key, product_key, invoice)
         SETTINGS index_granularity = 8192
         """
-    )
-    client.command(
-        f"ALTER TABLE {_qualified_table()} ADD COLUMN IF NOT EXISTS sync_run_id String DEFAULT ''"
-    )
-    for column in ("seller_name", "sales_scheme_key", "sales_scheme_name", "sales_force"):
-        client.command(f"ALTER TABLE {_qualified_table()} ADD COLUMN IF NOT EXISTS {column} String DEFAULT ''")
-    for column in ("amount_net", "amount_final", "internal_taxes", "amount_net_internal"):
-        client.command(
-            f"ALTER TABLE {_qualified_table()} ADD COLUMN IF NOT EXISTS {column} Float64 DEFAULT amount"
-            if column != "internal_taxes"
-            else f"ALTER TABLE {_qualified_table()} ADD COLUMN IF NOT EXISTS {column} Float64 DEFAULT 0"
         )
-    _schema_ready = True
+        client.command(
+            f"ALTER TABLE {_qualified_table()} ADD COLUMN IF NOT EXISTS sync_run_id String DEFAULT ''"
+        )
+        for column in ("seller_name", "sales_scheme_key", "sales_scheme_name", "sales_force"):
+            client.command(f"ALTER TABLE {_qualified_table()} ADD COLUMN IF NOT EXISTS {column} String DEFAULT ''")
+        for column in ("amount_net", "amount_final", "internal_taxes", "amount_net_internal"):
+            client.command(
+                f"ALTER TABLE {_qualified_table()} ADD COLUMN IF NOT EXISTS {column} Float64 DEFAULT amount"
+                if column != "internal_taxes"
+                else f"ALTER TABLE {_qualified_table()} ADD COLUMN IF NOT EXISTS {column} Float64 DEFAULT 0"
+            )
+        _schema_ready = True
 
 
 def _empty_sales_confirmed(warning):
@@ -413,6 +419,38 @@ def load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta):
     }
 
 
+def get_clickhouse_sales_aggregate(fecha_desde: str, fecha_hasta: str) -> dict:
+    """Return governed totals without loading the historical detail into Python."""
+    start = date.fromisoformat(fecha_desde)
+    end = date.fromisoformat(fecha_hasta)
+    if start > end:
+        raise ValueError("fechaDesde no puede ser posterior a fechaHasta")
+    client = get_clickhouse_client()
+    if client is None:
+        return {
+            "available": False,
+            "records": None,
+            "amountNet": None,
+            "quantity": None,
+            "error": "ClickHouse no está configurado",
+        }
+    _ensure_schema()
+    row = client.query(
+        f"""
+        SELECT count(), sum(amount_net), sum(quantity)
+        FROM {_qualified_table()}
+        WHERE date >= toDate('{start.isoformat()}')
+          AND date <= toDate('{end.isoformat()}')
+        """
+    ).result_rows[0]
+    return {
+        "available": True,
+        "records": int(row[0] or 0),
+        "amountNet": round(float(row[1] or 0), 2),
+        "quantity": round(float(row[2] or 0), 6),
+    }
+
+
 def get_clickhouse_storage_status():
     if clickhouse_connect is None:
         return {
@@ -431,7 +469,9 @@ def get_clickhouse_storage_status():
     try:
         client = get_clickhouse_client()
         _ensure_schema()
-        rows = client.query(f"SELECT count(), min(date), max(date) FROM {_qualified_table()}").result_rows[0]
+        rows = client.query(
+            f"SELECT count(), min(date), max(date), max(synced_at) FROM {_qualified_table()}"
+        ).result_rows[0]
         parts = client.query(
             f"""
             SELECT sum(rows), sum(bytes_on_disk)
@@ -441,9 +481,19 @@ def get_clickhouse_storage_status():
               AND active
             """
         ).result_rows[0]
+        pending_mutations = client.query(
+            f"""
+            SELECT count()
+            FROM system.mutations
+            WHERE database = '{_config()["database"]}'
+              AND table = '{_config()["table"]}'
+              AND is_done = 0
+            """
+        ).result_rows[0][0]
         record_count = int(rows[0] or 0)
         period_start = rows[1].isoformat() if record_count and rows[1] else None
         period_end = rows[2].isoformat() if record_count and rows[2] else None
+        last_sync_at = rows[3].replace(tzinfo=timezone.utc).isoformat() if record_count and rows[3] else None
         return {
             "configured": True,
             "connected": True,
@@ -452,9 +502,11 @@ def get_clickhouse_storage_status():
             "records": record_count,
             "periodStart": period_start,
             "periodEnd": period_end,
+            "lastSyncAt": last_sync_at,
             "rows": int(parts[0] or 0),
             "storageBytes": int(parts[1] or 0),
             "storageMB": round((parts[1] or 0) / 1024 / 1024, 2),
+            "pendingMutations": int(pending_mutations or 0),
             "database": _config()["database"],
             "table": _config()["table"],
         }

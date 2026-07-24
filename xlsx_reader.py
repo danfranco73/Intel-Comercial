@@ -75,7 +75,8 @@ def _load_workbook(path):
 
     rel_map = {}
     for rel in workbook_rels.findall("pkgrel:Relationship", NS):
-        rel_map[rel.attrib["Id"]] = "xl/" + rel.attrib["Target"]
+        target = rel.attrib["Target"].lstrip("/")
+        rel_map[rel.attrib["Id"]] = target if target.startswith("xl/") else f"xl/{target}"
 
     sheets = []
     for sheet in workbook_xml.findall("main:sheets/main:sheet", NS):

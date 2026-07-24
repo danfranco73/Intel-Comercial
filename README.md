@@ -1,5 +1,31 @@
 # Gestión Comercial Local
 
+> Transformación incremental a **Codenoa Sales Coach**. La FASE 0/1 agrega
+> documentación, pruebas, usuarios, sesiones, roles, CSRF y alcance comercial
+> server-side sin reemplazar el frontend ni las integraciones existentes.
+
+Antes del primer inicio seguro:
+
+```bash
+.venv/bin/python -m pip install -r requirements.txt
+BOOTSTRAP_ADMIN_EMAIL=admin@example.test \
+BOOTSTRAP_ADMIN_PASSWORD='definir-una-clave-fuerte' \
+.venv/bin/python scripts/migrate_phase1_auth.py
+.venv/bin/python app.py
+```
+
+Documentación: `docs/ARCHITECTURE_BASELINE.md`, `docs/ENDPOINT_INVENTORY.md` y
+`docs/SECURITY_PHASE1.md`. La arquitectura modular de FASE 2 se describe en
+`docs/ARCHITECTURE_PHASE2.md`.
+La operación confiable de datos de FASE 3 se documenta en
+`docs/PHASE_3_OPERATIONS.md`.
+Los objetivos persistentes de FASE 4 usan el catálogo
+`docs/METRIC_CATALOG_OBJECTIVES.md`.
+Las métricas y fórmulas de las fichas Sales Coach de FASE 5 están documentadas
+en `docs/SALES_COACH_METRICS.md`.
+El catálogo determinista y versionado de FASE 6 se describe en
+`docs/COACH_COMMENT_RULES.md`.
+
 Versión local para analizar ventas históricas de una distribuidora relacionando cuatro datasets:
 
 1. Venta por cliente
@@ -59,7 +85,8 @@ CLICKHOUSE_TIMEOUT=15
 CLICKHOUSE_MUTATION_TIMEOUT=180
 ```
 
-Si definís `APP_ADMIN_TOKEN`, la superficie `Admin` pedirá ese token para ejecutar syncs, uploads, limpieza de biblioteca, listar análisis y consultar errores operativos.
+La superficie `Admin` requiere un usuario autenticado con rol `admin`; el token
+administrativo compartido ya no es el mecanismo principal.
 
 1. En la tarjeta `Venta por cliente`, elegí `ChessERP`.
 2. Definí `Fecha desde` y `Fecha hasta`.
@@ -78,6 +105,35 @@ python3 scripts/erp_sync_range.py \
   --to-date 2026-05-28 \
   --force-refresh-sales \
   --refresh-masters
+```
+
+Cada ejecución desde API o CLI queda registrada con `run_id`, duración, filas,
+error y conciliación MongoDB/ClickHouse.
+
+Para una sincronización recurrente desacoplada del servidor HTTP:
+
+```bash
+.venv/bin/python scripts/migrate_phase3_sync.py
+.venv/bin/python scripts/sync_scheduler.py
+```
+
+Para crear la colección e importar presupuestos mensuales compatibles como
+borradores:
+
+```bash
+DEFAULT_COMPANY_KEY=CODENOA .venv/bin/python scripts/migrate_phase4_objectives.py
+```
+
+Para preparar alertas comerciales persistentes y sus índices:
+
+```bash
+ALERT_SYNC_MAX_AGE_HOURS=30 .venv/bin/python scripts/migrate_phase7_alerts.py
+```
+
+Para preparar snapshots versionados de reuniones y exportación PDF/PPTX:
+
+```bash
+.venv/bin/python scripts/migrate_phase8_meetings.py
 ```
 
 Notas:

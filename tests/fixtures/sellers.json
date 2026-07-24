@@ -1,0 +1,4 @@
+[
+  {"seller_key": "S1", "seller_name": "Vendedora Norte", "sales_force_key": "F1", "sales_force": "Minorista", "branch_key": "B1", "supervisor_key": "SUP1"},
+  {"seller_key": "S2", "seller_name": "Vendedor Sur", "sales_force_key": "F2", "sales_force": "Mayorista", "branch_key": "B2", "supervisor_key": "SUP2"}
+]

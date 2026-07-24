@@ -254,10 +254,17 @@ def load_bi_context(datasets):
     }
 
 
-def build_consistency_report(datasets):
+def build_consistency_report(datasets, scope_filters=None):
     context = load_bi_context(datasets)
+    enriched_sales, selected_universe = apply_data_scope(context, scope_filters)
+    consistency = evaluate_consistency(
+        context["loaded"],
+        enriched_sales,
+        selected_universe,
+        context["salesContext"],
+    )
     return {
-        "consistency": context["consistency"],
+        "consistency": consistency,
         "meta": {
             "periodStart": context["salesContext"]["selectedStart"].isoformat(),
             "periodEnd": context["salesContext"]["selectedEnd"].isoformat(),
@@ -266,16 +273,16 @@ def build_consistency_report(datasets):
     }
 
 
-def build_tactical_month_report(datasets, filters=None, supplier_focus=None, planning=None):
+def build_tactical_month_report(datasets, filters=None, supplier_focus=None, planning=None, scope_filters=None):
     context = load_bi_context(datasets)
-    enriched_sales = context["enrichedSales"]
+    enriched_sales, selected_universe = apply_data_scope(context, scope_filters)
     sales_context = context["salesContext"]
-    normalized_filters = remove_noop_filters(filters or {}, context["selectedUniverse"], sales_context)
+    normalized_filters = remove_noop_filters(filters or {}, selected_universe, sales_context)
     tactical_filters = remove_filter_field(remove_filter_field(normalized_filters, "year"), "month")
     effective_filters = merge_supplier_focus_filter(tactical_filters, supplier_focus)
     applied_filters, filtered_sales = apply_filters(enriched_sales, effective_filters)
     if not filtered_sales:
-        effective_filters = relax_broad_filters(effective_filters, context["selectedUniverse"], sales_context)
+        effective_filters = relax_broad_filters(effective_filters, selected_universe, sales_context)
         applied_filters, filtered_sales = apply_filters(enriched_sales, effective_filters)
         if not filtered_sales:
             raise ValueError("No quedaron ventas para construir el dashboard ejecutivo del mes.")
@@ -292,13 +299,17 @@ def build_tactical_month_report(datasets, filters=None, supplier_focus=None, pla
     }
 
 
-def analyze_datasets(datasets, filters=None, supplier_focus=None, planning=None):
+def analyze_datasets(datasets, filters=None, supplier_focus=None, planning=None, scope_filters=None):
     context = load_bi_context(datasets)
     loaded = context["loaded"]
-    enriched_sales = context["enrichedSales"]
+    enriched_sales, selected_unfiltered_sales = apply_data_scope(context, scope_filters)
     sales_context = context["salesContext"]
-    selected_unfiltered_sales = context["selectedUniverse"]
-    consistency = context["consistency"]
+    consistency = evaluate_consistency(
+        loaded,
+        enriched_sales,
+        selected_unfiltered_sales,
+        sales_context,
+    )
 
     normalized_filters = remove_noop_filters(filters or {}, selected_unfiltered_sales, sales_context)
     base_filters = remove_filter_field(normalized_filters, "supplier")
@@ -501,6 +512,17 @@ def analyze_datasets(datasets, filters=None, supplier_focus=None, planning=None)
         "availableFilters": available_filters,
         "appliedFilters": applied_filters,
     }
+
+
+def apply_data_scope(context, scope_filters):
+    """Restrict the record universe before user filters and faceting are calculated."""
+    enriched_sales = list(context["enrichedSales"])
+    selected_universe = list(context["selectedUniverse"])
+    if not scope_filters:
+        return enriched_sales, selected_universe
+    _, enriched_sales = apply_filters(enriched_sales, scope_filters)
+    _, selected_universe = apply_filters(selected_universe, scope_filters)
+    return enriched_sales, selected_universe
 
 
 def load_dataset(dataset_type, source):
@@ -814,15 +836,26 @@ def aggregate_clients(records, current_start, current_end, previous_start=None, 
         reference = current_items or relevant_items
         orders = len({item["invoice"] for item in reference})
         families = {item["family"] for item in reference if item["family"] != "Sin familia"}
+        products = {
+            item.get("product_key")
+            for item in reference
+            if item.get("product_key")
+        }
         quantity_current = sum(item.get("quantity", 0) or 0 for item in current_items)
         quantity_previous = sum(item.get("quantity", 0) or 0 for item in previous_items)
         quantity_history = sum(item.get("quantity", 0) or 0 for item in relevant_items)
+        net_current = sum(metric_value(item, "amount_net") for item in current_items)
+        net_previous = sum(metric_value(item, "amount_net") for item in previous_items)
+        net_history = sum(metric_value(item, "amount_net") for item in relevant_items)
         clients[client_key] = {
             "client_key": client_key,
             "client": relevant_items[-1]["client"],
             "sales12m": round(sum(item["amount"] for item in current_items), 2),
             "salesPrevious": round(sum(item["amount"] for item in previous_items), 2),
             "salesHistory": round(sum(item["amount"] for item in relevant_items), 2),
+            "salesNet": round(net_current, 2),
+            "salesNetPrevious": round(net_previous, 2),
+            "salesNetHistory": round(net_history, 2),
             "quantity12m": round(quantity_current, 2),
             "quantityPrevious": round(quantity_previous, 2),
             "quantityHistory": round(quantity_history, 2),
@@ -831,6 +864,7 @@ def aggregate_clients(records, current_start, current_end, previous_start=None, 
             "avgUnitsPerOrder": round(quantity_current / max(orders, 1), 2),
             "orders": orders,
             "families": len(families),
+            "products": len(products),
             "lastDate": last_date.isoformat(),
             "recencyDays": recency,
             "avgGapDays": round(avg_gap, 1),

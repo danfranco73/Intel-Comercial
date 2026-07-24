@@ -9,8 +9,20 @@
   <body data-surface="admin">
     <main class="layout">
       <nav class="surface-switch" aria-label="Superficies">
-        <a href="/bi">Comercial</a>
-        <a class="active" href="/admin">Admin</a>
+        <a class="brand-lockup" href="/bi" aria-label="Codenoa Intelligence">
+          <span class="brand-mark" aria-hidden="true">C</span>
+          <span><strong>Codenoa</strong><small>Intelligence</small></span>
+        </a>
+        <div class="surface-links">
+          <a href="/bi">Comercial</a>
+          <a href="/sales-coach">Sales Coach</a>
+          <a class="active" href="/admin">Admin</a>
+        </div>
+        <div class="surface-actions">
+          <button id="themeToggle" class="icon-button" type="button" aria-label="Cambiar modo de color">◐</button>
+          <span id="currentUser" class="current-user"></span>
+          <button id="logoutBtn" type="button">Salir</button>
+        </div>
       </nav>
 
       <section class="hero">
@@ -89,6 +101,83 @@
               <button id="refreshAdminErrors">Actualizar errores</button>
             </div>
             <div id="adminErrors" class="insight-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel admin-access-config">
+        <div class="subpanel-header">
+          <div>
+            <p class="eyebrow">Configuración</p>
+            <h2>Empresas y acceso de usuarios</h2>
+            <p class="muted">Grupo económico equivale a acceso total. Una empresa limita simultáneamente las sucursales y los proveedores configurados.</p>
+          </div>
+        </div>
+        <div class="access-catalog-sync">
+          <strong>Sincronizar catálogos desde ventas Chess</strong>
+          <label>Desde<input id="accessCatalogSyncFrom" type="date"></label>
+          <label>Hasta<input id="accessCatalogSyncTo" type="date"></label>
+          <button id="syncAccessCatalogs" type="button" class="primary">Sincronizar sucursales y depósitos</button>
+          <span id="accessCatalogSyncStatus" class="muted"></span>
+        </div>
+        <div class="two-col">
+          <form id="companyAccessForm" class="panel inner-panel admin-config-form">
+            <h3>Configurar empresa</h3>
+            <label>Código<input id="accessCompanyKey" required placeholder="EMPRESA_NORTE"></label>
+            <label>Nombre<input id="accessCompanyName" required placeholder="Empresa Norte"></label>
+            <div class="access-check-group">
+              <div class="access-check-header"><strong>Sucursales</strong><span><button type="button" data-access-toggle="branches" data-action="all">Todas</button><button type="button" data-access-toggle="branches" data-action="none">Ninguna</button></span></div>
+              <div id="accessCompanyBranches" class="access-checkbox-list"></div>
+              <div class="access-inline-add"><input id="manualBranchKey" placeholder="Código de sucursal"><input id="manualBranchName" placeholder="Nombre"><button id="addManualBranch" type="button">Agregar</button></div>
+            </div>
+            <div class="access-check-group">
+              <div class="access-check-header"><strong>Proveedores</strong><span><button type="button" data-access-toggle="suppliers" data-action="all">Todos</button><button type="button" data-access-toggle="suppliers" data-action="none">Ninguno</button></span></div>
+              <div id="accessCompanySuppliers" class="access-checkbox-list"></div>
+            </div>
+            <div class="access-check-group">
+              <div class="access-check-header"><strong>Líneas de producto</strong><span><button type="button" data-access-toggle="lines" data-action="all">Todas</button><button type="button" data-access-toggle="lines" data-action="none">Ninguna</button></span></div>
+              <div id="accessCompanyLines" class="access-checkbox-list"></div>
+            </div>
+            <div class="access-check-group">
+              <div class="access-check-header"><strong>Depósitos</strong><span><button type="button" data-access-toggle="deposits" data-action="all">Todos</button><button type="button" data-access-toggle="deposits" data-action="none">Ninguno</button></span></div>
+              <div id="accessCompanyDeposits" class="access-checkbox-list"></div>
+              <div class="access-inline-add"><input id="manualDepositKey" placeholder="Código de depósito"><input id="manualDepositName" placeholder="Nombre"><button id="addManualDeposit" type="button">Agregar</button></div>
+              <small class="muted">Chess todavía no informa depósito en las ventas; se conserva como configuración organizativa.</small>
+            </div>
+            <p id="companyAccessValidation" class="company-access-validation" role="status" aria-live="polite"></p>
+            <button id="saveAccessCompanyButton" type="submit" class="primary">Guardar empresa</button>
+          </form>
+          <form id="accessUserForm" class="panel inner-panel admin-config-form">
+            <h3>Dar de alta usuario</h3>
+            <label>Nombre<input id="accessUserName" required></label>
+            <label>Email<input id="accessUserEmail" type="email" required></label>
+            <label>Contraseña inicial<input id="accessUserPassword" type="password" required></label>
+            <label>Rol
+              <select id="accessUserRole">
+                <option value="commercial_director">Director comercial</option>
+                <option value="supervisor">Supervisor</option>
+                <option value="seller">Vendedor</option>
+                <option value="viewer">Solo lectura</option>
+                <option value="admin">Administrador</option>
+              </select>
+            </label>
+            <label>Acceso
+              <select id="accessUserCompany">
+                <option value="">Grupo económico · acceso total</option>
+              </select>
+            </label>
+            <label>Clave de vendedor <span class="muted">(obligatoria para rol vendedor)</span><input id="accessUserSellerKey"></label>
+            <button type="submit" class="primary">Crear usuario</button>
+          </form>
+        </div>
+        <div class="two-col">
+          <div class="panel inner-panel">
+            <h3>Empresas configuradas</h3>
+            <div id="accessCompaniesList" class="insight-list"></div>
+          </div>
+          <div class="panel inner-panel">
+            <h3>Usuarios</h3>
+            <div id="accessUsersList" class="insight-list"></div>
           </div>
         </div>
       </section>

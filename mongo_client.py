@@ -20,6 +20,8 @@ ERP_SALES_COLLECTION = "erp_sales"
 ERP_ARTICLES_COLLECTION = "erp_articles"
 ERP_SELLERS_COLLECTION = "erp_sellers"
 ERP_ROUTES_COLLECTION = "erp_routes"
+ERP_BRANCHES_COLLECTION = "erp_branches"
+ERP_DEPOSITS_COLLECTION = "erp_deposits"
 ERP_MARKETING_COLLECTION = "erp_marketing"
 ERP_SYNC_COLLECTION = "erp_sync_runs"
 DEFAULT_MONGO_WRITE_BATCH_SIZE = 400
@@ -38,6 +40,10 @@ COMPACT_SALE_FIELDS = (
     "sales_scheme_key",
     "sales_scheme_name",
     "sales_force",
+    "branch_key",
+    "branch_name",
+    "deposit_key",
+    "deposit_name",
     "product_key",
     "invoice",
     "channel",
@@ -166,6 +172,12 @@ def _ensure_erp_indexes(db):
     db[ERP_ROUTES_COLLECTION].create_index([("route_description", ASCENDING)])
     db[ERP_ROUTES_COLLECTION].create_index([("seller_name", ASCENDING)])
     db[ERP_ROUTES_COLLECTION].create_index([("sales_force", ASCENDING)])
+    db[ERP_BRANCHES_COLLECTION].create_index(
+        [("branch_key", ASCENDING)], unique=True, name="erp_branches_key_unique"
+    )
+    db[ERP_DEPOSITS_COLLECTION].create_index(
+        [("deposit_key", ASCENDING)], unique=True, name="erp_deposits_key_unique"
+    )
     db[ERP_MARKETING_COLLECTION].create_index([("marketing_key", ASCENDING)], unique=True)
     db[ERP_MARKETING_COLLECTION].create_index([("segment_name", ASCENDING)])
     db[ERP_MARKETING_COLLECTION].create_index([("channel_name", ASCENDING)])
@@ -275,6 +287,47 @@ def _compact_sale_record(record: dict) -> dict:
     return compact
 
 
+def sync_erp_sales_catalogs(records: list[dict], origin: str = "sales_sync") -> dict:
+    now = datetime.now(timezone.utc)
+    branches: dict[str, str] = {}
+    deposits: dict[str, str] = {}
+    for record in records:
+        branch_key = str(record.get("branch_key") or "").strip()
+        deposit_key = str(record.get("deposit_key") or "").strip()
+        if branch_key:
+            branches[branch_key] = str(record.get("branch_name") or branch_key).strip()
+        if deposit_key:
+            deposits[deposit_key] = str(record.get("deposit_name") or deposit_key).strip()
+    if branches:
+        def store_branches(db):
+            for key, name in branches.items():
+                db[ERP_BRANCHES_COLLECTION].update_one(
+                    {"branch_key": key},
+                    {"$set": {"branch_key": key, "branch_name": name, "source": "ChessERP", "updated_at": now}},
+                    upsert=True,
+                )
+        _run_mongo_write(store_branches)
+    if deposits:
+        def store_deposits(db):
+            for key, name in deposits.items():
+                db[ERP_DEPOSITS_COLLECTION].update_one(
+                    {"deposit_key": key},
+                    {"$set": {"deposit_key": key, "deposit_name": name, "source": "ChessERP", "updated_at": now}},
+                    upsert=True,
+                )
+        _run_mongo_write(store_deposits)
+    summary = {
+        "entity": "branches_deposits",
+        "branches": len(branches),
+        "deposits": len(deposits),
+        "origin": origin,
+        "timestamp": now,
+        "status": "success",
+    }
+    _run_mongo_write(lambda db: db[ERP_SYNC_COLLECTION].insert_one(dict(summary)))
+    return {**summary, "timestamp": now.isoformat()}
+
+
 def sync_erp_sales(
     records: list[dict],
     fecha_desde: str,
@@ -284,6 +337,7 @@ def sync_erp_sales(
     warning: str | None = None,
     empty_confirmed: bool = False,
 ) -> dict:
+    catalog_summary = sync_erp_sales_catalogs(records, origin=origin)
     documents_by_id = {}
     row_versions = 0
     sync_run_id = uuid4().hex
@@ -382,6 +436,7 @@ def sync_erp_sales(
         "status": "success",
         "timestamp": datetime.now(timezone.utc),
         "origin": origin,
+        "catalogs": catalog_summary,
     }
     _run_mongo_write(lambda db: db[ERP_SYNC_COLLECTION].insert_one({**summary, "entity": "sales"}))
     retention_summary = enforce_erp_sales_retention(origin=f"{origin}_retention")
@@ -592,9 +647,11 @@ def get_erp_sales_uncovered_ranges(fecha_desde: str, fecha_hasta: str) -> list[t
     return uncovered
 
 
-def get_erp_prefilter_options() -> dict:
+def get_erp_prefilter_options(seller_names: list[str] | None = None) -> dict:
     db = get_db()
     if db is None:
+        return {}
+    if seller_names == []:
         return {}
     _ensure_erp_indexes(db)
 
@@ -611,9 +668,11 @@ def get_erp_prefilter_options() -> dict:
             },
         )
     )
+    seller_query = {"seller_name": {"$in": seller_names}} if seller_names is not None else {}
+    route_query = {"seller_name": {"$in": seller_names}} if seller_names is not None else {}
     sellers = list(
         db[ERP_SELLERS_COLLECTION].find(
-            {},
+            seller_query,
             {
                 "_id": 0,
                 "sales_scheme_name": 1,
@@ -624,7 +683,7 @@ def get_erp_prefilter_options() -> dict:
     )
     routes = list(
         db[ERP_ROUTES_COLLECTION].find(
-            {},
+            route_query,
             {
                 "_id": 0,
                 "sales_scheme_name": 1,
@@ -964,7 +1023,7 @@ def _drop_index_if_exists(collection, name: str):
         pass
 
 
-def save_session(datasets: dict, planning: dict | None = None) -> bool:
+def save_session(datasets: dict, planning: dict | None = None, session_id: str = _SESSION_ID) -> bool:
     """
     Persiste la configuración de datasets (archivos, hojas, mappings, headerRow)
     en la colección 'sessions'. Hace upsert sobre el id fijo.
@@ -982,13 +1041,13 @@ def save_session(datasets: dict, planning: dict | None = None) -> bool:
         payload = {"datasets": datasets}
         if planning is not None:
             payload["planning"] = planning
-        db["sessions"].update_one({"_id": _SESSION_ID}, {"$set": payload}, upsert=True)
+        db["sessions"].update_one({"_id": session_id}, {"$set": payload}, upsert=True)
         return True
     except Exception:
         return False
 
 
-def load_session() -> dict | None:
+def load_session(session_id: str = _SESSION_ID) -> dict | None:
     """
     Recupera la configuración de datasets guardada.
 
@@ -999,7 +1058,7 @@ def load_session() -> dict | None:
     if db is None:
         return None
     try:
-        doc = db["sessions"].find_one({"_id": _SESSION_ID}, {"_id": 0, "datasets": 1, "planning": 1})
+        doc = db["sessions"].find_one({"_id": session_id}, {"_id": 0, "datasets": 1, "planning": 1})
         return doc if doc else None
     except Exception:
         return None

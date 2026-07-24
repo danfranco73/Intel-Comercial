@@ -10,8 +10,21 @@
   <body data-surface="bi">
     <main class="layout">
       <nav class="surface-switch" aria-label="Superficies">
-        <a class="active" href="/bi">Comercial</a>
-        <a href="/admin">Admin</a>
+        <a class="brand-lockup" href="/bi" aria-label="Codenoa Intelligence">
+          <span class="brand-mark" aria-hidden="true">C</span>
+          <span><strong>Codenoa</strong><small>Intelligence</small></span>
+        </a>
+        <div class="surface-links">
+          <a class="active" href="/bi">Comercial</a>
+          <a href="/sales-coach">Sales Coach</a>
+          <a href="/admin">Admin</a>
+        </div>
+        <div class="surface-actions">
+          <span id="headerPeriod" class="header-period">Período activo</span>
+          <button id="themeToggle" class="icon-button" type="button" aria-label="Cambiar modo de color">◐</button>
+          <span id="currentUser" class="current-user"></span>
+          <button id="logoutBtn" type="button">Salir</button>
+        </div>
       </nav>
 
       <section class="hero">
@@ -34,6 +47,7 @@
       <div class="sticky-controls">
         <div class="row">
           <button id="analyzeBtn" class="primary">Actualizar informe</button>
+          <button id="toggleParameters" type="button" aria-expanded="true">Ocultar parámetros</button>
           <div id="metricViewHeader" class="metric-view-header hidden"></div>
         </div>
       </div>
@@ -201,6 +215,114 @@
           </div>
         </section>
 
+        <section class="panel inner-panel dashboard-panel coach-brief hidden" data-dashboard-panel="coach">
+          <div class="coach-brief-hero">
+            <div>
+              <p class="eyebrow">Codenoa Sales Coach</p>
+              <h2 id="sellerBriefTitle">Una conversación clara con cada vendedor</h2>
+              <div class="muted" id="sellerBriefPeriod">Resultado filtrado y comparación contra el período anterior equivalente.</div>
+            </div>
+            <div class="coach-hero-actions">
+              <label class="coach-seller-picker">
+                <span>Vendedor</span>
+                <select id="sellerBriefSelect"></select>
+              </label>
+              <div class="coach-print-actions">
+                <button id="printSellerBrief" type="button">Imprimir / PDF vendedor</button>
+                <button id="printTeamBrief" type="button">Imprimir / PDF equipo</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="coach-comparison-bar">
+            <strong>Comparar contra</strong>
+            <label><span>Desde</span><input id="sellerBriefComparisonFrom" type="date"></label>
+            <label><span>Hasta</span><input id="sellerBriefComparisonTo" type="date"></label>
+            <button id="sellerBriefCompareButton" type="button">Aplicar comparación</button>
+            <button id="sellerBriefComparePrevious" type="button" class="secondary">Período anterior automático</button>
+          </div>
+
+          <div class="coach-individual-sheet">
+            <div class="coach-message" id="sellerBriefMessage"></div>
+            <div id="sellerBriefKpis" class="coach-kpi-grid"></div>
+
+            <div class="coach-section-heading">
+              <div>
+                <h3>Mix de negocio</h3>
+                <div class="muted">Números, proporciones, comparación y ranking por línea.</div>
+              </div>
+            </div>
+            <div class="coach-table-wrap">
+              <table class="coach-mix-table">
+                <thead>
+                  <tr>
+                    <th>Línea</th>
+                    <th>$ neto</th>
+                    <th>% mix</th>
+                    <th>Cantidad</th>
+                    <th>$/cantidad</th>
+                    <th>Rank línea</th>
+                    <th>Vs. período</th>
+                    <th>Lectura / foco</th>
+                  </tr>
+                </thead>
+                <tbody id="sellerBriefMix"></tbody>
+              </table>
+            </div>
+
+            <div class="coach-section-heading coach-client-heading">
+              <div>
+                <h3>Top 10 clientes</h3>
+                <div class="muted">Principales clientes por venta neta dentro del período y los filtros seleccionados.</div>
+              </div>
+            </div>
+            <div class="coach-table-wrap">
+              <table class="coach-mix-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Cliente</th>
+                    <th>$ neto</th>
+                    <th>Participación</th>
+                    <th>Cantidad</th>
+                    <th>Vs. período</th>
+                  </tr>
+                </thead>
+                <tbody id="sellerBriefTopClients"></tbody>
+              </table>
+            </div>
+
+            <div class="coach-two-col">
+              <section class="coach-callout coach-callout-recognition">
+                <h3>Logros para reconocer</h3>
+                <div id="sellerBriefStrengths"></div>
+              </section>
+              <section class="coach-callout coach-callout-action">
+                <h3>Mejoras para accionar</h3>
+                <div id="sellerBriefOpportunities"></div>
+              </section>
+            </div>
+
+            <section class="coach-week-plan">
+              <h3>Plan simple para la semana</h3>
+              <div id="sellerBriefPlan"></div>
+            </section>
+          </div>
+
+          <details class="coach-team-details">
+            <summary>Ver resumen y ranking del equipo filtrado</summary>
+            <div id="sellerBriefTeamKpis" class="coach-kpi-grid compact"></div>
+            <div class="coach-table-wrap">
+              <table class="coach-mix-table">
+                <thead>
+                  <tr><th>#</th><th>Vendedor</th><th>$ neto</th><th>Participación</th><th>Cantidad</th><th>Rank cantidad</th><th>$/cantidad</th><th>Vs. período</th></tr>
+                </thead>
+                <tbody id="sellerBriefRanking"></tbody>
+              </table>
+            </div>
+          </details>
+        </section>
+
         <section class="panel inner-panel dashboard-panel hidden" data-dashboard-panel="sellers">
           <div class="subpanel-header">
             <div>
@@ -343,6 +465,32 @@
           </div>
         </section>
 
+        <section id="salesCoachDetailPanel" class="panel inner-panel hidden coach-detail-panel">
+          <div class="subpanel-header">
+            <div>
+              <p class="eyebrow">Codenoa Sales Coach</p>
+              <h2 id="salesCoachDetailTitle">Ficha comercial</h2>
+              <div id="salesCoachDetailSubtitle" class="muted"></div>
+            </div>
+            <button id="closeSalesCoachDetail" type="button">Cerrar ficha</button>
+          </div>
+          <div id="salesCoachDetailKpis" class="executive-kpis"></div>
+          <div class="two-col dashboard-notes">
+            <div class="panel inner-panel">
+              <h3>Fortalezas y evidencia</h3>
+              <div id="salesCoachStrengths" class="insight-list"></div>
+            </div>
+            <div class="panel inner-panel">
+              <h3>Oportunidades y plan</h3>
+              <div id="salesCoachOpportunities" class="insight-list"></div>
+            </div>
+          </div>
+          <div class="panel inner-panel">
+            <h3>Detalle</h3>
+            <div id="salesCoachDetailBody" class="insight-list"></div>
+          </div>
+        </section>
+
         <section class="panel inner-panel dashboard-panel hidden" data-dashboard-panel="history">
           <div class="subpanel-header">
             <div>
@@ -470,6 +618,49 @@
               </div>
             </div>
             <div id="opportunityDashboardTable" class="tabulator-host"></div>
+          </div>
+        </section>
+
+        <section class="panel inner-panel dashboard-panel hidden" data-dashboard-panel="alerts">
+          <div class="subpanel-header">
+            <div>
+              <h2>Alertas gestionables</h2>
+              <div class="muted" id="persistentAlertsSummary">Tareas comerciales persistentes, con responsable, evidencia e historial.</div>
+            </div>
+            <button type="button" class="secondary" id="refreshPersistentAlerts">Actualizar alertas</button>
+          </div>
+          <div id="persistentAlertsKpis" class="executive-kpis"></div>
+          <div class="panel inner-panel table-panel">
+            <div id="persistentAlertsTable" class="tabulator-host"></div>
+          </div>
+        </section>
+
+        <section class="panel inner-panel dashboard-panel hidden" data-dashboard-panel="meetings">
+          <div class="subpanel-header">
+            <div>
+              <h2>Preparación de reuniones</h2>
+              <div class="muted" id="meetingsSummary">Generá material A4 con las mismas cifras, período y filtros del dashboard.</div>
+            </div>
+          </div>
+          <div class="meeting-actions">
+            <label>
+              Tipo de informe
+              <select id="meetingReportType">
+                <option value="general">Informe general</option>
+                <option value="seller_packet">General + una ficha por vendedor</option>
+              </select>
+            </label>
+            <button type="button" class="primary" id="generateMeetingReport">Generar informe</button>
+          </div>
+          <div id="meetingPreview" class="insight-list"></div>
+          <div class="panel inner-panel table-panel">
+            <div class="subpanel-header">
+              <div>
+                <h3>Informes generados</h3>
+                <div class="muted">Cada descarga usa el snapshot versionado original.</div>
+              </div>
+            </div>
+            <div id="meetingReportsTable" class="tabulator-host"></div>
           </div>
         </section>
 

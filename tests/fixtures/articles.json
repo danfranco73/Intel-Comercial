@@ -1,0 +1,4 @@
+[
+  {"product_key": "P1", "product_name": "Producto Alfa", "family": "Familia A", "line": "Línea 1", "brand": "Marca A", "supplier": "Proveedor A", "uxb": "6"},
+  {"product_key": "P2", "product_name": "Producto Beta", "family": "Familia B", "line": "Línea 2", "brand": "Marca B", "supplier": "Proveedor B", "uxb": "12"}
+]
