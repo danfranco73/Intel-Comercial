@@ -83,6 +83,29 @@ def _preferred_route(current, candidate):
     return candidate if _route_rank(candidate) >= _route_rank(current) else current
 
 
+def sellers_with_active_scheme(seller_records, scheme_values):
+    """Nombres de vendedor (normalizados) cuya fuerza de venta / esquema
+    comercial vigente (maestro de vendedores) está entre los indicados. Se usa
+    para excluir de un informe filtrado por esquema a vendedores cuya
+    asignación actual no participa de ese esquema, aunque les haya quedado
+    alguna venta histórica de otro esquema reasignada por herencia de cartera
+    (ver enrich_sales_records). Se apoya en el campo del vendedor
+    (sales_force/sales_scheme_name) en vez del historial de rutas por
+    cliente, que puede tener asociaciones superpuestas o desactualizadas
+    entre distintos esquemas para un mismo cliente."""
+    markers = {_normalize_text(value) for value in (scheme_values or []) if value not in (None, "")}
+    if not markers:
+        return None
+    eligible = set()
+    for row in seller_records or []:
+        if not row.get("seller_name"):
+            continue
+        scheme = _first_non_empty(row.get("sales_scheme_name"), row.get("sales_force"))
+        if scheme and _normalize_text(scheme) in markers:
+            eligible.add(_normalize_text(row["seller_name"]))
+    return eligible
+
+
 def build_master_maps(loaded):
     article_map = {
         row["product_key"]: row

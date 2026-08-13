@@ -9,7 +9,7 @@ from analysis_engine import AnalysisEngine
 from kpi_generator import generate_kpis
 from viz_selector import build_all_viz
 from insight_writer import write_insights, insights_summary
-from bi.facts import enrich_sales_records
+from bi.facts import enrich_sales_records, sellers_with_active_scheme
 from bi.consistency import evaluate_consistency
 from bi.focus_dashboards import build_focus_dashboards
 from bi.structural_dashboards import build_structural_dashboards
@@ -325,6 +325,20 @@ def analyze_datasets(datasets, filters=None, supplier_focus=None, planning=None,
     if not filtered_sales:
         effective_filters = relax_broad_filters(effective_filters, selected_unfiltered_sales, sales_context)
         applied_filters, filtered_sales = apply_filters(enriched_sales, effective_filters)
+        if not filtered_sales:
+            raise ValueError("No quedaron ventas para los filtros seleccionados")
+
+    scheme_eligible_sellers = sellers_with_active_scheme(
+        loaded.get("sellers", {}).get("records", []),
+        applied_filters.get("sales_scheme_name"),
+    )
+    if scheme_eligible_sellers is not None:
+        filtered_sales = [
+            record
+            for record in filtered_sales
+            if normalize_text(record.get("seller_name")) == normalize_text("Sin vendedor")
+            or normalize_text(record.get("seller_name")) in scheme_eligible_sellers
+        ]
         if not filtered_sales:
             raise ValueError("No quedaron ventas para los filtros seleccionados")
 

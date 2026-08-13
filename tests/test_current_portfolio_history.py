@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from bi.facts import enrich_sales_records
+from bi.facts import enrich_sales_records, sellers_with_active_scheme
 
 
 def test_historical_sale_is_reassigned_to_current_client_portfolio():
@@ -108,3 +108,29 @@ def test_cross_scheme_assignment_still_applies_when_client_left_its_own_scheme()
 
     assert row["seller_name"] == "Robles Richard Kaf"
     assert row["seller_key"] == "NEW"
+
+
+def test_sellers_with_active_scheme_excludes_seller_without_matching_scheme():
+    # Caso Gorrini: un vendedor cuya fuerza de venta vigente es FRESCOS no debe
+    # quedar elegible cuando el informe se filtra por MERCADERIA, aunque herede
+    # ventas históricas de ese esquema vía cartera actual (ver test de arriba).
+    # Se usa el maestro de vendedores (sales_force/sales_scheme_name), no el
+    # historial de rutas por cliente, que puede tener asociaciones superpuestas
+    # o desactualizadas entre esquemas para un mismo cliente (caso real: un
+    # vendedor con ruta histórica en un esquema que el ERP no actualizó tras
+    # migrar de fuerza de venta).
+    sellers = [
+        {"seller_name": "Gorrini Jorge", "sales_scheme_name": "FRESCOS"},
+        {"seller_name": "Giovanini Eduardo", "sales_force": "MERCADERIA"},
+        {"seller_name": "Robles Richard Kaf", "sales_scheme_name": "MERCADERIA"},
+    ]
+
+    eligible = sellers_with_active_scheme(sellers, ["MERCADERIA"])
+
+    assert eligible == {"giovanini eduardo", "robles richard kaf"}
+    assert "gorrini jorge" not in eligible
+
+
+def test_sellers_with_active_scheme_returns_none_when_no_scheme_filter():
+    assert sellers_with_active_scheme([{"seller_name": "X", "is_active": True}], []) is None
+    assert sellers_with_active_scheme([{"seller_name": "X", "is_active": True}], None) is None
