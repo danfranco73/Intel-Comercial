@@ -8,8 +8,10 @@ from security.auth import (
     create_user,
     ensure_auth_indexes,
     issue_csrf_token,
+    reset_user_password,
     resolve_session,
     revoke_session,
+    set_user_active,
     verify_csrf,
 )
 from security.models import AuthContext
@@ -58,6 +60,12 @@ class AuthRepository:
         ):
             raise ValueError("La empresa asignada no existe o está inactiva")
         return create_user(self.db, payload)
+
+    def set_user_active(self, user_id: str, is_active: bool) -> dict[str, Any]:
+        return set_user_active(self.db, user_id, is_active)
+
+    def reset_password(self, user_id: str, new_password: str) -> dict[str, Any]:
+        return reset_user_password(self.db, user_id, new_password)
 
     def list_access_companies(self) -> list[dict[str, Any]]:
         return list(
@@ -146,8 +154,9 @@ class AuthRepository:
             {"$or": [
                 {"supplier": {"$nin": [None, "", "Sin proveedor"]}},
                 {"line": {"$nin": [None, "", "Sin línea"]}},
+                {"business_unit": {"$nin": [None, "", "Sin unidad de negocio"]}},
             ]},
-            {"_id": 0, "supplier": 1, "line": 1},
+            {"_id": 0, "supplier": 1, "line": 1, "business_unit": 1},
         )
         article_rows = list(articles)
         suppliers = sorted({
@@ -160,6 +169,22 @@ class AuthRepository:
             for item in article_rows
             if str(item.get("line") or "").strip() not in {"", "Sin línea"}
         })
+        business_units = sorted({
+            str(item.get("business_unit") or "").strip()
+            for item in article_rows
+            if str(item.get("business_unit") or "").strip() not in {"", "Sin unidad de negocio"}
+        })
+        sales_force_map: dict[str, str] = {}
+        seller_map: dict[str, str] = {}
+        for item in self.db["erp_sellers"].find(
+            {}, {"_id": 0, "sales_force_key": 1, "sales_force": 1, "seller_key": 1, "seller_name": 1}
+        ):
+            force_key = str(item.get("sales_force_key") or "").strip()
+            if force_key:
+                sales_force_map.setdefault(force_key, str(item.get("sales_force") or force_key).strip())
+            seller_key = str(item.get("seller_key") or "").strip()
+            if seller_key:
+                seller_map[seller_key] = str(item.get("seller_name") or seller_key).strip()
         return {
             "branches": [
                 {"key": key, "name": name}
@@ -170,6 +195,15 @@ class AuthRepository:
             "deposits": [
                 {"key": key, "name": name}
                 for key, name in sorted(deposits.items(), key=lambda item: item[1])
+            ],
+            "businessUnits": [{"key": value, "name": value} for value in business_units],
+            "salesForces": [
+                {"key": key, "name": name}
+                for key, name in sorted(sales_force_map.items(), key=lambda item: item[1])
+            ],
+            "sellers": [
+                {"key": key, "name": name}
+                for key, name in sorted(seller_map.items(), key=lambda item: item[1])
             ],
         }
 

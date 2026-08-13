@@ -49,6 +49,8 @@ GET_ROUTES = {
 POST_ROUTES = {
     "/api/auth/logout": RouteDefinition("handle_logout", csrf=True),
     "/api/users": RouteDefinition("handle_create_user", permission="admin", csrf=True),
+    "/api/users/status": RouteDefinition("handle_update_user_status", permission="admin", csrf=True),
+    "/api/users/password": RouteDefinition("handle_reset_user_password", permission="admin", csrf=True),
     "/api/access/companies": RouteDefinition("handle_save_access_company", permission="admin", csrf=True),
     "/api/upload": RouteDefinition("handle_upload", permission="admin", csrf=True),
     "/api/clear-uploads": RouteDefinition("handle_clear_uploads", permission="admin", csrf=True),

@@ -3,6 +3,8 @@ from sales_coach.schemas.requests import (
     LoginRequest,
     SyncRequest,
     UserCreateRequest,
+    UserPasswordResetRequest,
+    UserStatusRequest,
 )
 from sales_coach.schemas.objectives import (
     ObjectiveCreateRequest,
@@ -21,6 +23,8 @@ __all__ = [
     "LoginRequest",
     "SyncRequest",
     "UserCreateRequest",
+    "UserPasswordResetRequest",
+    "UserStatusRequest",
     "AlertAssignRequest",
     "AlertGenerateRequest",
     "AlertTransitionRequest",

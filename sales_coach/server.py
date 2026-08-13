@@ -606,6 +606,11 @@ class AppHandler(
                 return
             self.serve_file(STATIC_DIR / "admin.html", "text/html; charset=utf-8")
             return
+        if parsed.path == "/users":
+            if not self._require_page_authentication("admin"):
+                return
+            self.serve_file(STATIC_DIR / "users.html", "text/html; charset=utf-8")
+            return
         if parsed.path == "/app.css":
             self.serve_file(STATIC_DIR / "app.css", "text/css; charset=utf-8")
             return

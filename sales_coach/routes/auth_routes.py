@@ -84,6 +84,36 @@ class AuthRoutesMixin:
         except ValueError as exc:
             self.send_json({"error": str(exc)}, status=400)
 
+    def handle_update_user_status(self):
+        try:
+            payload = self._read_json_body()
+            result = self._auth_service().set_user_active(payload, self.auth_context.user.id)
+            audit_security_event(
+                "user_status_changed",
+                outcome="success",
+                user_id=self.auth_context.user.id,
+                ip_address=self.request_ip(),
+                details={"targetUserId": result["id"], "isActive": result["is_active"]},
+            )
+            self.send_json({"user": result})
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=400)
+
+    def handle_reset_user_password(self):
+        try:
+            payload = self._read_json_body()
+            result = self._auth_service().reset_user_password(payload)
+            audit_security_event(
+                "user_password_reset",
+                outcome="success",
+                user_id=self.auth_context.user.id,
+                ip_address=self.request_ip(),
+                details={"targetUserId": result["id"]},
+            )
+            self.send_json({"user": result})
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=400)
+
     def handle_list_access_companies(self):
         repository = self._auth_service().repository
         self.send_json({"companies": repository.list_access_companies()})

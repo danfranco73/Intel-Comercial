@@ -69,9 +69,16 @@ def resolve_data_scope(user: AuthenticatedUser, db: Any) -> dict[str, list[str]]
             return {"seller_name": [], "supplier": []}
         query_parts.append({"branch_key": {"$in": branches}})
 
+    # Restricción explícita a un listado puntual de vendedores, independiente
+    # del rol y combinable con cualquiera de los anteriores (se intersecta,
+    # nunca amplía lo que el rol/empresa ya permiten).
+    if user.seller_keys:
+        query_parts.append({"seller_key": {"$in": list(user.seller_keys)}})
+
     scope: dict[str, list[str]] = {}
     if query_parts:
-        # Los límites del rol y de empresa se intersectan en backend.
+        # Todos los límites configurados (rol, empresa, vendedores puntuales)
+        # se intersectan en backend.
         query = query_parts[0] if len(query_parts) == 1 else {"$and": query_parts}
         sellers = list(
             db["erp_sellers"].find(query, {"_id": 0, "seller_name": 1})
@@ -98,6 +105,36 @@ def resolve_data_scope(user: AuthenticatedUser, db: Any) -> dict[str, list[str]]
                 if str(value).strip()
             }
         )
+
+    # Restricción directa por unidad de negocio, a nivel de línea de venta
+    # (no depende de a qué vendedor está atribuida la venta).
+    if user.business_units:
+        scope["business_unit"] = sorted(
+            {str(value).strip() for value in user.business_units if str(value).strip()}
+        )
+
+    # Restricción directa por fuerza de venta, a nivel de línea de venta.
+    # Reutiliza sales_force_keys (ya usado arriba para acotar supervisores
+    # por fuerza de venta vía erp_sellers) resolviendo a los nombres visibles
+    # en las ventas, para que cualquier rol pueda quedar limitado a una o más
+    # fuerzas de venta sin depender de la jerarquía de supervisión.
+    if user.sales_force_keys:
+        forces = list(
+            db["erp_sellers"].find(
+                {"sales_force_key": {"$in": list(user.sales_force_keys)}},
+                {"_id": 0, "sales_force": 1},
+            )
+        )
+        sales_force_names = sorted(
+            {
+                str(item.get("sales_force") or "").strip()
+                for item in forces
+                if str(item.get("sales_force") or "").strip()
+            }
+        )
+        if sales_force_names:
+            scope["sales_force"] = sales_force_names
+
     return scope
 
 

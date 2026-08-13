@@ -1208,6 +1208,24 @@ label.wide {
   min-width: 280px;
 }
 
+.password-field {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.password-field input {
+  flex: 1;
+  min-width: 0;
+}
+
+.password-toggle {
+  padding: 0 12px;
+  line-height: 1;
+  font-size: 16px;
+  background: white;
+}
+
 select,
 input,
 button {
@@ -1789,6 +1807,17 @@ th {
   padding: 14px;
   margin-bottom: 12px;
   background: white;
+}
+
+.insight-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.reset-password-inline {
+  margin-top: 8px;
 }
 
 .dot {

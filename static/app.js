@@ -29,7 +29,7 @@ const state = {
   coachAudits: [],
   alerts: { rows: [], period: "", loading: false },
   meetings: { rows: [], current: null, loading: false },
-  accessConfig: { companies: [], users: [], branches: [], suppliers: [], lines: [], deposits: [] },
+  accessConfig: { companies: [], users: [], branches: [], suppliers: [], lines: [], deposits: [], businessUnits: [], salesForces: [], sellers: [], resetPasswordTarget: null },
 };
 
 const datasetOrder = ["sales"];
@@ -110,6 +110,7 @@ async function clearCachedWorkspace() {
 const appSurface = document.body.dataset.surface || "admin";
 const isAdminSurface = appSurface === "admin";
 const isBiSurface = appSurface === "bi";
+const isUsersSurface = appSurface === "users";
 const REPORT_METRIC_MODES = ["mixed", "units", "sales"];
 const dashboardState = { charts: {}, tables: { direction: null, executive: null, executiveSensitivity: null, planningTargets: null, ownerTracking: null, history: null, historyBudgetMonthly: null, historyBudgetDimension: null, historyBudgetLineForecast: null, historyBudgetSellerForecast: null, sellers: null, clients: null, opportunities: null, alerts: null, meetings: null } };
 const DASHBOARD_VIEWS = ["coach", "direction", "executive", "interactive", "sellers", "clients", "history", "opportunities", "alerts", "meetings"];
@@ -533,9 +534,9 @@ async function initializeAuthentication() {
   if (label) {
     label.textContent = `${data.user?.name || data.user?.email || "Usuario"} · ${data.user?.role || ""}`;
   }
-  const adminLink = document.querySelector("a[href='/admin']");
-  if (adminLink && data.user?.role !== "admin") {
-    adminLink.remove();
+  if (data.user?.role !== "admin") {
+    document.querySelector("a[href='/admin']")?.remove();
+    document.querySelector("a[href='/users']")?.remove();
   }
 }
 
@@ -584,9 +585,9 @@ async function boot() {
     api("/api/objectives").catch(() => ({ objectives: [] })),
     isAdminSurface ? api("/api/coach/rules").catch(() => ({ ruleSet: null })) : Promise.resolve({ ruleSet: null }),
     isAdminSurface ? api("/api/coach/audits?limit=10").catch(() => ({ audits: [] })) : Promise.resolve({ audits: [] }),
-    isAdminSurface ? api("/api/access/companies").catch(() => ({ companies: [] })) : Promise.resolve({ companies: [] }),
-    isAdminSurface ? api("/api/users").catch(() => ({ users: [] })) : Promise.resolve({ users: [] }),
-    isAdminSurface ? api("/api/access/options").catch(() => ({ branches: [], suppliers: [], lines: [], deposits: [] })) : Promise.resolve({ branches: [], suppliers: [], lines: [], deposits: [] }),
+    (isAdminSurface || isUsersSurface) ? api("/api/access/companies").catch(() => ({ companies: [] })) : Promise.resolve({ companies: [] }),
+    (isAdminSurface || isUsersSurface) ? api("/api/users").catch(() => ({ users: [] })) : Promise.resolve({ users: [] }),
+    (isAdminSurface || isUsersSurface) ? api("/api/access/options").catch(() => ({ branches: [], suppliers: [], lines: [], deposits: [] })) : Promise.resolve({ branches: [], suppliers: [], lines: [], deposits: [] }),
   ]);
   state.files = filesResponse.files || [];
   state.schema = schemaResponse.datasets || {};
@@ -609,6 +610,9 @@ async function boot() {
     suppliers: accessOptionsResponse?.suppliers || [],
     lines: accessOptionsResponse?.lines || [],
     deposits: accessOptionsResponse?.deposits || [],
+    businessUnits: accessOptionsResponse?.businessUnits || [],
+    salesForces: accessOptionsResponse?.salesForces || [],
+    sellers: accessOptionsResponse?.sellers || [],
   };
   initializeDatasets();
   state.planning = normalizePlanningConfig(sessionResponse?.planning);
@@ -1236,6 +1240,9 @@ function renderAccessConfiguration() {
   renderAccessCheckboxes("accessCompanySuppliers", "suppliers", config.suppliers);
   renderAccessCheckboxes("accessCompanyLines", "lines", config.lines);
   renderAccessCheckboxes("accessCompanyDeposits", "deposits", config.deposits);
+  renderAccessCheckboxes("accessUserBusinessUnits", "userBusinessUnits", config.businessUnits);
+  renderAccessCheckboxes("accessUserSalesForces", "userSalesForces", config.salesForces);
+  renderAccessCheckboxes("accessUserSellers", "userSellers", config.sellers);
   document.getElementById("accessUserCompany").innerHTML = [
     '<option value="">Grupo económico · acceso total</option>',
     ...config.companies.filter((item) => item.is_active !== false).map((item) =>
@@ -1248,7 +1255,35 @@ function renderAccessConfiguration() {
   document.getElementById("accessUsersList").innerHTML = config.users.length
     ? config.users.map((item) => {
       const company = config.companies.find((entry) => entry.company_key === item.company_key);
-      return `<div class="insight-item"><strong>${escapeHtml(item.name || item.email)}</strong><div>${escapeHtml(item.role)} · ${company ? escapeHtml(company.name) : "Grupo económico / acceso total"}</div></div>`;
+      const active = item.is_active !== false;
+      const isSelf = item.id === state.auth.user?.id;
+      const restrictions = [];
+      if ((item.business_units || []).length) restrictions.push(`${intNumber(item.business_units.length)} unidad(es) de negocio`);
+      if ((item.sales_force_keys || []).length) restrictions.push(`${intNumber(item.sales_force_keys.length)} fuerza(s) de venta`);
+      if ((item.seller_keys || []).length) restrictions.push(`${intNumber(item.seller_keys.length)} vendedor(es) puntual(es)`);
+      const isResetting = config.resetPasswordTarget === item.id;
+      return `<div class="insight-item">
+        <strong>${escapeHtml(item.name || item.email)}</strong>
+        <span class="pill">${active ? "Activo" : "Desactivado"}</span>
+        <div>${escapeHtml(item.role)} · ${company ? escapeHtml(company.name) : "Grupo económico / acceso total"}</div>
+        ${restrictions.length ? `<div class="muted">${escapeHtml(restrictions.join(" · "))}</div>` : ""}
+        <div class="insight-item-actions">
+          ${isSelf
+            ? ""
+            : `<button type="button" data-toggle-user-active="${escapeHtml(item.id)}" data-next-active="${active ? "false" : "true"}">${active ? "Desactivar" : "Activar"}</button>`}
+          ${isResetting
+            ? ""
+            : `<button type="button" data-start-reset-password="${escapeHtml(item.id)}">Restablecer contraseña</button>`}
+        </div>
+        ${isResetting ? `
+          <div class="password-field reset-password-inline">
+            <input id="resetPasswordInput" type="password" placeholder="Nueva contraseña" autocomplete="new-password">
+            <button type="button" class="password-toggle" data-toggle-password="resetPasswordInput" aria-label="Mostrar contraseña">👁</button>
+            <button type="button" class="primary" data-confirm-reset-password="${escapeHtml(item.id)}">Guardar</button>
+            <button type="button" data-cancel-reset-password="true">Cancelar</button>
+          </div>
+        ` : ""}
+      </div>`;
     }).join("")
     : "<div class='muted'>No hay usuarios para mostrar.</div>";
   companyForm.onsubmit = (event) => {
@@ -1276,6 +1311,27 @@ function renderAccessConfiguration() {
   });
   document.querySelectorAll("[data-edit-access-company]").forEach((button) => {
     button.onclick = () => editAccessCompany(button.dataset.editAccessCompany);
+  });
+  document.querySelectorAll("[data-toggle-user-active]").forEach((button) => {
+    button.onclick = () => toggleUserActive(
+      button.dataset.toggleUserActive,
+      button.dataset.nextActive === "true",
+    ).catch(showError);
+  });
+  document.querySelectorAll("[data-start-reset-password]").forEach((button) => {
+    button.onclick = () => {
+      state.accessConfig.resetPasswordTarget = button.dataset.startResetPassword;
+      renderAccessConfiguration();
+    };
+  });
+  document.querySelectorAll("[data-cancel-reset-password]").forEach((button) => {
+    button.onclick = () => {
+      state.accessConfig.resetPasswordTarget = null;
+      renderAccessConfiguration();
+    };
+  });
+  document.querySelectorAll("[data-confirm-reset-password]").forEach((button) => {
+    button.onclick = () => resetUserPassword(button.dataset.confirmResetPassword).catch(showError);
   });
   document.getElementById("addManualBranch").onclick = addManualBranchOption;
   document.getElementById("addManualDeposit").onclick = addManualDepositOption;
@@ -1458,6 +1514,9 @@ async function syncAccessCatalogs() {
     state.accessConfig.suppliers = options.suppliers || [];
     state.accessConfig.lines = options.lines || [];
     state.accessConfig.deposits = options.deposits || [];
+    state.accessConfig.businessUnits = options.businessUnits || [];
+    state.accessConfig.salesForces = options.salesForces || [];
+    state.accessConfig.sellers = options.sellers || [];
     renderAccessConfiguration();
     const catalogs = result.catalogs || {};
     document.getElementById("accessCatalogSyncStatus").textContent =
@@ -1484,7 +1543,9 @@ async function createAccessUser() {
       company_key: document.getElementById("accessUserCompany").value || null,
       seller_key: sellerKey || null,
       branch_keys: [],
-      sales_force_keys: [],
+      sales_force_keys: selectedAccessValues("userSalesForces"),
+      business_units: selectedAccessValues("userBusinessUnits"),
+      seller_keys: selectedAccessValues("userSellers"),
       is_active: true,
     }),
   });
@@ -1492,10 +1553,47 @@ async function createAccessUser() {
     ...response.user,
     name: document.getElementById("accessUserName").value,
     company_key: document.getElementById("accessUserCompany").value || null,
+    business_units: selectedAccessValues("userBusinessUnits"),
+    sales_force_keys: selectedAccessValues("userSalesForces"),
+    seller_keys: selectedAccessValues("userSellers"),
   });
   document.getElementById("accessUserForm").reset();
   renderAccessConfiguration();
   setStatus(`Usuario ${response.user.email} creado correctamente.`);
+}
+
+async function toggleUserActive(userId, nextActive) {
+  const confirmed = window.confirm(
+    nextActive ? "¿Reactivar este usuario?" : "¿Desactivar este usuario? Se cerrará su sesión actual y no va a poder volver a entrar hasta reactivarlo."
+  );
+  if (!confirmed) return;
+  const response = await api("/api/users/status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id: userId, is_active: nextActive }),
+  });
+  const index = state.accessConfig.users.findIndex((item) => item.id === userId);
+  if (index >= 0) {
+    state.accessConfig.users[index] = { ...state.accessConfig.users[index], ...response.user };
+  }
+  renderAccessConfiguration();
+  setStatus(`Usuario ${response.user.email} ${nextActive ? "reactivado" : "desactivado"} correctamente.`);
+}
+
+async function resetUserPassword(userId) {
+  const input = document.getElementById("resetPasswordInput");
+  const newPassword = input?.value || "";
+  if (!newPassword) {
+    throw new Error("Ingresá la nueva contraseña.");
+  }
+  const response = await api("/api/users/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id: userId, new_password: newPassword }),
+  });
+  state.accessConfig.resetPasswordTarget = null;
+  renderAccessConfiguration();
+  setStatus(`Contraseña restablecida para ${response.user.email}. Se cerró su sesión activa.`);
 }
 
 function buildConsistencySummaryItems() {
@@ -6664,7 +6762,10 @@ function formatElapsed(seconds) {
 }
 
 function setStatus(text) {
-  document.getElementById("status").textContent = text;
+  const status = document.getElementById("status");
+  if (status) {
+    status.textContent = text;
+  }
 }
 
 function updateProgressMeta() {
@@ -7192,6 +7293,16 @@ bindChange("libraryScope", async (event) => {
 });
 document.querySelectorAll("[data-scroll-action]").forEach((button) => {
   button.addEventListener("click", () => handleScrollAction(button.dataset.scrollAction));
+});
+document.addEventListener("click", (event) => {
+  const toggle = event.target.closest("[data-toggle-password]");
+  if (!toggle) return;
+  const input = document.getElementById(toggle.dataset.togglePassword);
+  if (!input) return;
+  const show = input.type === "password";
+  input.type = show ? "text" : "password";
+  toggle.textContent = show ? "🙈" : "👁";
+  toggle.setAttribute("aria-label", show ? "Ocultar contraseña" : "Mostrar contraseña");
 });
 window.addEventListener("resize", () => {
   Object.values(dashboardState.charts).forEach((chart) => {

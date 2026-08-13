@@ -24,6 +24,8 @@ class AuthenticatedUser:
     branch_keys: tuple[str, ...] = field(default_factory=tuple)
     sales_force_keys: tuple[str, ...] = field(default_factory=tuple)
     company_key: str | None = None
+    business_units: tuple[str, ...] = field(default_factory=tuple)
+    seller_keys: tuple[str, ...] = field(default_factory=tuple)
 
     @classmethod
     def from_document(cls, document: dict[str, Any]) -> "AuthenticatedUser":
@@ -40,6 +42,8 @@ class AuthenticatedUser:
             branch_keys=tuple(_string_list(document.get("branch_keys"))),
             sales_force_keys=tuple(_string_list(document.get("sales_force_keys"))),
             company_key=_optional_text(document.get("company_key")),
+            business_units=tuple(_string_list(document.get("business_units"))),
+            seller_keys=tuple(_string_list(document.get("seller_keys"))),
         )
 
     def public_dict(self) -> dict[str, Any]:
@@ -53,6 +57,8 @@ class AuthenticatedUser:
             "branchKeys": list(self.branch_keys),
             "salesForceKeys": list(self.sales_force_keys),
             "companyKey": self.company_key,
+            "businessUnits": list(self.business_units),
+            "sellerKeys": list(self.seller_keys),
         }
 
 

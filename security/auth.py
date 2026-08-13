@@ -84,6 +84,8 @@ def create_user(db: Any, payload: dict[str, Any]) -> dict[str, Any]:
         "branch_keys": _string_list(payload.get("branch_keys")),
         "sales_force_keys": _string_list(payload.get("sales_force_keys")),
         "company_key": _optional_text(payload.get("company_key")),
+        "business_units": _string_list(payload.get("business_units")),
+        "seller_keys": _string_list(payload.get("seller_keys")),
         "is_active": bool(payload.get("is_active", True)),
         "created_at": now,
         "updated_at": now,
@@ -96,6 +98,51 @@ def create_user(db: Any, payload: dict[str, Any]) -> dict[str, Any]:
     except DuplicateKeyError as exc:
         raise ValueError("Ya existe un usuario con ese email") from exc
     return {"id": str(result.inserted_id), "email": document["email"], "role": role}
+
+
+def set_user_active(db: Any, user_id: str, is_active: bool) -> dict[str, Any]:
+    try:
+        object_id = ObjectId(user_id)
+    except Exception as exc:
+        raise ValueError("Usuario inválido") from exc
+    now = datetime.now(timezone.utc)
+    result = db["users"].find_one_and_update(
+        {"_id": object_id},
+        {"$set": {"is_active": is_active, "updated_at": now}},
+        projection={"password_hash": 0},
+    )
+    if not result:
+        raise ValueError("El usuario no existe")
+    if not is_active:
+        db["user_sessions"].update_many(
+            {"user_id": object_id, "revoked_at": None},
+            {"$set": {"revoked_at": now}},
+        )
+    result["id"] = str(result.pop("_id"))
+    result["is_active"] = is_active
+    return result
+
+
+def reset_user_password(db: Any, user_id: str, new_password: str) -> dict[str, Any]:
+    try:
+        object_id = ObjectId(user_id)
+    except Exception as exc:
+        raise ValueError("Usuario inválido") from exc
+    user = db["users"].find_one({"_id": object_id}, {"email": 1})
+    if not user:
+        raise ValueError("El usuario no existe")
+    password_hash = hash_password(new_password)
+    now = datetime.now(timezone.utc)
+    db["users"].update_one(
+        {"_id": object_id},
+        {"$set": {"password_hash": password_hash, "updated_at": now}},
+    )
+    db["user_sessions"].update_many(
+        {"user_id": object_id, "revoked_at": None},
+        {"$set": {"revoked_at": now}},
+    )
+    db["login_attempts"].delete_many({"email": user["email"]})
+    return {"id": str(object_id), "email": user["email"]}
 
 
 def authenticate(

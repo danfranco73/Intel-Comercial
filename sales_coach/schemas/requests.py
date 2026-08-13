@@ -41,6 +41,8 @@ class UserCreateRequest:
     branch_keys: tuple[str, ...]
     sales_force_keys: tuple[str, ...]
     company_key: str | None
+    business_units: tuple[str, ...]
+    seller_keys: tuple[str, ...]
     is_active: bool
 
     @classmethod
@@ -64,6 +66,8 @@ class UserCreateRequest:
             branch_keys=tuple(_strings(data.get("branch_keys"))),
             sales_force_keys=tuple(_strings(data.get("sales_force_keys"))),
             company_key=_optional(data.get("company_key")),
+            business_units=tuple(_strings(data.get("business_units"))),
+            seller_keys=tuple(_strings(data.get("seller_keys"))),
             is_active=bool(data.get("is_active", True)),
         )
 
@@ -78,8 +82,43 @@ class UserCreateRequest:
             "branch_keys": list(self.branch_keys),
             "sales_force_keys": list(self.sales_force_keys),
             "company_key": self.company_key,
+            "business_units": list(self.business_units),
+            "seller_keys": list(self.seller_keys),
             "is_active": self.is_active,
         }
+
+
+@dataclass(frozen=True)
+class UserStatusRequest:
+    user_id: str
+    is_active: bool
+
+    @classmethod
+    def parse(cls, payload: Any) -> "UserStatusRequest":
+        data = _require_mapping(payload)
+        user_id = str(data.get("user_id") or "").strip()
+        if not user_id:
+            raise ValueError("user_id es obligatorio")
+        if "is_active" not in data:
+            raise ValueError("is_active es obligatorio")
+        return cls(user_id=user_id, is_active=bool(data.get("is_active")))
+
+
+@dataclass(frozen=True)
+class UserPasswordResetRequest:
+    user_id: str
+    new_password: str
+
+    @classmethod
+    def parse(cls, payload: Any) -> "UserPasswordResetRequest":
+        data = _require_mapping(payload)
+        user_id = str(data.get("user_id") or "").strip()
+        if not user_id:
+            raise ValueError("user_id es obligatorio")
+        new_password = str(data.get("new_password") or "")
+        if not new_password:
+            raise ValueError("La nueva contraseña es obligatoria")
+        return cls(user_id=user_id, new_password=new_password)
 
 
 @dataclass(frozen=True)

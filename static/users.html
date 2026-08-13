@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Gestión Comercial Usuarios</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body data-surface="users">
+    <main class="layout">
+      <nav class="surface-switch" aria-label="Superficies">
+        <a class="brand-lockup" href="/bi" aria-label="Codenoa Intelligence">
+          <span class="brand-mark" aria-hidden="true">C</span>
+          <span><strong>Codenoa</strong><small>Intelligence</small></span>
+        </a>
+        <div class="surface-links">
+          <a href="/bi">Comercial</a>
+          <a href="/sales-coach">Sales Coach</a>
+          <a href="/admin">Admin</a>
+          <a class="active" href="/users">Usuarios</a>
+        </div>
+        <div class="surface-actions">
+          <button id="themeToggle" class="icon-button" type="button" aria-label="Cambiar modo de color">◐</button>
+          <span id="currentUser" class="current-user"></span>
+          <button id="logoutBtn" type="button">Salir</button>
+        </div>
+      </nav>
+
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Control de acceso</p>
+          <h1>Usuarios y empresas</h1>
+          <p class="lead">Dar de alta socios y colaboradores, activar o desactivar su acceso, y configurar exactamente qué porción de la información comercial puede ver cada uno.</p>
+        </div>
+        <div class="hero-note">
+          <p>Flujo recomendado</p>
+          <ol>
+            <li>Si hace falta, configurá una empresa (sucursales, proveedores, líneas, depósitos).</li>
+            <li>Dar de alta al usuario, eligiendo rol y, si corresponde, empresa.</li>
+            <li>Acotá más el acceso por unidad de negocio, fuerza de venta o vendedores puntuales.</li>
+            <li>Activá o desactivá usuarios existentes según haga falta.</li>
+          </ol>
+        </div>
+      </section>
+
+      <div class="sticky-controls">
+        <p id="status" class="status"></p>
+      </div>
+
+      <section class="panel admin-access-config">
+        <div class="subpanel-header">
+          <div>
+            <p class="eyebrow">Configuración</p>
+            <h2>Empresas y acceso de usuarios</h2>
+            <p class="muted">Grupo económico equivale a acceso total. Una empresa limita simultáneamente las sucursales y los proveedores configurados. Unidad de negocio, fuerza de venta y vendedores puntuales son restricciones adicionales que se intersectan con el rol y la empresa.</p>
+          </div>
+        </div>
+        <div class="access-catalog-sync">
+          <strong>Sincronizar catálogos desde ventas Chess</strong>
+          <label>Desde<input id="accessCatalogSyncFrom" type="date"></label>
+          <label>Hasta<input id="accessCatalogSyncTo" type="date"></label>
+          <button id="syncAccessCatalogs" type="button" class="primary">Sincronizar sucursales y depósitos</button>
+          <span id="accessCatalogSyncStatus" class="muted"></span>
+        </div>
+        <div class="two-col">
+          <form id="companyAccessForm" class="panel inner-panel admin-config-form">
+            <h3>Configurar empresa</h3>
+            <label>Código<input id="accessCompanyKey" required placeholder="EMPRESA_NORTE"></label>
+            <label>Nombre<input id="accessCompanyName" required placeholder="Empresa Norte"></label>
+            <div class="access-check-group">
+              <div class="access-check-header"><strong>Sucursales</strong><span><button type="button" data-access-toggle="branches" data-action="all">Todas</button><button type="button" data-access-toggle="branches" data-action="none">Ninguna</button></span></div>
+              <div id="accessCompanyBranches" class="access-checkbox-list"></div>
+              <div class="access-inline-add"><input id="manualBranchKey" placeholder="Código de sucursal"><input id="manualBranchName" placeholder="Nombre"><button id="addManualBranch" type="button">Agregar</button></div>
+            </div>
+            <div class="access-check-group">
+              <div class="access-check-header"><strong>Proveedores</strong><span><button type="button" data-access-toggle="suppliers" data-action="all">Todos</button><button type="button" data-access-toggle="suppliers" data-action="none">Ninguno</button></span></div>
+              <div id="accessCompanySuppliers" class="access-checkbox-list"></div>
+            </div>
+            <div class="access-check-group">
+              <div class="access-check-header"><strong>Líneas de producto</strong><span><button type="button" data-access-toggle="lines" data-action="all">Todas</button><button type="button" data-access-toggle="lines" data-action="none">Ninguna</button></span></div>
+              <div id="accessCompanyLines" class="access-checkbox-list"></div>
+            </div>
+            <div class="access-check-group">
+              <div class="access-check-header"><strong>Depósitos</strong><span><button type="button" data-access-toggle="deposits" data-action="all">Todos</button><button type="button" data-access-toggle="deposits" data-action="none">Ninguno</button></span></div>
+              <div id="accessCompanyDeposits" class="access-checkbox-list"></div>
+              <div class="access-inline-add"><input id="manualDepositKey" placeholder="Código de depósito"><input id="manualDepositName" placeholder="Nombre"><button id="addManualDeposit" type="button">Agregar</button></div>
+              <small class="muted">Chess todavía no informa depósito en las ventas; se conserva como configuración organizativa.</small>
+            </div>
+            <p id="companyAccessValidation" class="company-access-validation" role="status" aria-live="polite"></p>
+            <button id="saveAccessCompanyButton" type="submit" class="primary">Guardar empresa</button>
+          </form>
+          <form id="accessUserForm" class="panel inner-panel admin-config-form">
+            <h3>Dar de alta usuario</h3>
+            <label>Nombre<input id="accessUserName" required></label>
+            <label>Email<input id="accessUserEmail" type="email" required></label>
+            <label>Contraseña inicial
+              <div class="password-field">
+                <input id="accessUserPassword" type="password" required autocomplete="new-password">
+                <button type="button" class="password-toggle" data-toggle-password="accessUserPassword" aria-label="Mostrar contraseña">👁</button>
+              </div>
+            </label>
+            <label>Rol
+              <select id="accessUserRole">
+                <option value="commercial_director">Director comercial</option>
+                <option value="supervisor">Supervisor</option>
+                <option value="seller">Vendedor</option>
+                <option value="viewer">Solo lectura</option>
+                <option value="admin">Administrador</option>
+              </select>
+            </label>
+            <label>Acceso
+              <select id="accessUserCompany">
+                <option value="">Grupo económico · acceso total</option>
+              </select>
+            </label>
+            <label>Clave de vendedor <span class="muted">(obligatoria para rol vendedor)</span><input id="accessUserSellerKey"></label>
+            <div class="access-check-group">
+              <div class="access-check-header"><strong>Unidades de negocio</strong><span><button type="button" data-access-toggle="userBusinessUnits" data-action="all">Todas</button><button type="button" data-access-toggle="userBusinessUnits" data-action="none">Ninguna</button></span></div>
+              <p class="muted">Sin selección = sin restricción adicional por unidad de negocio.</p>
+              <div id="accessUserBusinessUnits" class="access-checkbox-list"></div>
+            </div>
+            <div class="access-check-group">
+              <div class="access-check-header"><strong>Fuerza de venta</strong><span><button type="button" data-access-toggle="userSalesForces" data-action="all">Todas</button><button type="button" data-access-toggle="userSalesForces" data-action="none">Ninguna</button></span></div>
+              <p class="muted">Sin selección = sin restricción adicional por fuerza de venta.</p>
+              <div id="accessUserSalesForces" class="access-checkbox-list"></div>
+            </div>
+            <div class="access-check-group">
+              <div class="access-check-header"><strong>Vendedores</strong><span><button type="button" data-access-toggle="userSellers" data-action="all">Todos</button><button type="button" data-access-toggle="userSellers" data-action="none">Ninguno</button></span></div>
+              <p class="muted">Sin selección = sin restricción adicional por vendedor puntual.</p>
+              <div id="accessUserSellers" class="access-checkbox-list"></div>
+            </div>
+            <button type="submit" class="primary">Crear usuario</button>
+          </form>
+        </div>
+        <div class="two-col">
+          <div class="panel inner-panel">
+            <h3>Empresas configuradas</h3>
+            <div id="accessCompaniesList" class="insight-list"></div>
+          </div>
+          <div class="panel inner-panel">
+            <h3>Usuarios</h3>
+            <div id="accessUsersList" class="insight-list"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <div id="progressModal" class="progress-modal hidden" aria-live="polite" aria-hidden="true">
+      <div class="progress-card">
+        <div class="progress-spinner" aria-hidden="true"></div>
+        <div>
+          <h3>Procesando</h3>
+          <p id="progressMessage" class="muted">Esperando la próxima tarea.</p>
+          <p id="progressMeta" class="muted">Calculando tiempo estimado...</p>
+        </div>
+      </div>
+    </div>
+    <div class="floating-nav" aria-label="Navegación de página">
+      <button type="button" data-scroll-action="page-up" title="Subir una pantalla">↑</button>
+      <button type="button" data-scroll-action="page-down" title="Bajar una pantalla">↓</button>
+      <button type="button" data-scroll-action="top" title="Ir al inicio">⇡</button>
+      <button type="button" data-scroll-action="bottom" title="Ir al final">⇣</button>
+    </div>
+    <script src="/app.js"></script>
+    <div class="watermark">@DanFran</div>
+  </body>
+</html>
