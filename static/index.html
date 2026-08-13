@@ -315,7 +315,7 @@
             <div class="coach-table-wrap">
               <table class="coach-mix-table">
                 <thead>
-                  <tr><th>#</th><th>Vendedor</th><th>$ neto</th><th>Participación</th><th>Cantidad</th><th>Rank cantidad</th><th>$/cantidad</th><th>Vs. período</th></tr>
+                  <tr><th>#</th><th>Vendedor</th><th>$ actual</th><th>$ anterior</th><th>Var. $</th><th>Bultos actuales</th><th>Bultos anteriores</th><th>Var. bultos</th><th>Participación</th></tr>
                 </thead>
                 <tbody id="sellerBriefRanking"></tbody>
               </table>
@@ -337,7 +337,7 @@
               <div id="sellerDashChartSales" class="echart-host"></div>
             </div>
             <div class="panel inner-panel chart-panel">
-              <h3>Variación vs período anterior</h3>
+              <h3>Variación de venta neta ($) vs período anterior</h3>
               <div id="sellerDashChartGrowth" class="echart-host"></div>
             </div>
             <div class="panel inner-panel chart-panel">
@@ -502,13 +502,25 @@
           <div class="two-col dashboard-notes">
             <div class="panel inner-panel">
               <h3>Presupuesto histórico</h3>
-              <div class="muted">Cargá presupuesto mensual total y elegí una apertura para compararlo contra el real.</div>
+              <div class="muted">Todos los cálculos usan la cartera actual comparable: el histórico de cada cliente se asigna a su vendedor vigente.</div>
               <div id="historyBudgetControls" class="planning-controls"></div>
             </div>
             <div class="panel inner-panel">
               <h3>Plan vs real</h3>
               <div id="historyBudgetKpis" class="executive-kpis compact-kpis"></div>
               <div id="historyBudgetInsights" class="insight-list"></div>
+            </div>
+          </div>
+          <div class="executive-grid budget-forecast-grid">
+            <div class="panel inner-panel table-panel">
+              <h3>2. Presupuesto por línea</h3>
+              <div class="muted">Promedio de bultos de los últimos 3 meses × ajuste; valorizado al precio medio del último mes.</div>
+              <div id="historyBudgetLineForecastTable" class="tabulator-host"></div>
+            </div>
+            <div class="panel inner-panel table-panel">
+              <h3>3. Presupuesto por vendedor</h3>
+              <div class="muted">Editá el porcentaje de cada vendedor vigente. La suma debe ser 100% y el importe se calcula sobre el presupuesto total.</div>
+              <div id="historyBudgetSellerForecastTable" class="tabulator-host"></div>
             </div>
           </div>
           <div class="executive-grid">

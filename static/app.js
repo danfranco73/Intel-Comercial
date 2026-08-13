@@ -111,7 +111,7 @@ const appSurface = document.body.dataset.surface || "admin";
 const isAdminSurface = appSurface === "admin";
 const isBiSurface = appSurface === "bi";
 const REPORT_METRIC_MODES = ["mixed", "units", "sales"];
-const dashboardState = { charts: {}, tables: { direction: null, executive: null, executiveSensitivity: null, planningTargets: null, ownerTracking: null, history: null, historyBudgetMonthly: null, historyBudgetDimension: null, sellers: null, clients: null, opportunities: null, alerts: null, meetings: null } };
+const dashboardState = { charts: {}, tables: { direction: null, executive: null, executiveSensitivity: null, planningTargets: null, ownerTracking: null, history: null, historyBudgetMonthly: null, historyBudgetDimension: null, historyBudgetLineForecast: null, historyBudgetSellerForecast: null, sellers: null, clients: null, opportunities: null, alerts: null, meetings: null } };
 const DASHBOARD_VIEWS = ["coach", "direction", "executive", "interactive", "sellers", "clients", "history", "opportunities", "alerts", "meetings"];
 
 const filterGroups = [
@@ -288,6 +288,7 @@ function createPlanningConfig() {
     ownerTargets: {},
     budget: {
       dimension: "total",
+      volumeGrowthPct: 0,
       monthlyTotals: {},
       dimensionShares: {
         channel: {},
@@ -325,6 +326,7 @@ function normalizePlanningConfig(config) {
   const budget = next.budget || {};
   next.budget = {
     dimension: ["total", "channel", "seller", "family"].includes(budget.dimension) ? budget.dimension : "total",
+    volumeGrowthPct: Number(budget.volumeGrowthPct || 0),
     monthlyTotals: normalizeMap(budget.monthlyTotals),
     dimensionShares: {
       channel: normalizeMap(budget.dimensionShares?.channel),
@@ -3624,11 +3626,12 @@ function renderSellerBriefTeam(dashboard) {
       <td>#${intNumber(row.rankSales || 0)}</td>
       <td><button type="button" class="coach-table-link">${escapeHtml(row.seller)}</button></td>
       <td>${money(row.sales || 0)}</td>
-      <td>${pctNumber(row.sharePct || 0)}</td>
-      <td>${decimalNumber(row.quantity || 0)}</td>
-      <td>#${intNumber(row.rankQuantity || 0)}</td>
-      <td>${money(row.valuePerQuantity || 0)}</td>
+      <td>${money(row.previousSales || 0)}</td>
       <td class="${(row.growthPct || 0) < 0 ? "coach-negative" : "coach-positive"}">${pctNumber(row.growthPct || 0)}</td>
+      <td>${decimalNumber(row.quantity || 0)}</td>
+      <td>${decimalNumber(row.previousQuantity || 0)}</td>
+      <td class="${(row.quantityGrowthPct || 0) < 0 ? "coach-negative" : "coach-positive"}">${pctNumber(row.quantityGrowthPct || 0)}</td>
+      <td>${pctNumber(row.sharePct || 0)}</td>
     </tr>
   `).join("");
   ranking.querySelectorAll("[data-brief-seller]").forEach((row) => {
@@ -3664,16 +3667,16 @@ function renderSellerBriefSheet(seller, dashboard, meta) {
     { label: "$ neto", value: money(seller.sales || 0), sub: `${pctNumber(seller.sharePct || 0)} del equipo filtrado`, tone: "neutral" },
     { label: "Cantidades", value: decimalNumber(seller.quantity || 0), sub: `promedio equipo ${decimalNumber(dashboard.summary?.unitsPerSeller || 0)}`, tone: "neutral" },
     { label: "$ / cantidad", value: money(seller.valuePerQuantity || 0), sub: "importe neto / cantidad", tone: "neutral" },
-    { label: "Ranking $ neto", value: `#${intNumber(seller.rankSales || 0)} / ${intNumber(sellerCount)}`, sub: `${pctNumber(seller.growthPct || 0)} vs. comparación`, tone: (seller.growthPct || 0) >= 0 ? "good" : "warn" },
-    { label: "Ranking cantidad", value: `#${intNumber(seller.rankQuantity || 0)} / ${intNumber(sellerCount)}`, sub: `${intNumber(seller.clients || 0)} clientes activos`, tone: "neutral" },
+    { label: "Comparación en $", value: pctNumber(seller.growthPct || 0), sub: `${money(seller.sales || 0)} vs ${money(seller.previousSales || 0)}`, tone: (seller.growthPct || 0) >= 0 ? "good" : "warn" },
+    { label: "Comparación bultos", value: pctNumber(seller.quantityGrowthPct || 0), sub: `${decimalNumber(seller.quantity || 0)} vs ${decimalNumber(seller.previousQuantity || 0)}`, tone: (seller.quantityGrowthPct || 0) >= 0 ? "good" : "warn" },
     { label: "Objetivo mental", value: "+1 oferta", sub: "antes de cerrar cada pedido", tone: "good" },
     { label: "Eficacia de venta", value: intNumber(seller.clients || 0), sub: "clientes con compra en el período", tone: "good" },
     { label: "Clientes sin compra", value: intNumber(seller.clientsWithoutPurchase || 0), sub: "compraron en el período comparativo", tone: (seller.clientsWithoutPurchase || 0) > 0 ? "warn" : "good" },
     { label: "Clientes nuevos", value: intNumber(seller.newClients || 0), sub: "con compra actual y sin compra comparativa", tone: "good" },
   ]);
   const mix = document.getElementById("sellerBriefMix");
-  mix.innerHTML = (seller.lineMix || []).map((line) => `
-    <tr class="${(line.sales || 0) <= 0 ? "coach-zero-row" : ""}">
+  mix.innerHTML = (seller.lineMix || []).filter((line) => (line.sales || 0) > 0).map((line) => `
+    <tr>
       <td><strong>${escapeHtml(line.line)}</strong></td>
       <td>${money(line.sales || 0)}</td>
       <td><span class="coach-mix-value">${pctNumber(line.mixPct || 0)}</span><span class="coach-mix-bar"><i style="width:${Math.min(100, Math.max(0, line.mixPct || 0))}%"></i></span></td>
@@ -4946,8 +4949,12 @@ function renderSellerDashboardTable(dashboard) {
     { title: "Rank venta", field: "rankSales", width: 88, hozAlign: "center" },
     { title: "Rank cant.", field: "rankQuantity", width: 86, hozAlign: "center" },
     { title: "Estado", field: "status", width: 96, headerFilter: "list", headerFilterParams: { valuesLookup: true } },
-    { title: "Pesos", field: "sales", width: 100, hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
-    { title: "Vs ant.", field: "growthPct", width: 86, hozAlign: "right", formatter: (cell) => pctNumber(cell.getValue()) },
+    { title: "$ actual", field: "sales", width: 108, hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
+    { title: "$ anterior", field: "previousSales", width: 108, hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
+    { title: "Var. $", field: "growthPct", width: 82, hozAlign: "right", formatter: (cell) => pctNumber(cell.getValue()) },
+    { title: "Bultos act.", field: "quantity", width: 92, hozAlign: "right", formatter: (cell) => decimalNumber(cell.getValue()) },
+    { title: "Bultos ant.", field: "previousQuantity", width: 92, hozAlign: "right", formatter: (cell) => decimalNumber(cell.getValue()) },
+    { title: "Var. bultos", field: "quantityGrowthPct", width: 92, hozAlign: "right", formatter: (cell) => pctNumber(cell.getValue()) },
     { title: "Clientes", field: "clients", width: 76, hozAlign: "center" },
     { title: "Delta cl.", field: "clientDelta", width: 82, hozAlign: "center" },
     { title: "Ticket", field: "avgTicket", width: 96, hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
@@ -5203,31 +5210,29 @@ function renderHistoryBudgetPanel(dashboard) {
   const preview = buildHistoryBudgetPreview(dashboard);
   const budgetDimension = state.planning?.budget?.dimension || "total";
   controlsNode.innerHTML = `
+    <div class="budget-step-title">1. Calcular presupuesto total</div>
     <div class="planning-form-grid">
       <div class="planning-field">
-        <label for="historyBudgetDimension">Apertura del presupuesto</label>
-        <select id="historyBudgetDimension">
-          <option value="total" ${budgetDimension === "total" ? "selected" : ""}>Total</option>
-          <option value="channel" ${budgetDimension === "channel" ? "selected" : ""}>Canal</option>
-          <option value="seller" ${budgetDimension === "seller" ? "selected" : ""}>Vendedor</option>
-          <option value="family" ${budgetDimension === "family" ? "selected" : ""}>Familia</option>
-        </select>
+        <label for="historyBudgetGrowthPct">Crecimiento de bultos (%)</label>
+        <input id="historyBudgetGrowthPct" type="number" step="0.5" value="${Number(state.planning?.budget?.volumeGrowthPct || 0)}">
       </div>
       <div class="planning-field">
         <label>&nbsp;</label>
-        <button id="applyBudgetBtn" class="primary" type="button">Aplicar presupuesto</button>
+        <button id="applyBudgetBtn" class="primary" type="button">Calcular total, líneas y vendedores</button>
       </div>
     </div>
     <div class="planning-hint">
-      ${state.planningDirty ? "Hay cambios de presupuesto pendientes. Aplicá para consolidarlos en toda la serie." : "Editá presupuesto por mes y participación por dimensión; luego aplicá para comparar el histórico."}
+      ${state.planningDirty ? "Hay cambios pendientes. Calculá nuevamente para actualizar el objetivo." : "El porcentaje ajusta los bultos; los importes usan el valor por bulto del último mes de cada línea."}
     </div>
   `;
   bindHistoryBudgetControls(dashboard);
+  renderHistoryBudgetForecastTables(dashboard.budget?.forecast || {});
+  const forecast = dashboard.budget?.forecast || {};
   renderMetricTiles("historyBudgetKpis", [
-    { label: "Meses con plan", value: intNumber(preview.summary.monthsBudgeted || 0), sub: "histórico visible", tone: "neutral" },
-    { label: "Plan último mes", value: money(preview.summary.latestBudget || 0), sub: preview.summary.latestPeriod || "-", tone: "neutral" },
-    { label: "Gap último mes", value: pctNumber(preview.summary.latestGapPct || 0), sub: "real vs plan", tone: preview.summary.latestGapPct >= 0 ? "good" : "warn" },
-    { label: "Gap acumulado", value: money(preview.summary.totalGapValue || 0), sub: "real vs plan visible", tone: preview.summary.totalGapValue >= 0 ? "good" : "warn" },
+    { label: "Próximo período", value: forecast.period || "-", sub: `base ${forecast.basePeriods?.join(" · ") || "-"}`, tone: "neutral" },
+    { label: "Objetivo bultos", value: decimalNumber(forecast.totalQuantity || 0), sub: `ajuste ${pctNumber(forecast.growthPct || 0)}`, tone: "neutral" },
+    { label: "Objetivo $", value: money(forecast.totalSales || 0), sub: `precio de ${forecast.pricePeriod || "-"}`, tone: "neutral" },
+    { label: "% vendedores", value: pctNumber(forecast.sellerShareTotalPct || 0), sub: "debe sumar 100%", tone: Math.abs((forecast.sellerShareTotalPct || 0) - 100) < 0.1 ? "good" : "warn" },
   ]);
   insightsNode.innerHTML = [
     ...((preview.insights || []).map((item) => `<div class="insight-item">${escapeHtml(item)}</div>`)),
@@ -5302,20 +5307,53 @@ function buildHistoryBudgetPreview(dashboard) {
 }
 
 function bindHistoryBudgetControls(dashboard) {
-  const dimensionSelect = document.getElementById("historyBudgetDimension");
+  const growthInput = document.getElementById("historyBudgetGrowthPct");
   const applyButton = document.getElementById("applyBudgetBtn");
-  if (dimensionSelect) {
-    dimensionSelect.addEventListener("change", () => {
-      state.planning.budget.dimension = dimensionSelect.value;
+  if (growthInput) {
+    growthInput.addEventListener("change", () => {
+      state.planning.budget.volumeGrowthPct = Number(growthInput.value || 0);
       state.planningDirty = true;
-      if (state.reportView.lastData?.dashboards?.history) {
-        renderHistoryBudgetPanel(state.reportView.lastData.dashboards.history);
-      }
     });
   }
   if (applyButton) {
     applyButton.addEventListener("click", () => analyze().catch(showError));
   }
+}
+
+function renderHistoryBudgetForecastTables(forecast) {
+  const lineHost = document.getElementById("historyBudgetLineForecastTable");
+  const sellerHost = document.getElementById("historyBudgetSellerForecastTable");
+  if (!lineHost || !sellerHost || !window.Tabulator) return;
+  if (dashboardState.tables.historyBudgetLineForecast) dashboardState.tables.historyBudgetLineForecast.destroy();
+  dashboardState.tables.historyBudgetLineForecast = new Tabulator(lineHost, {
+    data: forecast.lines || [], layout: "fitColumns", height: "320px", placeholder: "Sin líneas para proyectar",
+    columns: [
+      { title: "Línea", field: "label", minWidth: 160 },
+      { title: "Prom. 3M", field: "average3Quantity", width: 95, hozAlign: "right", formatter: (cell) => decimalNumber(cell.getValue()) },
+      { title: "Obj. bultos", field: "targetQuantity", width: 105, hozAlign: "right", formatter: (cell) => decimalNumber(cell.getValue()) },
+      { title: "$ / bulto", field: "lastUnitValue", width: 105, hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
+      { title: "Objetivo $", field: "targetSales", width: 120, hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
+    ],
+  });
+  if (dashboardState.tables.historyBudgetSellerForecast) dashboardState.tables.historyBudgetSellerForecast.destroy();
+  dashboardState.tables.historyBudgetSellerForecast = new Tabulator(sellerHost, {
+    data: forecast.sellers || [], layout: "fitColumns", height: "320px", placeholder: "Sin vendedores para distribuir",
+    columns: [
+      { title: "Vendedor", field: "label", minWidth: 180 },
+      { title: "% asignado", field: "sharePct", width: 110, hozAlign: "right", editor: "number", editorParams: { min: 0, max: 100, step: 0.5 }, formatter: (cell) => pctNumber(cell.getValue()) },
+      { title: "Objetivo $", field: "targetSales", width: 130, hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
+    ],
+  });
+  dashboardState.tables.historyBudgetSellerForecast.on("cellEdited", (cell) => {
+    const row = cell.getRow().getData();
+    if (!Object.keys(state.planning.budget.dimensionShares.seller).length) {
+      (forecast.sellers || []).forEach((item) => {
+        state.planning.budget.dimensionShares.seller[item.label] = Number(item.sharePct || 0);
+      });
+    }
+    state.planning.budget.dimensionShares.seller[row.label] = Number(cell.getValue() || 0);
+    state.planningDirty = true;
+  });
 }
 
 function renderHistoryBudgetMonthlyTable(preview) {

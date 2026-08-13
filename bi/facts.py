@@ -104,7 +104,8 @@ def build_master_maps(loaded):
             route_by_seller[seller_key] = _preferred_route(route_by_seller.get(seller_key), row)
         for client_key in row.get("client_keys") or []:
             client_key = _standard_key(client_key)
-            if client_key:
+            # La cartera comparable solo puede asignarse a una ruta con vendedor.
+            if client_key and row.get("seller_name"):
                 route_by_client[client_key] = _preferred_route(route_by_client.get(client_key), row)
                 scheme = _scheme_key(row.get("sales_scheme_key") or row.get("sales_force_key"))
                 if scheme:
@@ -152,9 +153,11 @@ def enrich_sales_records(sales_records, loaded):
     for row in sales_records:
         product_key = row.get("product_key")
         seller_key = row.get("seller_key")
+        original_seller_key = seller_key
         sales_scheme_key = _scheme_key(row.get("sales_scheme_key") or row.get("sales_force_key"))
         route_description = row.get("route_description")
         seller_name_raw = row.get("seller_name")
+        original_seller_name = seller_name_raw
         article = article_map.get(product_key, {})
         seller_master = seller_by_key.get(seller_key, {}) if seller_key else {}
         if not seller_master and route_description:
@@ -165,13 +168,19 @@ def enrich_sales_records(sales_records, loaded):
         seller_name = _first_non_empty(seller_master.get("seller_name"), seller_name_raw, seller_key, default="Sin vendedor")
         route = route_by_seller.get(_normalize_text(seller_name), {})
         client_key = _standard_key(row.get("client_key"))
-        client_route = route_by_client_scheme.get((client_key, sales_scheme_key), {}) if sales_scheme_key else {}
-        if not client_route:
-            client_route = route_by_client.get(client_key, {})
+        scheme_route = route_by_client_scheme.get((client_key, sales_scheme_key), {}) if sales_scheme_key else {}
+        # Si el cliente tiene una ruta vigente dentro del mismo esquema de la venta,
+        # esa manda: un cliente puede tener rutas activas simultáneas en distintos
+        # esquemas (ej. minorista y mayorista) y la fecha de alta de una no debe
+        # pisar la asignación vigente de la otra. Solo se usa la ruta global (across
+        # esquemas) cuando el cliente ya no tiene ruta activa en el esquema de la venta,
+        # es decir, cuando migró de esquema por completo.
+        client_route = scheme_route if scheme_route and scheme_route.get("is_active") else route_by_client.get(client_key, {})
         route = _preferred_route(route, client_route)
         if client_route and client_route.get("seller_name"):
             seller_name = _first_non_empty(client_route.get("seller_name"), seller_name)
             seller_key = _first_non_empty(client_route.get("seller_key"), seller_key)
+        seller_assignment_source = "current_portfolio" if client_route and client_route.get("seller_name") else "sale_record_fallback"
         sales_force = _first_non_empty(
             row.get("sales_scheme_name"),
             row.get("sales_force"),
@@ -201,6 +210,9 @@ def enrich_sales_records(sales_records, loaded):
                 "week": f"{date_value.isocalendar().year}-W{date_value.isocalendar().week:02d}",
                 "seller_name": seller_name,
                 "seller_key": seller_key,
+                "original_seller_name": original_seller_name,
+                "original_seller_key": original_seller_key,
+                "seller_assignment_source": seller_assignment_source,
                 "sales_scheme_key": sales_scheme_key,
                 "sales_scheme_name": _first_non_empty(row.get("sales_scheme_name"), row.get("sales_force"), route.get("sales_force"), default="Sin esquema"),
                 "sales_force": sales_force,

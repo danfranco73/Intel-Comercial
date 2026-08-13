@@ -586,10 +586,6 @@ table,
   background: #f8fafc;
 }
 
-.coach-zero-row {
-  color: #64748b;
-}
-
 .coach-mix-value {
   display: inline-block;
   min-width: 52px;
@@ -950,6 +946,12 @@ table,
 .planning-hint {
   font-size: 13px;
   color: var(--muted);
+}
+
+.budget-step-title {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--ink);
 }
 
 .executive-grid {

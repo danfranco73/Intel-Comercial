@@ -126,6 +126,7 @@ def build_sellers_dashboard(current_period, previous_period, period_context):
         current_sales = _sum_amount(current_records)
         previous_sales = _sum_amount(previous_records)
         current_quantity = _sum_quantity(current_records)
+        previous_quantity = _sum_quantity(previous_records)
         current_clients = {_client_id(item) for item in current_records if _client_id(item)}
         previous_clients = {_client_id(item) for item in previous_records if _client_id(item)}
         orders = _unique_orders(current_records)
@@ -263,6 +264,8 @@ def build_sellers_dashboard(current_period, previous_period, period_context):
                 "previousSales": previous_sales,
                 "growthPct": _pct_change(current_sales, previous_sales),
                 "quantity": current_quantity,
+                "previousQuantity": previous_quantity,
+                "quantityGrowthPct": _pct_change(current_quantity, previous_quantity),
                 "clients": len(current_clients),
                 "clientDelta": len(current_clients) - len(previous_clients),
                 "orders": len(orders),
@@ -416,6 +419,8 @@ def build_sellers_dashboard(current_period, previous_period, period_context):
             "previousSales": _sum_amount(previous_period),
             "growthPct": _pct_change(total_sales, _sum_amount(previous_period)),
             "quantity": total_quantity,
+            "previousQuantity": _sum_quantity(previous_period),
+            "quantityGrowthPct": _pct_change(total_quantity, _sum_quantity(previous_period)),
             "valuePerQuantity": round(total_sales / max(total_quantity, 1), 2),
             "salesPerSeller": round(total_sales / max(len(active_rows), 1), 2),
             "unitsPerSeller": round(_sum_quantity(current_period) / max(len(active_rows), 1), 2),

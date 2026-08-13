@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import datetime
 
 
 def _safe_pct(part, total):
@@ -163,14 +164,93 @@ def _normalize_budget(planning):
         return normalized
 
     shares = budget.get("dimensionShares") or {}
+    try:
+        volume_growth_pct = round(float(budget.get("volumeGrowthPct", 0) or 0), 1)
+    except (TypeError, ValueError):
+        volume_growth_pct = 0.0
     return {
         "dimension": dimension,
+        "volumeGrowthPct": volume_growth_pct,
         "monthlyTotals": normalize_amount_map(budget.get("monthlyTotals")),
         "dimensionShares": {
             "channel": normalize_share_map(shares.get("channel")),
             "seller": normalize_share_map(shares.get("seller")),
             "family": normalize_share_map(shares.get("family")),
         },
+    }
+
+
+def _next_period(period):
+    try:
+        value = datetime.strptime(period, "%Y-%m")
+    except (TypeError, ValueError):
+        return "-"
+    year = value.year + (1 if value.month == 12 else 0)
+    month = 1 if value.month == 12 else value.month + 1
+    return f"{year:04d}-{month:02d}"
+
+
+def _build_next_month_forecast(records_by_period, budget):
+    periods = list(records_by_period.keys())
+    if not periods:
+        return {"period": "-", "growthPct": budget["volumeGrowthPct"], "lines": [], "sellers": [], "totalQuantity": 0, "totalSales": 0}
+
+    trailing_periods = periods[-3:]
+    last_period = periods[-1]
+    line_monthly = defaultdict(lambda: defaultdict(float))
+    last_line_amount = defaultdict(float)
+    last_line_quantity = defaultdict(float)
+    for period in trailing_periods:
+        for record in records_by_period[period]:
+            line = record.get("line") or "Sin línea"
+            line_monthly[line][period] += record.get("quantity", 0) or 0
+            if period == last_period:
+                last_line_amount[line] += record.get("amount", 0) or 0
+                last_line_quantity[line] += record.get("quantity", 0) or 0
+
+    factor = 1 + budget["volumeGrowthPct"] / 100
+    lines = []
+    for line in sorted(line_monthly):
+        average_quantity = sum(line_monthly[line].get(period, 0) for period in trailing_periods) / len(trailing_periods)
+        target_quantity = max(average_quantity * factor, 0)
+        last_quantity = last_line_quantity[line]
+        unit_value = last_line_amount[line] / last_quantity if last_quantity else 0
+        target_sales = target_quantity * unit_value
+        lines.append({
+            "label": line,
+            "average3Quantity": round(average_quantity, 2),
+            "growthPct": budget["volumeGrowthPct"],
+            "targetQuantity": round(target_quantity, 2),
+            "lastUnitValue": round(unit_value, 2),
+            "targetSales": round(target_sales, 2),
+        })
+    lines.sort(key=lambda item: item["targetSales"], reverse=True)
+    total_sales = round(sum(item["targetSales"] for item in lines), 2)
+    total_quantity = round(sum(item["targetQuantity"] for item in lines), 2)
+
+    last_records = records_by_period[last_period]
+    actual = _dimension_share(last_records, "seller_name")
+    current_shares = {item["label"]: item["sharePct"] for item in actual if item["label"] != "Sin vendedor"}
+    saved_shares = budget["dimensionShares"]["seller"]
+    # Si cambió la cartera, un reparto guardado deja de ser válido. Se rehace
+    # sobre el mix comparable de los vendedores que hoy tienen esos clientes.
+    seller_shares = saved_shares if saved_shares and set(saved_shares) == set(current_shares) else current_shares
+    sellers = [{
+        "label": label,
+        "sharePct": round(share, 1),
+        "targetSales": round(total_sales * share / 100, 2),
+    } for label, share in seller_shares.items()]
+    sellers.sort(key=lambda item: item["targetSales"], reverse=True)
+    return {
+        "period": _next_period(last_period),
+        "basePeriods": trailing_periods,
+        "pricePeriod": last_period,
+        "growthPct": budget["volumeGrowthPct"],
+        "lines": lines,
+        "sellers": sellers,
+        "sellerShareTotalPct": round(sum(item["sharePct"] for item in sellers), 1),
+        "totalQuantity": total_quantity,
+        "totalSales": total_sales,
     }
 
 
@@ -184,6 +264,7 @@ def _budget_field(dimension):
 
 def _build_budget_block(monthly_rows, records_by_period, planning):
     budget = _normalize_budget(planning)
+    forecast = _build_next_month_forecast(records_by_period, budget)
     monthly_totals = budget["monthlyTotals"]
     latest_label = monthly_rows[-1]["label"] if monthly_rows else "-"
     monthly_budget_rows = []
@@ -295,6 +376,7 @@ def _build_budget_block(monthly_rows, records_by_period, planning):
             "dimension": dimension_rows[:10],
         },
         "rows": monthly_budget_rows,
+        "forecast": forecast,
         "dimensionRows": dimension_rows[:20],
         "dimensionBaseRows": base_dimension_rows[:20],
         "insights": insights[:3],
