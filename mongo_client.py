@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 from pymongo import ASCENDING, DESCENDING, MongoClient, UpdateOne
-from pymongo.errors import AutoReconnect, ConnectionFailure
+from pymongo.errors import AutoReconnect, ConnectionFailure, PyMongoError
 from erp_master_builder import build_dataset
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
@@ -995,13 +995,13 @@ def get_erp_storage_status() -> dict:
 
 def ping():
     """Comprueba la conexión con Atlas. Retorna True si está disponible."""
-    db = get_db()
-    if db is None:
-        return False
     try:
+        db = get_db()
+        if db is None:
+            return False
         db.client.admin.command("ping")
         return True
-    except ConnectionFailure:
+    except PyMongoError:
         return False
 
 

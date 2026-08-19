@@ -75,20 +75,52 @@
   display: grid;
   place-items: center;
   padding: 24px;
+  background: var(--bg);
 }
 
 .auth-card {
   width: min(100%, 440px);
+  padding: 40px 36px;
+}
+
+.auth-card .eyebrow {
+  margin: 0 0 6px;
+}
+
+.auth-card h1 {
+  max-width: none;
+  margin: 0 0 12px;
+  font-size: 32px;
+  line-height: 1.15;
+}
+
+.auth-card .muted {
+  margin: 0 0 28px;
+  line-height: 1.5;
 }
 
 .auth-card form {
   display: grid;
-  gap: 16px;
+  gap: 18px;
+}
+
+.auth-card label {
+  min-width: 0;
 }
 
 .auth-card input,
 .auth-card button {
   width: 100%;
+}
+
+.auth-card .status.error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.auth-card .status.error:empty {
+  display: none;
 }
 
 .sticky-controls .row {
