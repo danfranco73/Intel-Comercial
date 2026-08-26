@@ -23,6 +23,8 @@ ERP_ROUTES_COLLECTION = "erp_routes"
 ERP_BRANCHES_COLLECTION = "erp_branches"
 ERP_DEPOSITS_COLLECTION = "erp_deposits"
 ERP_MARKETING_COLLECTION = "erp_marketing"
+ERP_CLIENTS_COLLECTION = "erp_clients"
+ERP_PRODUCTS_COMMERCIAL_COLLECTION = "erp_products_commercial"
 ERP_SYNC_COLLECTION = "erp_sync_runs"
 DEFAULT_MONGO_WRITE_BATCH_SIZE = 400
 DEFAULT_MONGO_WRITE_RETRIES = 4
@@ -181,6 +183,8 @@ def _ensure_erp_indexes(db):
     db[ERP_MARKETING_COLLECTION].create_index([("marketing_key", ASCENDING)], unique=True)
     db[ERP_MARKETING_COLLECTION].create_index([("segment_name", ASCENDING)])
     db[ERP_MARKETING_COLLECTION].create_index([("channel_name", ASCENDING)])
+    db[ERP_CLIENTS_COLLECTION].create_index([("client_key", ASCENDING)], unique=True)
+    db[ERP_PRODUCTS_COMMERCIAL_COLLECTION].create_index([("product_key", ASCENDING)], unique=True)
     db[ERP_SYNC_COLLECTION].create_index([("entity", ASCENDING), ("timestamp", DESCENDING)])
     db[ERP_SYNC_COLLECTION].create_index([("entity", ASCENDING), ("status", ASCENDING), ("range.fechaDesde", ASCENDING), ("range.fechaHasta", ASCENDING)])
     db["registros"].create_index([("timestamp", DESCENDING)])
@@ -820,6 +824,34 @@ def sync_erp_marketing(records: list[dict], origin: str = "manual") -> dict:
     )
 
 
+def sync_erp_clients(records: list[dict], origin: str = "manual") -> dict:
+    """Maestro de clientes leído desde Supabase (TMA). Capacidad nueva para
+    GESTION — no reemplaza ni depende de ninguna colección existente."""
+    return _sync_simple_master(
+        ERP_CLIENTS_COLLECTION,
+        records,
+        "clients",
+        origin,
+        lambda item: item.get("client_key"),
+        replace_all=True,
+    )
+
+
+def sync_products_commercial(records: list[dict], origin: str = "manual") -> dict:
+    """Atributos comerciales de producto (precio, stock, listas de precio)
+    leídos desde Supabase (TMA). Colección separada de `erp_articles` a
+    propósito: dos escritores distintos sobre el mismo documento son una
+    fuente de bugs sutiles; acá el rollback es un `drop()` sin tocar nada más."""
+    return _sync_simple_master(
+        ERP_PRODUCTS_COMMERCIAL_COLLECTION,
+        records,
+        "products_commercial",
+        origin,
+        lambda item: item.get("product_key"),
+        replace_all=True,
+    )
+
+
 def _sync_simple_master(collection_name: str, records: list[dict], entity: str, origin: str, key_fn, replace_all: bool = False) -> dict:
     db = get_db()
     if db is None:
@@ -925,6 +957,26 @@ def load_erp_marketing_dataset() -> dict:
     }
 
 
+def load_erp_clients_dataset() -> dict:
+    return _load_simple_master_dataset(
+        ERP_CLIENTS_COLLECTION,
+        "client_key",
+        "clients",
+        "Maestro de clientes (Supabase TMA)",
+        "Clientes",
+    )
+
+
+def load_products_commercial_dataset() -> dict:
+    return _load_simple_master_dataset(
+        ERP_PRODUCTS_COMMERCIAL_COLLECTION,
+        "product_key",
+        "products_commercial",
+        "Atributos comerciales de producto (Supabase TMA)",
+        "Productos",
+    )
+
+
 def _load_simple_master_dataset(collection_name: str, sort_key: str, dataset_type: str, file_label: str, sheet_label: str) -> dict:
     db = get_db()
     if db is None:
@@ -954,6 +1006,8 @@ def get_erp_storage_status() -> dict:
         seller_total = db[ERP_SELLERS_COLLECTION].count_documents({})
         route_total = db[ERP_ROUTES_COLLECTION].count_documents({})
         marketing_total = db[ERP_MARKETING_COLLECTION].count_documents({})
+        client_total = db[ERP_CLIENTS_COLLECTION].count_documents({})
+        products_commercial_total = db[ERP_PRODUCTS_COMMERCIAL_COLLECTION].count_documents({})
         first = db[ERP_SALES_COLLECTION].find_one({}, sort=[("date", ASCENDING)])
         last = db[ERP_SALES_COLLECTION].find_one({}, sort=[("date", DESCENDING)])
         sales_sync = db[ERP_SYNC_COLLECTION].find_one({"entity": "sales_batch"}, sort=[("timestamp", DESCENDING)])
@@ -963,6 +1017,8 @@ def get_erp_storage_status() -> dict:
         seller_sync = db[ERP_SYNC_COLLECTION].find_one({"entity": "sellers"}, sort=[("timestamp", DESCENDING)])
         route_sync = db[ERP_SYNC_COLLECTION].find_one({"entity": "routes"}, sort=[("timestamp", DESCENDING)])
         marketing_sync = db[ERP_SYNC_COLLECTION].find_one({"entity": "marketing"}, sort=[("timestamp", DESCENDING)])
+        client_sync = db[ERP_SYNC_COLLECTION].find_one({"entity": "clients"}, sort=[("timestamp", DESCENDING)])
+        products_commercial_sync = db[ERP_SYNC_COLLECTION].find_one({"entity": "products_commercial"}, sort=[("timestamp", DESCENDING)])
         return {
             "connected": True,
             "available": total > 0,
@@ -984,6 +1040,10 @@ def get_erp_storage_status() -> dict:
             "sellersLastSyncAt": seller_sync.get("timestamp").isoformat() if seller_sync and seller_sync.get("timestamp") else None,
             "routesLastSyncAt": route_sync.get("timestamp").isoformat() if route_sync and route_sync.get("timestamp") else None,
             "marketingLastSyncAt": marketing_sync.get("timestamp").isoformat() if marketing_sync and marketing_sync.get("timestamp") else None,
+            "clientRecords": client_total,
+            "clientsLastSyncAt": client_sync.get("timestamp").isoformat() if client_sync and client_sync.get("timestamp") else None,
+            "productsCommercialRecords": products_commercial_total,
+            "productsCommercialLastSyncAt": products_commercial_sync.get("timestamp").isoformat() if products_commercial_sync and products_commercial_sync.get("timestamp") else None,
         }
     except Exception as exc:
         return {

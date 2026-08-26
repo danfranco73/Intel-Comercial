@@ -254,6 +254,7 @@ const COMMERCIAL_REQUEST_RECIPES = [
 
 let activeFilterTab = "tiempo";
 let activePrefilterTab = "producto";
+let openFilterDropdown = null;
 let erpKeepaliveTimer = null;
 let progressDepth = 0;
 let progressTicker = null;
@@ -1932,6 +1933,7 @@ function bindDatasetEvents(container) {
   container.querySelectorAll("[data-selectable-kind='prefilter'][data-selectable-role='option']").forEach((input) => {
     input.addEventListener("change", () => {
       toggleSelectableValue("prefilter", input.dataset.selectableField, input.value, input.checked);
+      updateSelectableSummary("prefilter", input.dataset.selectableField);
     });
   });
 
@@ -2656,6 +2658,7 @@ function bindInteractiveSlicerEvents(meta) {
     input.addEventListener("change", () => {
       toggleSelectableValue("filter", input.dataset.selectableField, input.value, input.checked);
       renderFilterPanel(meta);
+      updateSelectableSummary("filter", input.dataset.selectableField);
     });
   });
   document.querySelectorAll("#interactiveSlicers [data-selectable-kind='filter'][data-selectable-role='action']").forEach((button) => {
@@ -2669,9 +2672,13 @@ function bindInteractiveSlicerEvents(meta) {
   });
   document.querySelectorAll("#interactiveSlicers [data-selectable-role='search']").forEach((input) => {
     input.addEventListener("input", () => {
-      state.filterSearch[buildSelectableKey(input.dataset.selectableKind, input.dataset.selectableField)] = input.value || "";
+      const kind = input.dataset.selectableKind;
+      const field = input.dataset.selectableField;
+      const caret = input.selectionStart;
+      state.filterSearch[buildSelectableKey(kind, field)] = input.value || "";
       if (state.reportView.lastData) {
         renderInteractiveReport(state.reportView.lastData);
+        restoreSelectableSearchFocus(kind, field, caret);
       }
     });
   });
@@ -5695,42 +5702,111 @@ function renderSelectableField(kind, field, config, selectedValues) {
   const searchKey = buildSelectableKey(kind, field);
   const searchValue = state.filterSearch[searchKey] || "";
   const visibleOptions = filterSelectableOptions(config.options, searchValue);
+  const isOpen = openFilterDropdown === searchKey;
+  const summaryText = selectableSummaryText(config, selectedValues);
   return `
-    <div class="filter-box">
-      <div class="filter-box-header">
-        <div class="filter-box-title">${escapeHtml(config.label)}</div>
-        <div class="filter-box-actions">
-          <button type="button" data-selectable-kind="${kind}" data-selectable-role="action" data-selectable-action="all" data-selectable-field="${field}">Todos</button>
-          <button type="button" data-selectable-kind="${kind}" data-selectable-role="action" data-selectable-action="none" data-selectable-field="${field}">Ninguno</button>
-        </div>
-      </div>
-      <input
-        class="filter-search"
-        type="search"
-        placeholder="Buscar..."
-        value="${escapeHtml(searchValue)}"
+    <div class="filter-box${isOpen ? " open" : ""}">
+      <button
+        type="button"
+        class="filter-box-toggle"
         data-selectable-kind="${kind}"
-        data-selectable-role="search"
+        data-selectable-role="toggle"
         data-selectable-field="${field}"
+        aria-expanded="${isOpen ? "true" : "false"}"
       >
-      <div class="filter-box-list">
-        ${visibleOptions.length ? visibleOptions.map((option) => `
-          <label class="check-option">
-            <input
-              type="checkbox"
-              data-selectable-kind="${kind}"
-              data-selectable-role="option"
-              data-selectable-field="${field}"
-              value="${escapeHtml(option.value)}"
-              ${isSelectedFilterValue(field, selectedValues, option.value) ? "checked" : ""}
-            >
-            <span>${escapeHtml(option.label)}</span>
-            <span class="check-option-count">${option.count}</span>
-          </label>
-        `).join("") : `<div class="muted">No hay coincidencias para "${escapeHtml(searchValue)}".</div>`}
+        <span class="filter-box-toggle-text">
+          <span class="filter-box-title">${escapeHtml(config.label)}</span>
+          <span class="filter-box-summary">${escapeHtml(summaryText)}</span>
+        </span>
+        <span class="filter-box-caret" aria-hidden="true">&#9662;</span>
+      </button>
+      <div class="filter-box-panel">
+        <div class="filter-box-header">
+          <div class="filter-box-actions">
+            <button type="button" data-selectable-kind="${kind}" data-selectable-role="action" data-selectable-action="all" data-selectable-field="${field}">Todos</button>
+            <button type="button" data-selectable-kind="${kind}" data-selectable-role="action" data-selectable-action="none" data-selectable-field="${field}">Ninguno</button>
+          </div>
+        </div>
+        <input
+          class="filter-search"
+          type="search"
+          placeholder="Buscar..."
+          value="${escapeHtml(searchValue)}"
+          data-selectable-kind="${kind}"
+          data-selectable-role="search"
+          data-selectable-field="${field}"
+        >
+        <div class="filter-box-list">
+          ${visibleOptions.length ? visibleOptions.map((option) => `
+            <label class="check-option">
+              <input
+                type="checkbox"
+                data-selectable-kind="${kind}"
+                data-selectable-role="option"
+                data-selectable-field="${field}"
+                value="${escapeHtml(option.value)}"
+                ${isSelectedFilterValue(field, selectedValues, option.value) ? "checked" : ""}
+              >
+              <span>${escapeHtml(option.label)}</span>
+              <span class="check-option-count">${option.count}</span>
+            </label>
+          `).join("") : `<div class="muted">No hay coincidencias para "${escapeHtml(searchValue)}".</div>`}
+        </div>
       </div>
     </div>
   `;
+}
+
+function selectableSummaryText(config, selectedValues) {
+  const totalCount = (config.options || []).length;
+  const selectedCount = (selectedValues || []).length;
+  if (!selectedCount) {
+    return "Ninguno seleccionado";
+  }
+  return selectedCount === totalCount ? `Todos (${totalCount})` : `${selectedCount} de ${totalCount} seleccionados`;
+}
+
+function updateSelectableSummary(kind, field) {
+  const bucket = kind === "prefilter" ? state.prefilters : state.filters;
+  const config = bucket.available[field];
+  if (!config) {
+    return;
+  }
+  const text = selectableSummaryText(config, bucket.selected[field] || []);
+  document
+    .querySelectorAll(`[data-selectable-role='toggle'][data-selectable-kind='${kind}'][data-selectable-field='${field}']`)
+    .forEach((toggle) => {
+      const summaryEl = toggle.querySelector(".filter-box-summary");
+      if (summaryEl) {
+        summaryEl.textContent = text;
+      }
+    });
+}
+
+function restoreSelectableSearchFocus(kind, field, caret) {
+  const selector = `[data-selectable-role='search'][data-selectable-kind='${kind}'][data-selectable-field='${field}']`;
+  document.querySelectorAll(selector).forEach((input) => {
+    input.focus();
+    const pos = Math.min(caret ?? input.value.length, input.value.length);
+    input.setSelectionRange(pos, pos);
+  });
+}
+
+function rerenderSelectableOwner(el) {
+  if (el.closest("#interactiveSlicers")) {
+    if (state.reportView.lastData) {
+      renderInteractiveReport(state.reportView.lastData);
+    }
+    return;
+  }
+  if (el.closest("#resultsFilters")) {
+    const meta = document.getElementById("resultsFilters")._lastMeta;
+    if (meta) {
+      renderFilterPanel(meta);
+    }
+    return;
+  }
+  renderDatasetConfigs();
 }
 
 function renderSummaryCards(summary, meta = {}, mode = "mixed", coachSummary = null) {
@@ -6105,6 +6181,7 @@ function bindFilterEvents() {
   document.querySelectorAll("[data-selectable-kind='filter'][data-selectable-role='option']").forEach((input) => {
     input.addEventListener("change", () => {
       toggleSelectableValue("filter", input.dataset.selectableField, input.value, input.checked);
+      updateSelectableSummary("filter", input.dataset.selectableField);
     });
   });
 
@@ -6120,14 +6197,19 @@ function bindFilterEvents() {
 
   document.querySelectorAll("[data-selectable-role='search']").forEach((input) => {
     input.addEventListener("input", () => {
-      state.filterSearch[buildSelectableKey(input.dataset.selectableKind, input.dataset.selectableField)] = input.value || "";
-      if (input.dataset.selectableKind === "prefilter") {
+      const kind = input.dataset.selectableKind;
+      const field = input.dataset.selectableField;
+      const caret = input.selectionStart;
+      state.filterSearch[buildSelectableKey(kind, field)] = input.value || "";
+      if (kind === "prefilter") {
         renderDatasetConfigs();
+        restoreSelectableSearchFocus(kind, field, caret);
         return;
       }
       const meta = document.getElementById("resultsFilters")._lastMeta;
       if (meta) {
         renderFilterPanel(meta);
+        restoreSelectableSearchFocus(kind, field, caret);
       }
     });
   });
@@ -7303,6 +7385,29 @@ document.addEventListener("click", (event) => {
   input.type = show ? "text" : "password";
   toggle.textContent = show ? "🙈" : "👁";
   toggle.setAttribute("aria-label", show ? "Ocultar contraseña" : "Mostrar contraseña");
+});
+document.addEventListener("click", (event) => {
+  const toggle = event.target.closest("[data-selectable-role='toggle']");
+  if (toggle) {
+    const kind = toggle.dataset.selectableKind;
+    const field = toggle.dataset.selectableField;
+    const key = buildSelectableKey(kind, field);
+    const opening = openFilterDropdown !== key;
+    openFilterDropdown = opening ? key : null;
+    rerenderSelectableOwner(toggle);
+    if (opening) {
+      restoreSelectableSearchFocus(kind, field);
+    }
+    return;
+  }
+  if (!openFilterDropdown || event.target.closest(".filter-box")) {
+    return;
+  }
+  const openBox = document.querySelector(".filter-box.open");
+  if (openBox) {
+    openFilterDropdown = null;
+    rerenderSelectableOwner(openBox);
+  }
 });
 window.addEventListener("resize", () => {
   Object.values(dashboardState.charts).forEach((chart) => {

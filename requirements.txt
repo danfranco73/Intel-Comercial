@@ -5,3 +5,4 @@ clickhouse-connect>=0.8
 bcrypt>=4.1
 reportlab>=4.2
 python-pptx>=1.0
+psycopg[binary]>=3.1
