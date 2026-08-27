@@ -22,3 +22,6 @@ env/
 # Logs
 *.log
 .pytest_cache/
+
+# Claude Code (config local, no compartido)
+.claude/settings.local.json

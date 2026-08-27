@@ -3,9 +3,18 @@ from __future__ import annotations
 from datetime import date
 
 from analyzer import analyze_datasets
+from bi.facts import enrich_sales_records
 from clickhouse_client import _compact_records
 from erp_client import normalize_erp_sale_row
 from mongo_client import _compact_sale_record
+
+
+def test_enrichment_uses_net_amount_as_reference_sale(sales_records):
+    enriched = enrich_sales_records(sales_records, {})
+    for original, item in zip(sales_records, enriched):
+        # `amount` de análisis = neto sin IVA; el bruto queda en `amount_gross`.
+        assert item["amount"] == original["amount_net"]
+        assert item["amount_gross"] == original["amount"]
 
 
 def test_normalize_chess_sale_preserves_commercial_identity():
@@ -57,7 +66,8 @@ def test_compaction_groups_equivalent_sales(sales_records):
 
 def test_existing_kpis_rankings_mix_opportunities_and_monthly_evolution(datasets):
     result = analyze_datasets(datasets)
-    assert result["summary"]["salesCurrent"] == 300
+    # La venta de referencia es el neto sin IVA (amount_net): jun = 135 + 45 + 90.
+    assert result["summary"]["salesCurrent"] == 270
     assert result["meta"]["rowsAnalyzed"] == 3
     sellers = result["dashboards"]["sellers"]
     assert sellers["rows"][0]["seller"] == "Vendedora Norte"
@@ -77,7 +87,8 @@ def test_existing_kpis_rankings_mix_opportunities_and_monthly_evolution(datasets
 
 def test_seller_scope_is_applied_before_facets(datasets):
     result = analyze_datasets(datasets, scope_filters={"seller_name": ["Vendedora Norte"]})
-    assert result["summary"]["salesCurrent"] == 200
+    # neto sin IVA: jun Vendedora Norte = 135 + 45
+    assert result["summary"]["salesCurrent"] == 180
     assert result["meta"]["rowsUniverse"] == 2
     seller_options = result["availableFilters"]["seller_name"]["options"]
     assert [option["value"] for option in seller_options] == ["Vendedora Norte"]

@@ -28,10 +28,40 @@ def int_env(name: str, default: int, minimum: int = 1) -> int:
     return max(value, minimum)
 
 
+def _lookback_days(now: datetime) -> int:
+    """Días hacia atrás a re-sincronizar en esta corrida.
+
+    Las ventas del ERP no son inmutables: las devoluciones y notas de crédito se
+    emiten días o semanas después de la factura original. Una ventana fija de
+    pocos días deja los meses ya sincronizados congelados y sin esas NC, así que
+    la plataforma queda inflada frente al ERP. Para evitarlo la ventana es
+    escalonada:
+
+    - toda corrida: ``SYNC_SALES_LOOKBACK_DAYS`` (frescura operativa);
+    - corrida nocturna (hora < ``SYNC_SALES_DEEP_HOUR``):
+      ``SYNC_SALES_DEEP_LOOKBACK_DAYS`` (recupera NC tardías);
+    - corrida nocturna del domingo: ``SYNC_SALES_WEEKLY_LOOKBACK_DAYS``
+      (barrido amplio, acotado a ~1 año).
+
+    Con el intervalo por defecto (6 h) siempre cae exactamente una corrida en la
+    franja nocturna.
+    """
+    shallow = int_env("SYNC_SALES_LOOKBACK_DAYS", 15)
+    deep = int_env("SYNC_SALES_DEEP_LOOKBACK_DAYS", 100)
+    weekly = int_env("SYNC_SALES_WEEKLY_LOOKBACK_DAYS", 400)
+    deep_hour = int_env("SYNC_SALES_DEEP_HOUR", 6, minimum=0)
+
+    if now.hour >= deep_hour:
+        return shallow
+    if now.weekday() == 6:  # domingo
+        return max(shallow, weekly)
+    return max(shallow, deep)
+
+
 def build_payload(now: datetime | None = None) -> dict:
-    current = (now or datetime.now(timezone.utc)).date()
-    lookback_days = int_env("SYNC_SALES_LOOKBACK_DAYS", 7)
-    start = current - timedelta(days=lookback_days - 1)
+    now = now or datetime.now(timezone.utc)
+    current = now.date()
+    start = current - timedelta(days=_lookback_days(now) - 1)
     return {
         "fechaDesde": start.isoformat(),
         "fechaHasta": current.isoformat(),

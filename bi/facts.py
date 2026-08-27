@@ -216,6 +216,15 @@ def enrich_sales_records(sales_records, loaded):
             route_name = _resolve_route_name({}, route_master=route, seller_master=seller_master)
         date_value = row["date"]
         invoice = _clean_text(row.get("invoice"))
+        # La venta de referencia del análisis es el NETO sin IVA (subtotalNeto del
+        # ERP), que es la base de la columna "Importe Neto" del pivot del ERP.
+        # `amount` pasa a ser ese neto en todo el pipeline de análisis;
+        # `amount_gross` conserva el valor con impuestos (subtotalFinal) por si
+        # algún tablero necesita el "importe final".
+        amount_gross = row.get("amount")
+        amount_net_value = row.get("amount_net")
+        if amount_net_value is None:
+            amount_net_value = amount_gross
         fact_key = "|".join([
             date_value.isoformat(),
             client_key or "-",
@@ -227,6 +236,8 @@ def enrich_sales_records(sales_records, loaded):
         enriched.append(
             {
                 **row,
+                "amount": amount_net_value,
+                "amount_gross": amount_gross,
                 "client": row.get("client_name") or row.get("client_key"),
                 "client_canonical": _normalize_text(row.get("client_name") or row.get("client_key")),
                 "period": date_value.strftime("%Y-%m"),

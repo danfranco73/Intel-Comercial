@@ -73,13 +73,26 @@ Variables:
 
 | Variable | Propósito | Ejemplo |
 |---|---|---|
-| `SYNC_SALES_LOOKBACK_DAYS` | ventana móvil que se relee para absorber correcciones | `7` |
+| `SYNC_SALES_LOOKBACK_DAYS` | ventana móvil de toda corrida (frescura operativa) | `15` |
+| `SYNC_SALES_DEEP_LOOKBACK_DAYS` | ventana de la corrida nocturna: recupera NC/devoluciones cargadas tarde contra meses ya sincronizados | `100` |
+| `SYNC_SALES_WEEKLY_LOOKBACK_DAYS` | ventana de la corrida nocturna del domingo (barrido amplio, acotado) | `400` |
+| `SYNC_SALES_DEEP_HOUR` | hora (UTC) por debajo de la cual una corrida usa ventana profunda | `6` |
 | `SYNC_MAX_RETRIES` | intentos por ejecución | `3` |
 | `SYNC_RETRY_DELAY_SECONDS` | espera base incremental | `30` |
 | `SYNC_SCHEDULER_LEASE_SECONDS` | exclusión entre instancias | `3600` |
 | `SYNC_INTERVAL_SECONDS` | intervalo de `--loop` | `21600` |
+| `CHESS_ERP_TIMEOUT` | timeout de lectura HTTP contra Chess (subir si aparece `TimeoutError` en el sync) | `300` |
+| `CHESS_ERP_SALES_CHUNK_DAYS` | días por página al traer ventas (bajar si hay `TimeoutError`) | `31` |
 | `CLICKHOUSE_TIMEOUT` | timeout de conexión/consulta | `15` |
 | `CLICKHOUSE_MUTATION_TIMEOUT` | espera máxima de reemplazos por rango | `180` |
+
+La ventana de re-lectura es escalonada (ver `_lookback_days` en
+`scripts/sync_scheduler.py`): corta en cada corrida, profunda de noche y muy
+amplia la noche del domingo. Con el intervalo por defecto de 6 h siempre cae
+exactamente una corrida en la franja nocturna. Motivo: las devoluciones y notas
+de crédito de Chess se emiten días o semanas después de la factura; una ventana
+fija de pocos días deja los meses viejos sin esas NC y la plataforma queda
+inflada frente al ERP.
 
 Ventas, artículos, vendedores y rutas se refrescan en cada corrida programada.
 Marketing usa actualmente la misma frecuencia; puede separarse cuando se mida su
