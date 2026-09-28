@@ -39,6 +39,12 @@ CLICKHOUSE_SALES_COLUMNS = [
     "product_key",
     "invoice",
     "channel",
+    "company_key",
+    "company_name",
+    "supplier_key",
+    "supplier_name",
+    "business_type_key",
+    "business_type_name",
     "amount",
     "amount_net",
     "amount_final",
@@ -49,6 +55,18 @@ CLICKHOUSE_SALES_COLUMNS = [
     "origin",
     "synced_at",
 ]
+
+# Dimensiones que viajan con el registro compactado sin ser parte de su clave:
+# la empresa depende del comprobante, el proveedor del artículo y el tipo de
+# negocio del cliente, todos ya presentes en la clave.
+DIMENSION_FIELDS = (
+    "company_key",
+    "company_name",
+    "supplier_key",
+    "supplier_name",
+    "business_type_key",
+    "business_type_name",
+)
 
 _client_state = local()
 _schema_ready = False
@@ -134,6 +152,12 @@ def _ensure_schema():
             product_key String,
             invoice String,
             channel String,
+            company_key String,
+            company_name String,
+            supplier_key String,
+            supplier_name String,
+            business_type_key String,
+            business_type_name String,
             amount Float64,
             amount_net Float64,
             amount_final Float64,
@@ -153,7 +177,18 @@ def _ensure_schema():
         client.command(
             f"ALTER TABLE {_qualified_table()} ADD COLUMN IF NOT EXISTS sync_run_id String DEFAULT ''"
         )
-        for column in ("seller_name", "sales_scheme_key", "sales_scheme_name", "sales_force"):
+        for column in (
+            "seller_name",
+            "sales_scheme_key",
+            "sales_scheme_name",
+            "sales_force",
+            "company_key",
+            "company_name",
+            "supplier_key",
+            "supplier_name",
+            "business_type_key",
+            "business_type_name",
+        ):
             client.command(f"ALTER TABLE {_qualified_table()} ADD COLUMN IF NOT EXISTS {column} String DEFAULT ''")
         for column in ("amount_net", "amount_final", "internal_taxes", "amount_net_internal"):
             client.command(
@@ -204,6 +239,7 @@ def _compact_records(records):
                 "product_key": str(record.get("product_key") or ""),
                 "invoice": str(record.get("invoice") or record.get("document_key") or ""),
                 "channel": str(record.get("channel") or ""),
+                **{field: str(record.get(field) or "") for field in DIMENSION_FIELDS},
                 "amount": float(record.get("amount") or 0),
                 "amount_net": float(record.get("amount_net") if record.get("amount_net") is not None else record.get("amount") or 0),
                 "amount_final": float(record.get("amount_final") if record.get("amount_final") is not None else record.get("amount") or 0),
@@ -221,6 +257,9 @@ def _compact_records(records):
         current["quantity"] = round(current["quantity"] + float(record.get("quantity") or 0), 6)
         if not current["client_name"]:
             current["client_name"] = str(record.get("client_name") or record.get("client_key") or "")
+        for field in DIMENSION_FIELDS:
+            if not current[field]:
+                current[field] = str(record.get(field) or "")
     return list(grouped.values())
 
 
@@ -280,6 +319,7 @@ def sync_erp_sales_clickhouse(records, fecha_desde, fecha_hasta, origin="manual"
                 item["product_key"],
                 item["invoice"],
                 item["channel"],
+                *(item[field] for field in DIMENSION_FIELDS),
                 float(item["amount"]),
                 float(item["amount_net"]),
                 float(item["amount_final"]),
@@ -349,6 +389,12 @@ def load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta):
             product_key,
             invoice,
             channel,
+            company_key,
+            company_name,
+            supplier_key,
+            supplier_name,
+            business_type_key,
+            business_type_name,
             amount,
             amount_net,
             amount_final,
@@ -382,12 +428,13 @@ def load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta):
                 "product_key": row[11],
                 "invoice": row[12],
                 "channel": row[13],
-                "amount": float(row[14]),
-                "amount_net": float(row[15]),
-                "amount_final": float(row[16]),
-                "internal_taxes": float(row[17]),
-                "amount_net_internal": float(row[18]),
-                "quantity": float(row[19]),
+                **dict(zip(DIMENSION_FIELDS, row[14:20])),
+                "amount": float(row[20]),
+                "amount_net": float(row[21]),
+                "amount_final": float(row[22]),
+                "internal_taxes": float(row[23]),
+                "amount_net_internal": float(row[24]),
+                "quantity": float(row[25]),
                 "source": "ClickHouse",
             }
         )

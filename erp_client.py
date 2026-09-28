@@ -473,6 +473,8 @@ def normalize_erp_sale_row(row):
     segment_name = _clean_text(row.get("dsSegmentoMkt"))
     channel_name = _clean_text(row.get("dsCanalMkt"))
     subchannel_name = _clean_text(row.get("dsSubcanalMKT"))
+    # `proveedor` llega como "1336 - CODENOA SRL CAMINO LA COSTA".
+    supplier_key, supplier_name = _split_code_label(row.get("proveedor"))
     channel = (
         subchannel_name
         or channel_name
@@ -506,6 +508,16 @@ def normalize_erp_sale_row(row):
         "sales_scheme_name": _clean_text(row.get("dsFuerzaVentas")),
         "sales_force_key": _standard_key(row.get("idFuerzaVentas")),
         "sales_force": _clean_text(row.get("dsFuerzaVentas")),
+        # Empresa facturante del grupo (CODENOA, TODO PYMES, PDEV, ERDASER):
+        # cada comprobante pertenece a una sola, así que no altera la
+        # granularidad de la compactación.
+        "company_key": _standard_key(row.get("idEmpresa")),
+        "company_name": _clean_text(row.get("dsEmpresa")),
+        "supplier_key": supplier_key,
+        "supplier_name": supplier_name,
+        # Tipo de negocio del PDV (ALM, KIOSKO, AUT...).
+        "business_type_key": _standard_key(row.get("idNegocio")),
+        "business_type_name": _clean_text(row.get("dsNegocio")),
         "branch_key": _standard_key(row.get("idSucursal")),
         "branch_name": _clean_text(row.get("dsSucursal") or row.get("desSucursal")),
         "deposit_key": _standard_key(row.get("idDeposito")),
@@ -656,13 +668,28 @@ def _build_invoice(row):
 
 
 def _grouping_map(groups):
+    # Se indexa por id y por descripción de la forma de agrupar: algunas
+    # agrupaciones tienen un id críptico (el proveedor llega como
+    # idFormaAgrupar="ROTAC01", desFormaAgrupar="PROVEEDOR").
     mapping = {}
     for item in groups:
-        key = _clean_text(item.get("idFormaAgrupar")) or _clean_text(item.get("desFormaAgrupar"))
         value = _clean_text(item.get("desAgrupacion"))
-        if key and value:
-            mapping[key.upper()] = value
+        if not value:
+            continue
+        for key in (_clean_text(item.get("idFormaAgrupar")), _clean_text(item.get("desFormaAgrupar"))):
+            if key:
+                mapping.setdefault(key.upper(), value)
     return mapping
+
+
+def _split_code_label(value):
+    text = _clean_text(value)
+    if not text:
+        return None, ""
+    code, separator, label = text.partition(" - ")
+    if separator and code.strip().isdigit():
+        return code.strip(), label.strip()
+    return None, text
 
 
 def _pick_group(groups, aliases):

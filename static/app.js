@@ -279,6 +279,7 @@ function createErpConfig() {
     fechaDesde: formatDateInput(addDays(today, -89)),
     fechaHasta: formatDateInput(today),
     forceRefreshSales: false,
+    refreshMasters: false,
   };
 }
 
@@ -989,6 +990,10 @@ function renderErpSalesPanel(erp) {
       <label class="check-inline">
         <input data-erp-force-refresh="1" type="checkbox" ${erp.forceRefreshSales ? "checked" : ""}>
         <span>Forzar resincronización de ventas del rango aunque ya exista en la base</span>
+      </label>
+      <label class="check-inline">
+        <input data-erp-refresh-masters="1" type="checkbox" ${erp.refreshMasters ? "checked" : ""}>
+        <span>Actualizar también los maestros (artículos, vendedores, rutas y jerarquía MKT)</span>
       </label>
       <div class="button-row">
         <button class="primary" data-erp-sync="1" ${state.erpSyncPending ? "disabled" : ""}>${state.erpSyncPending ? "Sincronizando..." : `Sincronizar en ${persistLabel}`}</button>
@@ -2003,6 +2008,12 @@ function bindDatasetEvents(container) {
     });
   });
 
+  container.querySelectorAll("[data-erp-refresh-masters]").forEach((input) => {
+    input.addEventListener("change", () => {
+      state.datasets.sales.erp.refreshMasters = !!input.checked;
+    });
+  });
+
   container.querySelectorAll("[data-preview]").forEach((button) => {
     button.addEventListener("click", () => {
       state.preview = { datasetType: button.dataset.preview, sourceIndex: 0 };
@@ -2162,7 +2173,7 @@ async function syncErpToMongo() {
   if (state.erpSyncPending) {
     return;
   }
-  const { fechaDesde, fechaHasta, forceRefreshSales } = state.datasets.sales.erp;
+  const { fechaDesde, fechaHasta, forceRefreshSales, refreshMasters } = state.datasets.sales.erp;
   if (!fechaDesde || !fechaHasta) {
     setStatus("Elegí fecha desde y fecha hasta para sincronizar.");
     return;
@@ -2175,7 +2186,7 @@ async function syncErpToMongo() {
     const data = await withProgress(`Sincronizando ChessERP en ${persistLabel} para ${fechaDesde} a ${fechaHasta}...`, () => api("/api/erp/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fechaDesde, fechaHasta, refreshMasters: false, forceRefreshSales: !!forceRefreshSales }),
+      body: JSON.stringify({ fechaDesde, fechaHasta, refreshMasters: !!refreshMasters, forceRefreshSales: !!forceRefreshSales }),
       timeoutMs: 15 * 60 * 1000,
     }), { operationType: "sync", fechaDesde, fechaHasta, sourceMode: "erp" });
     state.erpStorage = data.storage || state.erpStorage;

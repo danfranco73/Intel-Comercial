@@ -54,7 +54,8 @@ class FakeClickHouse:
                 (
                     date(2026, 6, 10), 2026, 6, "C1", "Cliente Uno", "Ruta Norte",
                     "S1", "Vendedora Norte", "F1", "Minorista", "Minorista", "P1",
-                    "A-2", "Tradicional", 150.0, 135.0, 150.0, 7.5, 142.5, 15.0,
+                    "A-2", "Tradicional", "1", "CODENOA S.R.L.", "1336", "CODENOA SRL",
+                    "1", "ALM", 150.0, 135.0, 150.0, 7.5, 142.5, 15.0,
                 )
             ]
         )
@@ -66,6 +67,10 @@ def test_load_from_clickhouse(monkeypatch):
     dataset = clickhouse_client.load_erp_sales_dataset_clickhouse("2026-06-01", "2026-06-30")
     assert dataset["rowsValid"] == 1
     assert dataset["records"][0]["seller_key"] == "S1"
+    assert dataset["records"][0]["company_name"] == "CODENOA S.R.L."
+    assert dataset["records"][0]["business_type_name"] == "ALM"
+    assert dataset["records"][0]["amount_net"] == 135.0
+    assert dataset["records"][0]["quantity"] == 15.0
 
 
 def test_clickhouse_client_is_not_shared_between_server_threads(monkeypatch):

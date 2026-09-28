@@ -5,7 +5,7 @@ from datetime import date
 from analyzer import analyze_datasets
 from bi.facts import enrich_sales_records
 from clickhouse_client import _compact_records
-from erp_client import normalize_erp_sale_row
+from erp_client import normalize_erp_article_row, normalize_erp_sale_row
 from mongo_client import _compact_sale_record
 
 
@@ -92,3 +92,55 @@ def test_seller_scope_is_applied_before_facets(datasets):
     assert result["meta"]["rowsUniverse"] == 2
     seller_options = result["availableFilters"]["seller_name"]["options"]
     assert [option["value"] for option in seller_options] == ["Vendedora Norte"]
+
+
+def test_normalize_chess_sale_keeps_company_supplier_and_business_type():
+    record = normalize_erp_sale_row(
+        {
+            "fechaComprobate": "2026-09-01",
+            "idCliente": 101,
+            "idArticulo": 55,
+            "subtotalFinal": "100",
+            "idEmpresa": 3,
+            "dsEmpresa": "PDEV S.A.S.",
+            "proveedor": "1336 - CODENOA SRL CAMINO LA COSTA",
+            "idNegocio": 1,
+            "dsNegocio": "ALM",
+        }
+    )
+    assert record["company_key"] == "3"
+    assert record["company_name"] == "PDEV S.A.S."
+    assert record["supplier_key"] == "1336"
+    assert record["supplier_name"] == "CODENOA SRL CAMINO LA COSTA"
+    assert record["business_type_key"] == "1"
+    assert record["business_type_name"] == "ALM"
+
+    compacted = _compact_records([record])
+    assert compacted[0]["company_name"] == "PDEV S.A.S."
+    assert compacted[0]["supplier_key"] == "1336"
+    assert _compact_sale_record(record)["company_key"] == "3"
+    assert enrich_sales_records([record], {})[0]["company"] == "PDEV S.A.S."
+
+
+def test_enrichment_labels_sales_without_company():
+    record = normalize_erp_sale_row(
+        {"fechaComprobate": "2026-09-01", "idCliente": 1, "idArticulo": 2, "subtotalFinal": "10"}
+    )
+    enriched = enrich_sales_records([record], {})[0]
+    assert enriched["company"] == "Sin empresa"
+    assert enriched["business_type"] == "Sin tipo de negocio"
+
+
+def test_normalize_article_reads_supplier_grouping_by_description():
+    record = normalize_erp_article_row(
+        {
+            "idArticulo": 10,
+            "desArticulo": "Producto",
+            "eAgrupaciones": [
+                {"idFormaAgrupar": "ROTAC01", "desFormaAgrupar": "PROVEEDOR", "desAgrupacion": "PRODUNOA"},
+                {"idFormaAgrupar": "LINPRODU", "desFormaAgrupar": "LINEAS DE PRODUCTO", "desAgrupacion": "YERBAS"},
+            ],
+        }
+    )
+    assert record["supplier"] == "PRODUNOA"
+    assert record["line"] == "YERBAS"

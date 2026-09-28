@@ -261,6 +261,11 @@ def enrich_sales_records(sales_records, loaded):
                 "uxb": _first_non_empty(article.get("uxb"), default="Sin UxB"),
                 "caliber": _first_non_empty(article.get("caliber"), default="Sin calibre"),
                 "channel": _first_non_empty(row.get("channel"), default="Sin canal"),
+                # Empresa facturante del grupo; las ventas sincronizadas antes de
+                # que se persistiera este campo quedan en "Sin empresa" hasta el
+                # re-sync.
+                "company": _first_non_empty(row.get("company_name"), default="Sin empresa"),
+                "business_type": _first_non_empty(row.get("business_type_name"), default="Sin tipo de negocio"),
                 "route_description": route_name,
                 "has_article_match": bool(article),
                 "has_route_match": route_name != "Sin ruta",
