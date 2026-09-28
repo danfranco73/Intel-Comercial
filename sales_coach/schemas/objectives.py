@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from sales_coach.domain.commercial_structure import resolve_commercial_structure_key
+
 
 VALID_SCOPE_TYPES = {
     "company",
@@ -15,6 +17,8 @@ VALID_SCOPE_TYPES = {
     "channel",
     "brand",
     "family",
+    "line",
+    "commercial_structure",
 }
 VALID_OBJECTIVE_METRICS = {
     "net_sales",
@@ -60,6 +64,14 @@ class ObjectiveCreateRequest:
         ).strip()
         if not scope_key:
             raise ValueError("scope_key es obligatorio")
+        if scope_type == "commercial_structure":
+            resolved_scope_key = resolve_commercial_structure_key(scope_key)
+            if resolved_scope_key is None:
+                raise ValueError(
+                    "scope_key debe ser un esquema comercial válido "
+                    "(Bebidas, Mercadería, Frescos, Mayorista o B2B)"
+                )
+            scope_key = resolved_scope_key
         metric = str(payload.get("metric") or "").strip()
         if metric not in VALID_OBJECTIVE_METRICS:
             raise ValueError("metric inválida")

@@ -22,7 +22,27 @@ fuente actual.
 - `route`: descripción normalizada de ruta.
 - `channel`: canal normalizado.
 - `branch` y `supervisor`: vendedores resueltos desde `erp_sellers`.
-- `brand` y `family`: productos resueltos desde `erp_articles`.
+- `brand`, `family` y `line`: productos resueltos desde `erp_articles`.
+- `commercial_structure`: agrupa los mismos `sales_scheme_key` que `sales_force`
+  en los cinco bloques de negocio de Dirección Comercial. El ERP reparte cada
+  pedido (incluidos los de la app B2B TeMando) en su esquema real antes de
+  llegar a `erp_sales`, así que cada línea de venta pertenece a exactamente un
+  bloque; no hay solapamiento entre ellos. Acepta como `scope_key` la clave del
+  esquema o su etiqueta (sin distinguir mayúsculas/acentos), normalizada a la
+  clave canónica:
+
+  | Clave | Bloque |
+  |---|---|
+  | `1` | Bebidas |
+  | `2` | Mercadería |
+  | `3` | Frescos |
+  | `4` | Mayorista |
+  | `5` | B2B — clientes sin cobertura de preventa, pedido ingresado por la app |
+
+  Un cliente visitado por preventa que además compra por la app cae en su
+  esquema habitual (1-4), no en B2B. Mapeo confirmado con Dirección Comercial
+  el 2026-09-03; no debe modificarse sin ese visto bueno (ver
+  `sales_coach/domain/commercial_structure.py`).
 
 ## Evidencia entregada
 

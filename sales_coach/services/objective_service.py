@@ -223,7 +223,10 @@ class ObjectiveService:
             return {}
         if scope_type == "seller":
             return {"seller_key": scope_key}
-        if scope_type == "sales_force":
+        if scope_type in {"sales_force", "commercial_structure"}:
+            # `commercial_structure` agrupa los mismos esquemas de venta
+            # (sales_scheme_key) en los bloques Bebidas/Mercadería/Frescos/
+            # Mayorista/B2B; ver sales_coach/domain/commercial_structure.py.
             return {"$or": [{"sales_scheme_key": scope_key}, {"sales_force": scope_key}]}
         if scope_type == "route":
             return {"route_description": scope_key}
@@ -239,8 +242,8 @@ class ObjectiveService:
                 if row.get("seller_key")
             ]
             return {"seller_key": {"$in": seller_keys}}
-        if scope_type in {"brand", "family"}:
-            article_field = "brand" if scope_type == "brand" else "family"
+        if scope_type in {"brand", "family", "line"}:
+            article_field = scope_type
             product_keys = [
                 row["product_key"]
                 for row in self.db["erp_articles"].find(
@@ -304,6 +307,7 @@ class ObjectiveService:
             "supervisor",
             "branch",
             "sales_force",
+            "commercial_structure",
         }:
             raise PermissionError("El supervisor no puede crear objetivos para ese alcance")
 
@@ -318,7 +322,7 @@ class ObjectiveService:
             return bool(user.supervisor_key and scope_key == user.supervisor_key)
         if scope_type == "branch":
             return scope_key in user.branch_keys
-        if scope_type == "sales_force":
+        if scope_type in {"sales_force", "commercial_structure"}:
             return scope_key in user.sales_force_keys
         if scope_type == "seller":
             seller = self.db["erp_sellers"].find_one(

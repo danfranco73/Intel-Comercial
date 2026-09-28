@@ -113,7 +113,7 @@ const isBiSurface = appSurface === "bi";
 const isUsersSurface = appSurface === "users";
 const REPORT_METRIC_MODES = ["mixed", "units", "sales"];
 const dashboardState = { charts: {}, tables: { direction: null, executive: null, executiveSensitivity: null, planningTargets: null, ownerTracking: null, history: null, historyBudgetMonthly: null, historyBudgetDimension: null, historyBudgetLineForecast: null, historyBudgetSellerForecast: null, sellers: null, clients: null, opportunities: null, alerts: null, meetings: null } };
-const DASHBOARD_VIEWS = ["coach", "direction", "executive", "interactive", "sellers", "clients", "history", "opportunities", "alerts", "meetings"];
+const DASHBOARD_VIEWS = ["coach", "products", "direction", "executive", "interactive", "sellers", "clients", "history", "opportunities", "alerts", "meetings"];
 
 const filterGroups = [
   { id: "tiempo",     label: "Período",       fields: ["year", "month"] },
@@ -2517,6 +2517,7 @@ function renderReportData(data) {
   renderExecutiveDashboard(data, mode);
   renderInteractiveReport(data);
   renderSellerBrief(data);
+  renderProductBrief(data);
   renderSellerDashboard(data, mode);
   renderClientDashboard(data, mode);
   renderHistoryDashboard(data, mode);
@@ -3453,6 +3454,7 @@ function renderDashboardViewSelector(data) {
   }
   const dashboardSummaries = {
     coach: "Ficha clara para conversar con el vendedor: resultado, comparación, mix y tres acciones.",
+    products: "Ficha por familia (con sus líneas) o por línea (con sus marcas), con mejores clientes y vendedores.",
     direction: "Vista de comité: cierre automático, alertas priorizadas y agenda de decisión comercial.",
     executive: "Resumen táctico del período, con ritmo, proyección y principales focos de gestión.",
     interactive: "Gráfico mensual con segmentadores al estilo Excel y selector de pesos o volumen.",
@@ -3465,6 +3467,7 @@ function renderDashboardViewSelector(data) {
   };
   const labels = {
     coach: "Ficha vendedor",
+    products: "Ficha producto",
     direction: "Dirección",
     executive: "Resumen",
     interactive: "Informe filtrable",
@@ -3477,6 +3480,7 @@ function renderDashboardViewSelector(data) {
   };
   const counts = {
     coach: data.dashboards?.sellers?.summary?.sellerCount || 0,
+    products: data.dashboards?.families?.summary?.count || 0,
     direction: buildDirectionBoard(data).alerts.length,
     interactive: data.interactiveReport?.dimensions?.length || 0,
     sellers: data.dashboards?.sellers?.summary?.sellerCount || 0,
@@ -3838,6 +3842,38 @@ function renderSellerBriefSheet(seller, dashboard, meta) {
     <p class="coach-closing">“Cada cliente cuenta. Cada cantidad cuenta. Cada vendedor cuenta.”</p>`;
 }
 
+function preparePrintOrientation(panel) {
+  const select = panel?.querySelector(".print-orientation");
+  const orientation = select?.value === "landscape" ? "landscape" : "portrait";
+  try {
+    localStorage.setItem("printOrientation", orientation);
+  } catch (_) {
+    // La orientación elegida vale para esta impresión aunque no se guarde.
+  }
+  const style = document.createElement("style");
+  style.id = "printOrientationStyle";
+  style.textContent = `@page { size: A4 ${orientation}; margin: 9mm; }`;
+  document.getElementById("printOrientationStyle")?.remove();
+  document.head.appendChild(style);
+  document.body.classList.add(`print-${orientation}`);
+  return () => {
+    style.remove();
+    document.body.classList.remove("print-portrait", "print-landscape");
+  };
+}
+
+function restorePrintOrientation() {
+  let stored = "portrait";
+  try {
+    stored = localStorage.getItem("printOrientation") === "landscape" ? "landscape" : "portrait";
+  } catch (_) {
+    // Sin persistencia se usa vertical.
+  }
+  document.querySelectorAll(".print-orientation").forEach((select) => {
+    select.value = stored;
+  });
+}
+
 function printSellerCoachSheet(kind) {
   const dashboard = state.reportView.lastData?.dashboards?.sellers;
   if (!dashboard) {
@@ -3861,8 +3897,258 @@ function printSellerCoachSheet(kind) {
   document.title = isTeam
     ? "Codenoa_Sales_Coach_Equipo"
     : `Codenoa_Sales_Coach_${selectedName.replace(/[^a-z0-9]+/gi, "_")}`;
+  const panel = document.querySelector('[data-dashboard-panel="coach"]');
+  panel?.classList.add("print-target");
+  const cleanupOrientation = preparePrintOrientation(panel);
   document.body.classList.add("coach-print", isTeam ? "print-coach-team" : "print-coach-seller");
   const cleanup = () => {
+    cleanupOrientation();
+    panel?.classList.remove("print-target");
+    document.body.classList.remove("coach-print", "print-coach-team", "print-coach-seller");
+    document.title = previousTitle;
+    if (title) title.textContent = previousHeading;
+    if (details) details.open = detailsWasOpen;
+  };
+  window.addEventListener("afterprint", cleanup, { once: true });
+  window.requestAnimationFrame(() => window.print());
+}
+
+const PRODUCT_BRIEF_LABELS = {
+  families: { singular: "Familia", plural: "familias", child: "Línea", childPlural: "Líneas", of: "de la familia" },
+  lines: { singular: "Línea", plural: "líneas", child: "Marca", childPlural: "Marcas", of: "de la línea" },
+};
+
+function readProductBriefDimension() {
+  try {
+    const stored = localStorage.getItem("productBriefDimension");
+    return PRODUCT_BRIEF_LABELS[stored] ? stored : "families";
+  } catch (_) {
+    return "families";
+  }
+}
+
+function growthCell(value) {
+  return `<td class="${(value || 0) < 0 ? "coach-negative" : "coach-positive"}">${pctNumber(value || 0)}</td>`;
+}
+
+function clientComparisonCells(item) {
+  // Informes guardados antes de sumar la comparación de clientes no traen el dato.
+  if (item.previousClients === undefined) {
+    return `<td>${intNumber(item.clients || 0)}</td><td class="muted">–</td><td class="muted">–</td>`;
+  }
+  return `<td>${intNumber(item.clients || 0)}</td><td>${intNumber(item.previousClients || 0)}</td>${growthCell(item.clientsGrowthPct)}`;
+}
+
+function renderProductBrief(data) {
+  if (state.reportView.dashboardView !== "products") return;
+  const dimensionSelect = document.getElementById("productBriefDimension");
+  const select = document.getElementById("productBriefSelect");
+  if (!dimensionSelect || !select) return;
+  const dimension = dimensionSelect.dataset.bound ? dimensionSelect.value : readProductBriefDimension();
+  dimensionSelect.value = dimension;
+  dimensionSelect.dataset.bound = "1";
+  dimensionSelect.onchange = () => {
+    try {
+      localStorage.setItem("productBriefDimension", dimensionSelect.value);
+    } catch (_) {
+      // La apertura sigue funcionando aunque no pueda persistirse.
+    }
+    select.value = "";
+    renderProductBrief(data);
+  };
+  const comparison = data.meta?.comparison || {};
+  const comparisonFrom = document.getElementById("productBriefComparisonFrom");
+  const comparisonTo = document.getElementById("productBriefComparisonTo");
+  if (!comparisonFrom.value) comparisonFrom.value = state.coachComparison?.fechaDesde || comparison.comparisonStart || "";
+  if (!comparisonTo.value) comparisonTo.value = state.coachComparison?.fechaHasta || comparison.comparisonEnd || "";
+  document.getElementById("productBriefCompareButton").onclick = () => {
+    if (!comparisonFrom.value || !comparisonTo.value) {
+      setStatus("Elegí ambas fechas para comparar.");
+      return;
+    }
+    state.coachComparison = { fechaDesde: comparisonFrom.value, fechaHasta: comparisonTo.value };
+    analyze().catch(showError);
+  };
+  document.getElementById("productBriefComparePrevious").onclick = () => {
+    state.coachComparison = { fechaDesde: "", fechaHasta: "" };
+    comparisonFrom.value = "";
+    comparisonTo.value = "";
+    analyze().catch(showError);
+  };
+
+  const labels = PRODUCT_BRIEF_LABELS[dimension];
+  const dashboard = data.dashboards?.[dimension];
+  document.getElementById("productBriefSelectLabel").textContent = labels.singular;
+  document.getElementById("productBriefRankingColumn").textContent = labels.singular;
+  document.getElementById("productBriefRankingSummary").textContent = `Ver resumen y ranking de ${labels.plural}`;
+  document.getElementById("productBriefMixColumn").textContent = labels.child;
+  if (!dashboard) {
+    select.innerHTML = "";
+    document.getElementById("productBriefTitle").textContent = `Ficha por ${labels.singular.toLowerCase()}`;
+    document.getElementById("productBriefPeriod").textContent = "Actualizá el informe para generar esta ficha.";
+    return;
+  }
+  const rows = (dashboard.rows || []).filter((item) => (item.sales || 0) > 0 || (item.previousSales || 0) > 0);
+  if (dashboard.summary?.previousClients === undefined) {
+    setStatus("Este informe se generó con una versión anterior: tocá “Actualizar informe” para ver la comparación de clientes compradores.");
+  }
+  const storageKey = `productBrief:${dimension}:${uiCacheKey()}`;
+  let stored = "";
+  try {
+    stored = sessionStorage.getItem(storageKey) || "";
+  } catch (_) {
+    // Continuar sin persistencia si el navegador la bloquea.
+  }
+  const previousSelection = select.value || stored;
+  select.innerHTML = rows.map((item) => `<option value="${escapeHtml(item.label)}">${escapeHtml(item.label)}</option>`).join("");
+  const selected = rows.find((item) => item.label === previousSelection) || rows[0];
+  if (selected) select.value = selected.label;
+  select.onchange = () => {
+    const row = rows.find((item) => item.label === select.value);
+    if (!row) return;
+    try {
+      sessionStorage.setItem(storageKey, select.value);
+    } catch (_) {
+      // La selección sigue funcionando aunque no pueda persistirse.
+    }
+    renderProductBriefSheet(row, dashboard, labels, data.meta || {});
+  };
+  renderProductBriefRanking(rows, dashboard, labels);
+  if (selected) {
+    renderProductBriefSheet(selected, dashboard, labels, data.meta || {});
+  } else {
+    document.getElementById("productBriefKpis").innerHTML = "<p class='muted'>No hay ventas para los filtros elegidos.</p>";
+    ["productBriefMix", "productBriefTopClients", "productBriefTopSellers"].forEach((id) => {
+      document.getElementById(id).innerHTML = "";
+    });
+  }
+}
+
+function renderProductBriefRanking(rows, dashboard, labels) {
+  const summary = dashboard.summary || {};
+  renderMetricTiles("productBriefTeamKpis", [
+    { label: "$ neto total", value: money(summary.sales || 0), sub: `${pctNumber(summary.growthPct || 0)} vs. comparación`, tone: (summary.growthPct || 0) >= 0 ? "good" : "warn" },
+    { label: "Bultos", value: decimalNumber(summary.quantity || 0), sub: `${pctNumber(summary.quantityGrowthPct || 0)} vs. comparación`, tone: (summary.quantityGrowthPct || 0) >= 0 ? "good" : "warn" },
+    { label: "$ / cantidad", value: money(summary.valuePerQuantity || 0), sub: "importe neto / cantidad", tone: "neutral" },
+    { label: "Clientes compradores", value: intNumber(summary.clients || 0), sub: `vs ${intNumber(summary.previousClients || 0)} (${pctNumber(summary.clientsGrowthPct || 0)})`, tone: (summary.clientsGrowthPct || 0) >= 0 ? "good" : "warn" },
+    { label: `Top 3 ${labels.plural}`, value: pctNumber(summary.top3SharePct || 0), sub: `${intNumber(summary.count || 0)} ${labels.plural} con venta`, tone: "neutral" },
+  ]);
+  const ranking = document.getElementById("productBriefRanking");
+  ranking.innerHTML = rows.map((row) => `
+    <tr data-brief-product="${escapeHtml(row.label)}">
+      <td>${row.rankSales ? `#${intNumber(row.rankSales)}` : "s/v"}</td>
+      <td><button type="button" class="coach-table-link">${escapeHtml(row.label)}</button></td>
+      <td>${money(row.sales || 0)}</td>
+      <td>${money(row.previousSales || 0)}</td>
+      ${growthCell(row.growthPct)}
+      <td>${decimalNumber(row.quantity || 0)}</td>
+      <td>${decimalNumber(row.previousQuantity || 0)}</td>
+      ${growthCell(row.quantityGrowthPct)}
+      <td>${pctNumber(row.sharePct || 0)}</td>
+      ${clientComparisonCells(row)}
+    </tr>
+  `).join("");
+  ranking.querySelectorAll("[data-brief-product]").forEach((row) => {
+    row.querySelector("button")?.addEventListener("click", () => {
+      const select = document.getElementById("productBriefSelect");
+      select.value = row.dataset.briefProduct;
+      select.dispatchEvent(new Event("change"));
+      document.querySelector('[data-dashboard-panel="products"]')?.scrollIntoView({ behavior: "smooth" });
+    });
+  });
+}
+
+function renderProductBriefSheet(row, dashboard, labels, meta) {
+  const comparison = meta.comparison?.comparisonLabel || "período comparativo";
+  const period = [meta.periodStart, meta.periodEnd].filter(Boolean).join(" al ");
+  document.getElementById("productBriefTitle").textContent = `Ficha ${labels.singular.toLowerCase()} · ${row.label}`;
+  document.getElementById("productBriefPeriod").textContent =
+    `${period || "Período seleccionado"} · comparación: ${comparison} · todos los números respetan los filtros aplicados.`;
+  document.getElementById("productBriefMixTitle").textContent = `${labels.childPlural} ${labels.of}`;
+  renderMetricTiles("productBriefKpis", [
+    { label: "$ neto", value: money(row.sales || 0), sub: `${pctNumber(row.sharePct || 0)} del total filtrado · rank #${intNumber(row.rankSales || 0)}`, tone: "neutral" },
+    { label: "Comparación en $", value: pctNumber(row.growthPct || 0), sub: `${money(row.sales || 0)} vs ${money(row.previousSales || 0)}`, tone: (row.growthPct || 0) >= 0 ? "good" : "warn" },
+    { label: "Comparación bultos", value: pctNumber(row.quantityGrowthPct || 0), sub: `${decimalNumber(row.quantity || 0)} vs ${decimalNumber(row.previousQuantity || 0)}`, tone: (row.quantityGrowthPct || 0) >= 0 ? "good" : "warn" },
+    { label: "$ / cantidad", value: money(row.valuePerQuantity || 0), sub: `total ${money(dashboard.summary?.valuePerQuantity || 0)}`, tone: "neutral" },
+    { label: "Clientes compradores", value: intNumber(row.clients || 0), sub: `vs ${intNumber(row.previousClients || 0)} (${pctNumber(row.clientsGrowthPct || 0)}) · ${pctNumber(row.coveragePct || 0)} del total`, tone: (row.clientDelta || 0) >= 0 ? "good" : "warn" },
+    { label: "Clientes nuevos", value: intNumber(row.newClients || 0), sub: "con compra actual y sin compra comparativa", tone: "good" },
+    { label: "Clientes sin compra", value: intNumber(row.clientsWithoutPurchase || 0), sub: "compraron en el período comparativo", tone: (row.clientsWithoutPurchase || 0) > 0 ? "warn" : "good" },
+    { label: "Vendedores", value: intNumber(row.sellers || 0), sub: `ticket medio ${money(row.avgTicket || 0)}`, tone: "neutral" },
+    { label: "Top 3 clientes", value: pctNumber(row.top3ClientsSharePct || 0), sub: "concentración de la venta", tone: (row.top3ClientsSharePct || 0) >= 50 ? "warn" : "neutral" },
+  ]);
+  const children = (row.children || []).filter((item) => (item.sales || 0) > 0 || (item.previousSales || 0) > 0);
+  document.getElementById("productBriefMix").innerHTML = children.length
+    ? children.map((item) => `
+      <tr>
+        <td>${item.rank ? `#${intNumber(item.rank)}` : "s/v"}</td>
+        <td><strong>${escapeHtml(item.label)}</strong></td>
+        <td>${money(item.sales || 0)}</td>
+        <td>${money(item.previousSales || 0)}</td>
+        ${growthCell(item.growthPct)}
+        <td><span class="coach-mix-value">${pctNumber(item.mixPct || 0)}</span><span class="coach-mix-bar"><i style="width:${Math.min(100, Math.max(0, item.mixPct || 0))}%"></i></span></td>
+        <td>${decimalNumber(item.quantity || 0)}</td>
+        ${growthCell(item.quantityGrowthPct)}
+        <td>${money(item.valuePerQuantity || 0)}</td>
+        ${clientComparisonCells(item)}
+      </tr>
+    `).join("")
+    : `<tr><td colspan="12" class="muted">Sin ${labels.childPlural.toLowerCase()} con venta.</td></tr>`;
+  document.getElementById("productBriefTopClients").innerHTML = (row.topClients || []).length
+    ? row.topClients.map((client, index) => `
+      <tr>
+        <td>#${index + 1}</td>
+        <td><strong>${escapeHtml(client.label || client.key || "Sin cliente")}</strong></td>
+        <td>${money(client.sales || 0)}</td>
+        <td>${money(client.previousSales || 0)}</td>
+        ${growthCell(client.growthPct)}
+        <td>${pctNumber(client.mixPct || 0)}</td>
+        <td>${decimalNumber(client.quantity || 0)}</td>
+      </tr>
+    `).join("")
+    : "<tr><td colspan='7' class='muted'>No hay clientes con compra en el período.</td></tr>";
+  document.getElementById("productBriefTopSellers").innerHTML = (row.topSellers || []).length
+    ? row.topSellers.map((seller, index) => `
+      <tr>
+        <td>#${index + 1}</td>
+        <td><strong>${escapeHtml(seller.label)}</strong></td>
+        <td>${money(seller.sales || 0)}</td>
+        <td>${money(seller.previousSales || 0)}</td>
+        ${growthCell(seller.growthPct)}
+        <td>${pctNumber(seller.mixPct || 0)}</td>
+        <td>${decimalNumber(seller.quantity || 0)}</td>
+        ${growthCell(seller.quantityGrowthPct)}
+        ${clientComparisonCells(seller)}
+      </tr>
+    `).join("")
+    : "<tr><td colspan='11' class='muted'>No hay vendedores con venta en el período.</td></tr>";
+}
+
+function printProductSheet(kind) {
+  const dimension = document.getElementById("productBriefDimension")?.value || "families";
+  if (!state.reportView.lastData?.dashboards?.[dimension]) {
+    setStatus("Primero actualizá el informe para generar la ficha.");
+    return;
+  }
+  const isRanking = kind === "ranking";
+  const labels = PRODUCT_BRIEF_LABELS[dimension];
+  const panel = document.querySelector('[data-dashboard-panel="products"]');
+  const details = panel?.querySelector(".coach-team-details");
+  const title = document.getElementById("productBriefTitle");
+  const selectedName = document.getElementById("productBriefSelect")?.value || labels.singular;
+  const previousTitle = document.title;
+  const previousHeading = title?.textContent || "";
+  const detailsWasOpen = Boolean(details?.open);
+  if (details && isRanking) details.open = true;
+  if (title && isRanking) title.textContent = `Resumen y ranking de ${labels.plural}`;
+  document.title = isRanking
+    ? `Codenoa_Ranking_${labels.plural}`
+    : `Codenoa_${labels.singular}_${selectedName.replace(/[^a-z0-9]+/gi, "_")}`;
+  panel?.classList.add("print-target");
+  const cleanupOrientation = preparePrintOrientation(panel);
+  document.body.classList.add("coach-print", isRanking ? "print-coach-team" : "print-coach-seller");
+  const cleanup = () => {
+    cleanupOrientation();
+    panel?.classList.remove("print-target");
     document.body.classList.remove("coach-print", "print-coach-team", "print-coach-seller");
     document.title = previousTitle;
     if (title) title.textContent = previousHeading;
@@ -7371,6 +7657,9 @@ bindClick("refreshFiles", () => boot().catch(showError));
 bindClick("analyzeBtn", () => analyze().catch(showError));
 bindClick("printSellerBrief", () => printSellerCoachSheet("seller"));
 bindClick("printTeamBrief", () => printSellerCoachSheet("team"));
+bindClick("printProductBrief", () => printProductSheet("sheet"));
+restorePrintOrientation();
+bindClick("printProductRanking", () => printProductSheet("ranking"));
 bindClick("dynRunBtn", () => runDynamicTask().catch(showError));
 bindClick("refreshAdminErrors", () => refreshAdminErrors().catch(showError));
 bindClick("logoutBtn", () => logout().catch(showError));

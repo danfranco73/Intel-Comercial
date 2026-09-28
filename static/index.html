@@ -232,6 +232,10 @@
                 <button id="printSellerBrief" type="button">Imprimir / PDF vendedor</button>
                 <button id="printTeamBrief" type="button">Imprimir / PDF equipo</button>
               </div>
+                <select class="print-orientation" aria-label="Orientación de impresión">
+                  <option value="portrait">Vertical</option>
+                  <option value="landscape">Apaisada</option>
+                </select>
             </div>
           </div>
 
@@ -262,9 +266,9 @@
                     <th>% mix</th>
                     <th>Cantidad</th>
                     <th>$/cantidad</th>
-                    <th>Rank línea</th>
-                    <th>Vs. período</th>
-                    <th>Lectura / foco</th>
+                    <th>Rank<br>línea</th>
+                    <th>Vs.<br>período</th>
+                    <th>Lectura /<br>foco</th>
                   </tr>
                 </thead>
                 <tbody id="sellerBriefMix"></tbody>
@@ -286,7 +290,7 @@
                     <th>$ neto</th>
                     <th>Participación</th>
                     <th>Cantidad</th>
-                    <th>Vs. período</th>
+                    <th>Vs.<br>período</th>
                   </tr>
                 </thead>
                 <tbody id="sellerBriefTopClients"></tbody>
@@ -316,7 +320,7 @@
             <div class="coach-table-wrap">
               <table class="coach-mix-table">
                 <thead>
-                  <tr><th>#</th><th>Vendedor</th><th>$ actual</th><th>$ anterior</th><th>Var. $</th><th>Bultos actuales</th><th>Bultos anteriores</th><th>Var. bultos</th><th>Participación</th></tr>
+                  <tr><th>#</th><th>Vendedor</th><th>$ actual</th><th>$&nbsp;anterior</th><th>Var. $</th><th>Bultos<br>actuales</th><th>Bultos<br>anteriores</th><th>Var.<br>bultos</th><th>Participación</th></tr>
                 </thead>
                 <tbody id="sellerBriefRanking"></tbody>
               </table>
@@ -325,6 +329,120 @@
         </section>
 
         <section class="panel inner-panel dashboard-panel hidden" data-dashboard-panel="sellers">
+        <section class="panel inner-panel dashboard-panel coach-brief hidden" data-dashboard-panel="products">
+          <div class="coach-brief-hero">
+            <div>
+              <p class="eyebrow">Codenoa Sales Coach</p>
+              <h2 id="productBriefTitle">Ficha por familia o línea de productos</h2>
+              <div class="muted" id="productBriefPeriod">Resultado filtrado y comparación contra el período anterior equivalente.</div>
+            </div>
+            <div class="coach-hero-actions">
+              <label class="coach-seller-picker">
+                <span>Apertura</span>
+                <select id="productBriefDimension">
+                  <option value="families">Familia</option>
+                  <option value="lines">Línea</option>
+                </select>
+              </label>
+              <label class="coach-seller-picker">
+                <span id="productBriefSelectLabel">Familia</span>
+                <select id="productBriefSelect"></select>
+              </label>
+              <div class="coach-print-actions">
+                <button id="printProductBrief" type="button">Imprimir / PDF ficha</button>
+                <button id="printProductRanking" type="button">Imprimir / PDF ranking</button>
+                <select class="print-orientation" aria-label="Orientación de impresión">
+                  <option value="portrait">Vertical</option>
+                  <option value="landscape">Apaisada</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="coach-comparison-bar">
+            <strong>Comparar contra</strong>
+            <label><span>Desde</span><input id="productBriefComparisonFrom" type="date"></label>
+            <label><span>Hasta</span><input id="productBriefComparisonTo" type="date"></label>
+            <button id="productBriefCompareButton" type="button">Aplicar comparación</button>
+            <button id="productBriefComparePrevious" type="button" class="secondary">Período anterior automático</button>
+          </div>
+
+          <div class="coach-individual-sheet">
+            <div id="productBriefKpis" class="coach-kpi-grid"></div>
+
+            <div class="coach-section-heading">
+              <div>
+                <h3 id="productBriefMixTitle">Líneas de la familia</h3>
+                <div class="muted">Venta, proporción, cantidades, comparación y ranking interno.</div>
+              </div>
+            </div>
+            <div class="coach-table-wrap">
+              <table class="coach-mix-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th id="productBriefMixColumn">Línea</th>
+                    <th>$ actual</th>
+                    <th>$&nbsp;anterior</th>
+                    <th>Var. $</th>
+                    <th>% mix</th>
+                    <th>Bultos</th>
+                    <th>Var.<br>bultos</th>
+                    <th>$/cantidad</th>
+                    <th>Clientes<br>actuales</th>
+                    <th>Clientes<br>anteriores</th>
+                    <th>Var.<br>clientes</th>
+                  </tr>
+                </thead>
+                <tbody id="productBriefMix"></tbody>
+              </table>
+            </div>
+
+            <div class="coach-section-heading coach-client-heading">
+              <div>
+                <h3>Top 10 clientes</h3>
+                <div class="muted">Principales compradores por venta neta dentro del período y los filtros seleccionados.</div>
+              </div>
+            </div>
+            <div class="coach-table-wrap">
+              <table class="coach-mix-table">
+                <thead>
+                  <tr><th>#</th><th>Cliente</th><th>$ actual</th><th>$&nbsp;anterior</th><th>Var. $</th><th>Participación</th><th>Bultos</th></tr>
+                </thead>
+                <tbody id="productBriefTopClients"></tbody>
+              </table>
+            </div>
+
+            <div class="coach-section-heading coach-client-heading">
+              <div>
+                <h3>Top 10 vendedores</h3>
+                <div class="muted">Quién empuja esta apertura y cómo evoluciona contra la comparación.</div>
+              </div>
+            </div>
+            <div class="coach-table-wrap">
+              <table class="coach-mix-table">
+                <thead>
+                  <tr><th>#</th><th>Vendedor</th><th>$ actual</th><th>$&nbsp;anterior</th><th>Var. $</th><th>Participación</th><th>Bultos</th><th>Var.<br>bultos</th><th>Clientes<br>actuales</th><th>Clientes<br>anteriores</th><th>Var.<br>clientes</th></tr>
+                </thead>
+                <tbody id="productBriefTopSellers"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <details class="coach-team-details">
+            <summary id="productBriefRankingSummary">Ver ranking completo</summary>
+            <div id="productBriefTeamKpis" class="coach-kpi-grid compact"></div>
+            <div class="coach-table-wrap">
+              <table class="coach-mix-table">
+                <thead>
+                  <tr><th>#</th><th id="productBriefRankingColumn">Familia</th><th>$ actual</th><th>$&nbsp;anterior</th><th>Var. $</th><th>Bultos<br>actuales</th><th>Bultos<br>anteriores</th><th>Var.<br>bultos</th><th>Participación</th><th>Clientes<br>actuales</th><th>Clientes<br>anteriores</th><th>Var.<br>clientes</th></tr>
+                </thead>
+                <tbody id="productBriefRanking"></tbody>
+              </table>
+            </div>
+          </details>
+        </section>
+
           <div class="subpanel-header">
             <div>
               <h2>Dashboard de vendedores</h2>

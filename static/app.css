@@ -495,6 +495,12 @@ table,
   gap: 8px;
 }
 
+.coach-print-actions .print-orientation {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 9px 10px;
+}
+
 .coach-print-actions button {
   flex: 1;
   padding: 9px 12px;
@@ -562,7 +568,7 @@ table,
 
 .coach-kpi-grid > .metric-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
   gap: 12px;
 }
 
@@ -602,9 +608,11 @@ table,
 }
 
 .coach-mix-table th {
-  padding: 11px 10px;
+  padding: 9px 8px;
   color: #fff;
-  text-align: left;
+  line-height: 1.15;
+  text-align: center;
+  vertical-align: middle;
   white-space: nowrap;
   background: var(--coach-navy);
 }
@@ -779,7 +787,7 @@ table,
   body.coach-print .layout > .hero,
   body.coach-print .layout > .sticky-controls,
   body.coach-print .layout > .controls,
-  body.coach-print #results > *:not([data-dashboard-panel="coach"]),
+  body.coach-print #results > *:not(.print-target),
   body.coach-print .coach-comparison-bar,
   body.coach-print .coach-hero-actions,
   body.coach-print .coach-team-details summary {
@@ -787,7 +795,7 @@ table,
   }
 
   body.coach-print #results,
-  body.coach-print [data-dashboard-panel="coach"] {
+  body.coach-print .print-target {
     display: block !important;
   }
 
@@ -836,16 +844,60 @@ table,
   }
 
   body.coach-print .metric-main {
-    font-size: 16pt;
+    font-size: min(16pt, 13.5cqi);
+  }
+
+  body.coach-print .coach-table-wrap {
+    overflow: visible;
   }
 
   body.coach-print .coach-mix-table {
-    font-size: 8pt;
+    width: 100%;
+    font-size: 7.5pt;
   }
 
   body.coach-print .coach-mix-table th,
   body.coach-print .coach-mix-table td {
-    padding: 2mm;
+    padding: 1.5mm 1.2mm;
+  }
+
+  /* En A4 vertical las tablas anchas (10 columnas) no entran con encabezados
+     en una sola línea: se parten los títulos y se achica la barra de mix. */
+  body.coach-print .coach-mix-table th {
+    white-space: normal;
+    line-height: 1.2;
+  }
+
+  body.coach-print .coach-mix-table td {
+    white-space: nowrap;
+  }
+
+  /* En vertical no entran 12 columnas con importes completos: se permite
+     partir la celda (p. ej. "$" arriba del número) en lugar de cortar la tabla. */
+  body.coach-print.print-portrait .coach-mix-table {
+    font-size: 7pt;
+  }
+
+  body.coach-print.print-portrait .coach-mix-table td {
+    white-space: normal;
+  }
+
+  body.coach-print.print-landscape .coach-kpi-grid > .metric-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  body.coach-print .coach-mix-table td:nth-child(2) {
+    white-space: normal;
+  }
+
+  body.coach-print .coach-mix-value {
+    min-width: 0;
+  }
+
+  body.coach-print .coach-mix-bar {
+    display: block;
+    width: 100%;
+    max-width: 14mm;
   }
 
   body.coach-print .coach-client-heading {
@@ -1992,6 +2044,29 @@ th {
   font-weight: 700;
   line-height: 1.04;
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* El número se achica según el ancho real de la tarjeta para que importes
+   como "$ 179.410.793" no rebasen el recuadro. */
+.metric-tile {
+  min-width: 0;
+  container-type: inline-size;
+}
+
+@supports (font-size: 1cqi) {
+  .metric-main {
+    font-size: min(clamp(22px, 1.7vw, 30px), max(14px, 13.5cqi));
+    overflow-wrap: normal;
+  }
+
+  .metric-main.value-sm {
+    font-size: min(clamp(18px, 1.35vw, 23px), max(12px, 10.5cqi));
+  }
+
+  .metric-main.value-xs {
+    font-size: min(clamp(16px, 1.15vw, 20px), max(11px, 8cqi));
+  }
 }
 
 .metric-note {
