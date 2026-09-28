@@ -32,7 +32,7 @@
         <div>
           <p class="eyebrow">Portal Comercial</p>
           <h1>BI comercial sobre la base histórica</h1>
-          <p class="lead">Trabajá sobre la base comercial para consultar indicadores, filtros, rankings, insights y análisis dinámicos sin exponerte a tareas operativas del sistema.</p>
+          <p class="lead">Trabajá sobre la base comercial para consultar indicadores, rankings, dashboards y la vista 360 de cada punto de venta sin exponerte a tareas operativas del sistema.</p>
         </div>
         <div class="hero-note">
           <p>Uso recomendado</p>
@@ -229,13 +229,14 @@
                 <select id="sellerBriefSelect"></select>
               </label>
               <div class="coach-print-actions">
+                <button id="openSellerPortfolio" type="button">Ver su cartera en PDV 360</button>
                 <button id="printSellerBrief" type="button">Imprimir / PDF vendedor</button>
                 <button id="printTeamBrief" type="button">Imprimir / PDF equipo</button>
-              </div>
                 <select class="print-orientation" aria-label="Orientación de impresión">
                   <option value="portrait">Vertical</option>
                   <option value="landscape">Apaisada</option>
                 </select>
+              </div>
             </div>
           </div>
 
@@ -328,7 +329,6 @@
           </details>
         </section>
 
-        <section class="panel inner-panel dashboard-panel hidden" data-dashboard-panel="sellers">
         <section class="panel inner-panel dashboard-panel coach-brief hidden" data-dashboard-panel="products">
           <div class="coach-brief-hero">
             <div>
@@ -443,6 +443,7 @@
           </details>
         </section>
 
+        <section class="panel inner-panel dashboard-panel hidden" data-dashboard-panel="sellers">
           <div class="subpanel-header">
             <div>
               <h2>Dashboard de vendedores</h2>
@@ -584,6 +585,136 @@
           </div>
         </section>
 
+        <section class="panel inner-panel dashboard-panel hidden pdv360" data-dashboard-panel="pdv">
+          <div class="subpanel-header">
+            <div>
+              <p class="eyebrow">El PDV como foco</p>
+              <h2 id="pdvTitle">PDV 360</h2>
+              <div class="muted" id="pdvSubtitle">Qué compra cada punto de venta, qué le falta frente a sus pares y cómo le llegamos: por cartera o de a un PDV.</div>
+            </div>
+          </div>
+          <div class="pdv-toolbar">
+            <div class="pdv-tabs" id="pdvModeTabs">
+              <button type="button" class="dashboard-view-chip active" data-pdv-mode="portfolio">Cartera</button>
+              <button type="button" class="dashboard-view-chip" data-pdv-mode="single">Un PDV</button>
+            </div>
+            <label>
+              <span>Ventana</span>
+              <select id="pdvWindowSelect">
+                <option value="30">30 días</option>
+                <option value="60">60 días</option>
+                <option value="90" selected>90 días</option>
+                <option value="180">180 días</option>
+              </select>
+            </label>
+          </div>
+
+          <div id="pdvPortfolio">
+            <div class="pdv-toolbar">
+              <label><span>Vendedor</span><select id="pdvFilterSeller"><option value="">Todos</option></select></label>
+              <label><span>Ruta</span><select id="pdvFilterRoute"><option value="">Todas</option></select></label>
+              <label><span>Fuerza</span><select id="pdvFilterForce"><option value="">Todas</option></select></label>
+              <label><span>Tipo de negocio</span><select id="pdvFilterType"><option value="">Todos</option></select></label>
+              <button type="button" class="primary" id="pdvPortfolioRun">Ver cartera</button>
+            </div>
+            <div id="pdvPortfolioEmpty" class="muted pdv-empty">Elegí un vendedor, una ruta, una fuerza o un tipo de negocio y tocá "Ver cartera". Sin filtros se analiza toda la base.</div>
+            <div id="pdvPortfolioContent" class="hidden">
+              <div id="pdvPortfolioSummary" class="muted"></div>
+              <div id="pdvPortfolioKpis" class="executive-kpis"></div>
+              <div class="panel inner-panel">
+                <div class="subpanel-header">
+                  <div>
+                    <h3>Penetración de portfolio</h3>
+                    <div class="muted">% de PDV de la selección que compran cada empresa y unidad de negocio, contra lo esperable según sus pares.</div>
+                  </div>
+                </div>
+                <div class="two-col">
+                  <div id="pdvPenetrationCompanies"></div>
+                  <div id="pdvPenetrationUnits"></div>
+                </div>
+              </div>
+              <div class="panel inner-panel table-panel">
+                <div class="subpanel-header">
+                  <div>
+                    <h3>Lista de trabajo</h3>
+                    <div class="muted" id="pdvWorklistNote">Oportunidades de todos los PDV, ordenadas por potencial. Tocá una fila para abrir la ficha del PDV.</div>
+                  </div>
+                  <button type="button" id="pdvWorklistDownload">Descargar CSV</button>
+                </div>
+                <div id="pdvWorklistTable" class="tabulator-host"></div>
+              </div>
+              <div class="panel inner-panel table-panel">
+                <div class="subpanel-header">
+                  <div>
+                    <h3>Matriz de penetración por PDV</h3>
+                    <div class="muted" id="pdvMatrixNote">SKU comprados en la ventana. Rojo: no compra algo que compra al menos el 40% de sus pares. Ámbar: compra menos de la mitad de los SKU de sus pares.</div>
+                  </div>
+                  <button type="button" id="pdvMatrixDownload">Descargar CSV</button>
+                </div>
+                <div id="pdvMatrixTable" class="tabulator-host"></div>
+              </div>
+            </div>
+          </div>
+
+          <div id="pdvSingle" class="hidden">
+          <div class="pdv-toolbar">
+            <label class="pdv-search">
+              <span>Punto de venta</span>
+              <input id="pdvSearchInput" type="search" autocomplete="off" placeholder="Nombre o código de cliente">
+              <div id="pdvSearchResults" class="pdv-search-results hidden"></div>
+            </label>
+          </div>
+          <div id="pdvEmpty" class="muted pdv-empty">Elegí un PDV desde el buscador, desde la cartera o desde la tabla del dashboard de clientes.</div>
+          <div id="pdvContent" class="hidden">
+            <div id="pdvIdentity" class="pdv-identity"></div>
+            <div id="pdvKpis" class="executive-kpis"></div>
+            <div class="panel inner-panel">
+              <div class="subpanel-header">
+                <div>
+                  <h3>Qué compra por empresa del grupo</h3>
+                  <div class="muted" id="pdvCompaniesNote"></div>
+                </div>
+              </div>
+              <div id="pdvCompanies" class="pdv-company-grid"></div>
+            </div>
+            <div class="panel inner-panel">
+              <div class="subpanel-header">
+                <div>
+                  <h3>Oportunidades y cómo llegar</h3>
+                  <div class="muted">Ordenadas por potencial estimado según lo que compran sus pares.</div>
+                </div>
+              </div>
+              <div id="pdvOpportunities" class="pdv-opportunities"></div>
+            </div>
+            <div class="two-col dashboard-notes">
+              <div class="panel inner-panel">
+                <h3>Portfolio por unidad de negocio</h3>
+                <div id="pdvUnits" class="pdv-table-wrap"></div>
+              </div>
+              <div class="panel inner-panel">
+                <h3>Cómo le llegamos</h3>
+                <div id="pdvCoverage" class="pdv-table-wrap"></div>
+              </div>
+            </div>
+            <div class="panel inner-panel chart-panel">
+              <h3>Evolución mensual por empresa (24 meses)</h3>
+              <div id="pdvHistoryChart" class="echart-host"></div>
+            </div>
+            <div class="panel inner-panel">
+              <div class="subpanel-header">
+                <div><h3>SKU</h3></div>
+                <div class="pdv-tabs" id="pdvSkuTabs">
+                  <button type="button" class="dashboard-view-chip active" data-pdv-sku="top">Más comprados</button>
+                  <button type="button" class="dashboard-view-chip" data-pdv-sku="lost">Dejó de comprar</button>
+                  <button type="button" class="dashboard-view-chip" data-pdv-sku="new">Nuevos</button>
+                </div>
+              </div>
+              <div id="pdvSkus" class="pdv-table-wrap"></div>
+            </div>
+          </div>
+          </div>
+        </section>
+
         <section id="salesCoachDetailPanel" class="panel inner-panel hidden coach-detail-panel">
           <div class="subpanel-header">
             <div>
@@ -591,7 +722,10 @@
               <h2 id="salesCoachDetailTitle">Ficha comercial</h2>
               <div id="salesCoachDetailSubtitle" class="muted"></div>
             </div>
-            <button id="closeSalesCoachDetail" type="button">Cerrar ficha</button>
+            <div class="coach-print-actions">
+              <button id="salesCoachDetailPortfolio" type="button" class="hidden">Ver su cartera en PDV 360</button>
+              <button id="closeSalesCoachDetail" type="button">Cerrar ficha</button>
+            </div>
           </div>
           <div id="salesCoachDetailKpis" class="executive-kpis"></div>
           <div class="two-col dashboard-notes">
@@ -795,71 +929,14 @@
           </div>
         </section>
 
-        <div class="two-col">
-          <div class="panel inner-panel">
-            <h2>Semáforos</h2>
-            <div id="semaphores"></div>
-          </div>
-          <div class="panel inner-panel">
-            <h2>Cobertura de maestros</h2>
-            <div id="coverageCards" class="insight-list"></div>
-          </div>
-        </div>
-
-        <div class="two-col">
-          <div class="panel inner-panel">
-            <h2>Insights ejecutivos</h2>
-            <div id="insights" class="insight-list"></div>
-          </div>
-          <div class="panel inner-panel">
-            <h2>Plan de acción</h2>
-            <div id="actionPlan" class="insight-list"></div>
-          </div>
-        </div>
-
-        <div class="two-col">
-          <div class="panel inner-panel">
-            <h2 id="ratiosSectionTitle">Ratios y potencial</h2>
-            <div id="ratiosCards" class="insight-list"></div>
-          </div>
-          <div class="panel inner-panel">
-            <h2>Proyección comercial</h2>
-            <div id="forecastCards" class="insight-list"></div>
-          </div>
-        </div>
-
-        <div class="chart-grid">
-          <div class="panel inner-panel">
-            <h2 id="chartSalesByMonthTitle">Volumen por mes</h2>
-            <div id="chartSalesByMonth"></div>
-          </div>
-          <div class="panel inner-panel">
-            <h2 id="chartForecastTitle">Proyección próxima</h2>
-            <div id="chartForecast"></div>
-          </div>
-          <div class="panel inner-panel">
-            <h2 id="chartZoneSalesTitle">Volumen por fuerza de ventas</h2>
-            <div id="chartZoneSales"></div>
-          </div>
-          <div class="panel inner-panel">
-            <h2 id="chartSellerSalesTitle">Volumen por vendedor</h2>
-            <div id="chartSellerSales"></div>
-          </div>
-          <div class="panel inner-panel">
-            <h2 id="chartFamilyMomentumTitle">Volumen por marca</h2>
-            <div id="chartFamilyMomentum"></div>
-          </div>
-          <div class="panel inner-panel">
-            <h2 id="chartCoverageTitle">Volumen por canal</h2>
-            <div id="chartCoverage"></div>
-          </div>
+        <div class="chart-grid" data-workspace-only="bi">
           <div class="panel inner-panel supplier-coverage-panel chart-span-full">
             <h2 id="chartSupplierCoverageTitle">Cobertura mensual de clientes</h2>
             <div id="chartSupplierCoverage"></div>
           </div>
         </div>
 
-        <div class="three-col">
+        <div class="three-col" data-workspace-only="bi">
           <div class="panel inner-panel">
             <h2>Clientes</h2>
             <div id="clientsRankings"></div>
@@ -874,37 +951,6 @@
           </div>
         </div>
 
-        <div class="panel inner-panel dyn-panel">
-          <div class="subpanel-header">
-            <div>
-              <h2>Motor dinámico de análisis</h2>
-              <p class="muted" id="dynSummaryLine"></p>
-            </div>
-          </div>
-          <div id="dynTaskHelp" class="dyn-task-help"></div>
-          <div id="dynTaskSelector" class="dyn-task-selector"></div>
-          <div id="dynComboRow" class="dyn-combo-row hidden">
-            <label>
-              Dimensión de análisis
-              <select id="dynComboSelect"></select>
-            </label>
-            <button id="dynRunBtn" class="primary">Ejecutar análisis</button>
-          </div>
-          <div id="dynResults" class="hidden">
-            <div id="dynKpiCards" class="dyn-kpi-grid"></div>
-            <div class="two-col">
-              <div>
-                <h3>Semáforos</h3>
-                <div id="dynSemaphores"></div>
-              </div>
-              <div>
-                <h3>Insights del análisis</h3>
-                <div id="dynInsightsList" class="insight-list"></div>
-              </div>
-            </div>
-            <div id="dynViz" class="dyn-viz"></div>
-          </div>
-        </div>
       </section>
     </main>
     <div id="progressModal" class="progress-modal hidden" aria-live="polite" aria-hidden="true">

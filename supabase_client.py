@@ -193,6 +193,36 @@ def fetch_clients_dataset(conn=None):
     }
 
 
+def fetch_client_profile(client_key, conn=None):
+    """Perfil comercial/financiero de un cliente (TMA `profiles`), o None."""
+    owns_conn = conn is None
+    conn = conn or _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT client_code, company, cuit, tax_condition, price_list,
+                       assigned_seller_code, marketing_subchannel_code,
+                       marketing_subchannel_description, credit_limit,
+                       unpaid_vouchers, overdue_debt_days, payment_method_code,
+                       payment_method_description, payment_term_days,
+                       created_at, updated_at
+                FROM profiles
+                WHERE client_code::text = %s
+                LIMIT 1
+                """,
+                (str(client_key),),
+            )
+            row = cur.fetchone()
+            columns = [desc[0] for desc in cur.description]
+    finally:
+        if owns_conn:
+            conn.close()
+    if row is None:
+        return None
+    return normalize_supabase_client_row(dict(zip(columns, row)))
+
+
 def get_supabase_sync_freshness(conn=None):
     """Última corrida conocida por modo (full/stock/prices/...) según `sync_logs`,
     para poder advertir si el dato de TMA está desactualizado antes de usarlo.

@@ -66,6 +66,7 @@ from sales_coach.routes.sales_coach_routes import SalesCoachRoutesMixin
 from sales_coach.routes.coach_rule_routes import CoachRuleRoutesMixin
 from sales_coach.routes.alert_routes import AlertRoutesMixin
 from sales_coach.routes.meeting_routes import MeetingRoutesMixin
+from sales_coach.routes.pdv_routes import PdvRoutesMixin
 
 
 CONFIG = load_app_config()
@@ -453,6 +454,7 @@ class AppHandler(
     CoachRuleRoutesMixin,
     AlertRoutesMixin,
     MeetingRoutesMixin,
+    PdvRoutesMixin,
     BaseHTTPRequestHandler,
 ):
     auth_context = None
@@ -596,7 +598,7 @@ class AppHandler(
         if parsed.path == "/login.js":
             self.serve_file(STATIC_DIR / "login.js", "application/javascript; charset=utf-8")
             return
-        if parsed.path in {"/", "/bi", "/sales-coach", "/sales-coach/seller", "/sales-coach/client"}:
+        if parsed.path in {"/", "/bi", "/sales-coach", "/sales-coach/seller", "/sales-coach/client", "/pdv"}:
             if not self._require_page_authentication("commercial.read"):
                 return
             self.serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")

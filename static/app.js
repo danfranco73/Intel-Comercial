@@ -1,3 +1,15 @@
+// Comercial (/bi) = análisis del negocio: productos, proveedores, clientes y PDV.
+// Sales Coach (/sales-coach) = gestión de personas: vendedores, alertas con
+// responsable y fichas para imprimir. Ambas usan la misma página y el mismo
+// informe; cambia qué dashboards se ofrecen.
+const workspace = window.location.pathname.startsWith("/sales-coach") ? "coach" : "bi";
+const WORKSPACE_DASHBOARD_VIEWS = {
+  bi: ["executive", "direction", "interactive", "products", "clients", "pdv", "history", "opportunities"],
+  coach: ["coach", "sellers", "alerts", "meetings"],
+};
+const DASHBOARD_VIEWS = WORKSPACE_DASHBOARD_VIEWS[workspace];
+const DASHBOARD_VIEW_STORAGE_KEY = `reportDashboardView:${workspace}`;
+
 const state = {
   files: [],
   schema: {},
@@ -14,7 +26,6 @@ const state = {
   erpSyncPending: false,
   filters: { available: {}, selected: {} },
   supplierFocus: "",
-  dynamic: { tasks: [], selectedTaskId: null },
   adminErrors: [],
   biConsistency: { pending: false, report: null, error: "", checkedAt: "" },
   auth: { user: null, csrfToken: "" },
@@ -24,6 +35,7 @@ const state = {
   planningDirty: false,
   objectives: [],
   salesCoachDetail: null,
+  pdv: { mode: "portfolio", clientKey: null, data: null, skuTab: "top", windowDays: 90, portfolio: null, options: null, optionsPromise: null, tables: {} },
   coachComparison: { fechaDesde: "", fechaHasta: "" },
   coachRules: null,
   coachAudits: [],
@@ -113,7 +125,6 @@ const isBiSurface = appSurface === "bi";
 const isUsersSurface = appSurface === "users";
 const REPORT_METRIC_MODES = ["mixed", "units", "sales"];
 const dashboardState = { charts: {}, tables: { direction: null, executive: null, executiveSensitivity: null, planningTargets: null, ownerTracking: null, history: null, historyBudgetMonthly: null, historyBudgetDimension: null, historyBudgetLineForecast: null, historyBudgetSellerForecast: null, sellers: null, clients: null, opportunities: null, alerts: null, meetings: null } };
-const DASHBOARD_VIEWS = ["coach", "products", "direction", "executive", "interactive", "sellers", "clients", "history", "opportunities", "alerts", "meetings"];
 
 const filterGroups = [
   { id: "tiempo",     label: "Período",       fields: ["year", "month"] },
@@ -223,7 +234,7 @@ const COMMERCIAL_REQUEST_RECIPES = [
   {
     title: "Resumen general",
     action: "Usá Actualizar informe",
-    detail: "Te devuelve KPIs, insights, rankings, semáforos y gráficos del período elegido.",
+    detail: "Te devuelve KPIs, rankings y dashboards especializados del período elegido.",
     examples: [
       "Cómo vendimos este mes",
       "Quiénes fueron los mejores vendedores",
@@ -231,13 +242,13 @@ const COMMERCIAL_REQUEST_RECIPES = [
     ],
   },
   {
-    title: "Diagnóstico puntual",
-    action: "Usá el Motor dinámico",
-    detail: "Elegí un análisis específico cuando ya tengas una pregunta concreta.",
+    title: "Foco en un punto de venta",
+    action: "Usá PDV 360",
+    detail: "Qué compra, qué le falta frente a sus pares y cómo llegarle.",
     examples: [
-      "Qué clientes están en riesgo",
-      "Qué ruta cayó más",
-      "Qué canal perdió participación",
+      "Qué le falta a este almacén",
+      "Por qué no compra Cámara",
+      "Qué fuerza y vendedor lo atienden",
     ],
   },
   {
@@ -453,18 +464,18 @@ function storeMetricMode(mode) {
 
 function readStoredDashboardView() {
   try {
-    const stored = localStorage.getItem("reportDashboardView") || "coach";
-    return DASHBOARD_VIEWS.includes(stored) ? stored : "coach";
+    const stored = localStorage.getItem(DASHBOARD_VIEW_STORAGE_KEY);
+    return DASHBOARD_VIEWS.includes(stored) ? stored : DASHBOARD_VIEWS[0];
   } catch (_) {
-    return "coach";
+    return DASHBOARD_VIEWS[0];
   }
 }
 
 function storeDashboardView(view) {
-  const nextView = DASHBOARD_VIEWS.includes(view) ? view : "coach";
+  const nextView = DASHBOARD_VIEWS.includes(view) ? view : DASHBOARD_VIEWS[0];
   state.reportView.dashboardView = nextView;
   try {
-    localStorage.setItem("reportDashboardView", nextView);
+    localStorage.setItem(DASHBOARD_VIEW_STORAGE_KEY, nextView);
   } catch (_) {
     // Ignorar almacenamiento no disponible.
   }
@@ -548,14 +559,40 @@ async function logout() {
   window.location.replace("/login");
 }
 
+const WORKSPACE_CHROME = {
+  bi: {
+    title: "Comercial · Codenoa",
+    eyebrow: "Comercial",
+    heading: "Análisis del negocio",
+    lead: "Productos, proveedores, clientes y puntos de venta: dónde está la venta, qué le falta a cada PDV frente a sus pares y cómo llegarle.",
+  },
+  coach: {
+    title: "Sales Coach · Codenoa",
+    eyebrow: "Sales Coach",
+    heading: "Gestión del equipo comercial",
+    lead: "El resultado de cada vendedor contra el equipo, alertas con responsable y fichas para imprimir y conversar en la reunión.",
+  },
+};
+
+function applyWorkspaceChrome() {
+  const chrome = WORKSPACE_CHROME[workspace];
+  document.body.dataset.workspace = workspace;
+  document.title = chrome.title;
+  const hero = document.querySelector(".hero");
+  if (hero) {
+    hero.querySelector(".eyebrow").textContent = chrome.eyebrow;
+    hero.querySelector("h1").textContent = chrome.heading;
+    hero.querySelector(".lead").textContent = chrome.lead;
+  }
+  const activeHref = workspace === "coach" ? "/sales-coach" : "/bi";
+  document.querySelectorAll(".surface-links a").forEach((link) => {
+    link.classList.toggle("active", link.getAttribute("href") === activeHref);
+  });
+}
+
 async function boot() {
   setStatus("Preparando estructura de análisis...");
-  if (window.location.pathname.startsWith("/sales-coach")) {
-    document.querySelectorAll(".surface-switch a").forEach((link) => {
-      link.classList.toggle("active", link.getAttribute("href") === "/sales-coach");
-    });
-    state.reportView.dashboardView = "coach";
-  }
+  applyWorkspaceChrome();
   const [
     filesResponse,
     schemaResponse,
@@ -955,11 +992,11 @@ function renderBiSalesPanel(erp) {
       <div class="request-flow">
         <div class="request-step">
           <strong>1. Actualizar informe</strong>
-          <div class="muted">Usalo para obtener el tablero completo: KPIs, insights, rankings, gráficos y plan de acción.</div>
+          <div class="muted">Usalo para obtener el tablero completo: KPIs, rankings y dashboards especializados.</div>
         </div>
         <div class="request-step">
-          <strong>2. Motor dinámico</strong>
-          <div class="muted">Usalo cuando ya tenés una pregunta puntual, por ejemplo tendencia, ranking, churn, mix, rutas o canales.</div>
+          <strong>2. PDV 360</strong>
+          <div class="muted">Abrí un punto de venta para ver qué compra, qué le falta frente a sus pares y cómo llegarle.</div>
         </div>
       </div>
       <div class="muted">Cobertura disponible actualmente: ${escapeHtml(period)}.</div>
@@ -1060,6 +1097,9 @@ function normalizeSupplierFocusSelection(rawValue = state.supplierFocus) {
 }
 
 function renderSupplierFocusControl() {
+  if (workspace === "coach") {
+    return "";
+  }
   const supplierConfig = state.prefilters.available?.supplier;
   if (!supplierConfig?.options?.length) {
     return "";
@@ -2524,15 +2564,8 @@ function renderReportData(data) {
   renderOpportunityDashboard(data, mode);
   renderPersistentAlerts(data);
   renderMeetings(data);
-  renderSemaphores(data.semaphores, data.summary, data.forecast, data.meta, mode);
-  renderCoverage(data.coverage, data.meta.datasets);
-  renderInsights(data.insights, data.summary, data.meta, mode);
-  renderActionPlan(data.actionPlan);
-  renderRatios(data.ratios, data.opportunities, data.supplierFocus, data.summary, mode);
-  renderForecast(data.forecast, data.meta, mode);
-  renderCharts(data.charts, data.supplierFocus, mode);
+  renderSupplierFocusChart(data.supplierFocus);
   renderRankings(data.rankings, mode);
-  renderDynamicPanel(data);
 }
 
 function resolveMetricMode(summary = {}) {
@@ -3460,6 +3493,7 @@ function renderDashboardViewSelector(data) {
     interactive: "Gráfico mensual con segmentadores al estilo Excel y selector de pesos o volumen.",
     sellers: "Productividad, concentración, cartera atendida y alertas por vendedor.",
     clients: "Cartera activa, cuentas en riesgo, recuperación y concentración de clientes.",
+    pdv: "El PDV como foco: qué compra por empresa y unidad de negocio, qué le falta frente a sus pares y cómo le llegamos.",
     history: "Evolución mensual, cohortes, Pareto y concentración estructural del negocio.",
     opportunities: "Palancas accionables en clientes, canales y vendedores con potencial de mejora.",
     alerts: "Alertas persistentes con evidencia, responsable, vencimiento y seguimiento.",
@@ -3473,6 +3507,7 @@ function renderDashboardViewSelector(data) {
     interactive: "Informe filtrable",
     sellers: "Vendedores",
     clients: "Clientes",
+    pdv: "PDV 360",
     history: "Histórico",
     opportunities: "Oportunidades",
     alerts: "Alertas",
@@ -3509,6 +3544,10 @@ function renderDashboardPanels() {
   document.querySelectorAll("[data-dashboard-panel]").forEach((panel) => {
     panel.classList.toggle("hidden", panel.dataset.dashboardPanel !== state.reportView.dashboardView);
   });
+  if (state.reportView.dashboardView === "pdv") {
+    loadPdvPortfolioOptions().catch(showError);
+    Object.values(state.pdv.tables).forEach((table) => table?.redraw?.(true));
+  }
 }
 
 function renderDirectionDashboard(data, mode) {
@@ -5424,7 +5463,7 @@ function renderClientDashboardTable(dashboard) {
     dashboardState.tables.clients.on("rowClick", (_event, row) => {
       const data = row.getData();
       if (data.clientKey) {
-        openClientCoach(data.clientKey).catch(showError);
+        openPdv360(data.clientKey).catch(showError);
       }
     });
     return;
@@ -5458,28 +5497,17 @@ async function openSellerCoach(sellerKey, updateUrl = true) {
   }
 }
 
-async function openClientCoach(clientKey, updateUrl = true) {
-  const { fechaDesde, fechaHasta } = salesCoachRange();
-  if (!fechaDesde || !fechaHasta) {
-    throw new Error("Primero seleccioná y analizá un período.");
-  }
-  setStatus("Construyendo ficha gobernada del cliente...");
-  const data = await api(
-    `/api/sales-coach/client?clientKey=${encodeURIComponent(clientKey)}&fechaDesde=${encodeURIComponent(fechaDesde)}&fechaHasta=${encodeURIComponent(fechaHasta)}`
-  );
-  state.salesCoachDetail = data;
-  renderClientCoachDetail(data);
-  if (updateUrl) {
-    window.history.pushState({}, "", `/sales-coach/client?clientKey=${encodeURIComponent(clientKey)}`);
-  }
-}
-
 function renderSellerCoachDetail(data) {
   const panel = document.getElementById("salesCoachDetailPanel");
   if (!panel) return;
   const id = data.identification || {};
   const kpis = data.kpis || {};
   document.getElementById("salesCoachDetailTitle").textContent = id.name || "Ficha de vendedor";
+  const portfolioButton = document.getElementById("salesCoachDetailPortfolio");
+  if (portfolioButton) {
+    portfolioButton.classList.toggle("hidden", !id.name);
+    portfolioButton.onclick = () => openSellerPortfolio(id.name);
+  }
   document.getElementById("salesCoachDetailSubtitle").textContent =
     `${id.salesForce || "Sin fuerza"} · ${id.period || ""} · actualizado ${data.updatedAt || "sin fecha"}`;
   renderMetricTiles("salesCoachDetailKpis", [
@@ -5508,38 +5536,6 @@ function renderSellerCoachDetail(data) {
   setStatus(`Ficha de ${id.name || "vendedor"} generada con evidencia numérica.`);
 }
 
-function renderClientCoachDetail(data) {
-  const panel = document.getElementById("salesCoachDetailPanel");
-  if (!panel) return;
-  const id = data.identification || {};
-  const kpis = data.kpis || {};
-  document.getElementById("salesCoachDetailTitle").textContent = id.name || "Ficha de cliente";
-  document.getElementById("salesCoachDetailSubtitle").textContent =
-    `${id.seller || "Sin vendedor"} · ${id.route || "Sin ruta"} · actualizado ${data.updatedAt || "sin fecha"}`;
-  renderMetricTiles("salesCoachDetailKpis", [
-    { label: "Venta neta", value: money(kpis.sales || 0), sub: `vs ${money(kpis.previousSales || 0)}`, tone: "neutral" },
-    { label: "Crecimiento", value: pctNumber(kpis.growthPct || 0), sub: "vs período anterior", tone: (kpis.growthPct || 0) >= 0 ? "good" : "warn" },
-    { label: "Cantidad", value: decimalNumber(kpis.quantity || 0), sub: `${kpis.orders || 0} pedidos`, tone: "neutral" },
-    { label: "Ticket", value: money(kpis.avgTicket || 0), sub: `${kpis.frequency || 0} días con compra`, tone: "neutral" },
-    { label: "Mix", value: intNumber(kpis.mixProducts || 0), sub: `${kpis.mixFamilies || 0} familias`, tone: "neutral" },
-    { label: "Recencia", value: `${intNumber(kpis.recencyDays || 0)} días`, sub: kpis.lastPurchase || "-", tone: (kpis.recencyDays || 0) > 60 ? "warn" : "good" },
-  ]);
-  renderCoachEvidence("salesCoachStrengths", [{
-    message: `Historial disponible de ${(data.history || []).length} meses y mix de ${(data.products || []).length} productos.`,
-    evidence: { months: (data.history || []).length, products: (data.products || []).length },
-  }]);
-  renderCoachEvidence("salesCoachOpportunities", data.opportunities || []);
-  document.getElementById("salesCoachDetailBody").innerHTML = [
-    `<div class="insight-item"><strong>Riesgo:</strong> ${escapeHtml(data.risk?.level || "sin clasificar")}<div class="evidence">${formatCoachEvidence(data.risk?.evidence || {})}</div></div>`,
-    `<div class="insight-item"><strong>Familias:</strong> ${(data.families || []).map(escapeHtml).join(", ") || "sin maestro suficiente"}.</div>`,
-    `<div class="insight-item"><strong>Categorías ausentes:</strong> ${(data.absentCategories || []).map(escapeHtml).join(", ") || "sin brechas detectables con el maestro actual"}.</div>`,
-    `<div class="insight-item"><strong>Productos:</strong> ${(data.products || []).map(escapeHtml).join(", ") || "sin productos en el período"}.</div>`,
-  ].join("");
-  panel.classList.remove("hidden");
-  panel.scrollIntoView({ behavior: "smooth", block: "start" });
-  setStatus(`Ficha de ${id.name || "cliente"} generada con evidencia numérica.`);
-}
-
 function renderCoachEvidence(targetId, items) {
   const node = document.getElementById(targetId);
   if (!node) return;
@@ -5560,9 +5556,602 @@ async function openRequestedSalesCoachDetail() {
   if (path === "/sales-coach/seller" && params.get("sellerKey")) {
     await openSellerCoach(params.get("sellerKey"), false);
   }
-  if (path === "/sales-coach/client" && params.get("clientKey")) {
-    await openClientCoach(params.get("clientKey"), false);
+  if ((path === "/sales-coach/client" || path === "/pdv") && params.get("clientKey")) {
+    await openPdv360(params.get("clientKey"), false);
   }
+}
+
+// --- PDV 360 -----------------------------------------------------------------
+
+const PDV_COMPANY_COLORS = {
+  "CODENOA S.R.L.": "#0f766e",
+  "PDEV S.A.S.": "#b86e00",
+  "TODO PYMES SRL": "#1d4ed8",
+  "ERDASER S.R.L": "#7c3aed",
+};
+
+function pdvCompanyColor(company, index) {
+  const fallback = ["#0891b2", "#be185d", "#4d7c0f", "#9ca3af"];
+  return PDV_COMPANY_COLORS[company] || fallback[index % fallback.length];
+}
+
+function pdvStatusTone(status) {
+  return {
+    Activo: "good",
+    Compra: "good",
+    Dormido: "warn",
+    Reactivable: "warn",
+    "Dejó de comprar": "warn",
+    Perdido: "bad",
+    "Nunca compró": "neutral",
+    "Sin compras": "bad",
+  }[status] || "neutral";
+}
+
+function pdvChip(text, tone = "neutral") {
+  return `<span class="pdv-chip ${tone}">${escapeHtml(text)}</span>`;
+}
+
+function pdvWindowDays() {
+  return Number(document.getElementById("pdvWindowSelect")?.value || state.pdv.windowDays || 90);
+}
+
+function showPdvPanel() {
+  storeDashboardView("pdv");
+  document.getElementById("results")?.classList.remove("hidden");
+  if (state.reportView.lastData) {
+    renderDashboardViewSelector(state.reportView.lastData);
+  }
+  renderDashboardPanels();
+}
+
+async function openPdv360(clientKey, updateUrl = true) {
+  if (!clientKey) return;
+  if (!DASHBOARD_VIEWS.includes("pdv")) {
+    window.location.assign(`/pdv?clientKey=${encodeURIComponent(clientKey)}`);
+    return;
+  }
+  state.pdv.clientKey = clientKey;
+  showPdvPanel();
+  setPdvMode("single");
+  const params = new URLSearchParams({ clientKey, windowDays: String(pdvWindowDays()) });
+  const { fechaHasta } = salesCoachRange();
+  if (fechaHasta) params.set("fechaHasta", fechaHasta);
+  setStatus("Construyendo la vista 360 del PDV...");
+  const data = await api(`/api/pdv/360?${params.toString()}`);
+  state.pdv.data = data;
+  renderPdv360(data);
+  if (updateUrl) {
+    window.history.pushState({}, "", `/pdv?clientKey=${encodeURIComponent(clientKey)}`);
+  }
+  document.querySelector('[data-dashboard-panel="pdv"]')?.scrollIntoView({ behavior: "smooth", block: "start" });
+  setStatus(`Vista 360 de ${data.identification?.name || clientKey} lista.`);
+}
+
+function renderPdv360(data) {
+  const id = data.identification || {};
+  const meta = data.meta || {};
+  const kpis = data.kpis || {};
+  document.getElementById("pdvEmpty")?.classList.add("hidden");
+  document.getElementById("pdvContent")?.classList.remove("hidden");
+  document.getElementById("pdvTitle").textContent = id.name || "PDV 360";
+  document.getElementById("pdvSubtitle").textContent =
+    `Código ${id.clientKey} · ventana ${meta.windowStart} a ${meta.windowEnd} (${meta.windowDays} días) · pares: ${intNumber(meta.peerClients || 0)} clientes ${meta.peerGroup}`
+    + (meta.scopeRestricted ? " · vista acotada a tu alcance" : "");
+
+  const finance = data.finance;
+  const financeChips = finance
+    ? [
+        finance.credit_limit ? pdvChip(`Límite ${money(finance.credit_limit)}`) : "",
+        finance.unpaid_vouchers ? pdvChip(`${intNumber(finance.unpaid_vouchers)} comprobantes impagos`, "warn") : "",
+        finance.overdue_debt_days ? pdvChip(`${intNumber(finance.overdue_debt_days)} días de deuda vencida`, finance.overdue_debt_days > 30 ? "bad" : "warn") : "",
+        finance.payment_method_name ? pdvChip(finance.payment_method_name) : "",
+        finance.price_list ? pdvChip(`Lista ${finance.price_list}`) : "",
+      ].join("")
+    : "";
+  document.getElementById("pdvIdentity").innerHTML = `
+    ${pdvChip(id.status || "Sin estado", pdvStatusTone(id.status))}
+    ${id.businessType ? pdvChip(`Tipo ${id.businessType}`) : ""}
+    ${id.channel ? pdvChip(`Canal ${id.channel}`) : ""}
+    ${pdvChip(id.lastPurchase ? `Última compra ${id.lastPurchase} (${intNumber(id.recencyDays || 0)} días)` : "Sin compras")}
+    ${id.firstPurchase ? pdvChip(`Cliente desde ${id.firstPurchase}`) : ""}
+    ${financeChips}
+  `;
+
+  const growthSub = (value, label) => (value === null || value === undefined ? `sin base ${label}` : `${pctNumber(value)} ${label}`);
+  const growthTone = (value) => (value === null || value === undefined ? "neutral" : value >= 0 ? "good" : "warn");
+  renderMetricTiles("pdvKpis", [
+    { label: "Venta neta", value: money(kpis.sales || 0), sub: growthSub(kpis.growthPct, "vs ventana anterior"), tone: growthTone(kpis.growthPct) },
+    { label: "Vs año anterior", value: money(kpis.yoySales || 0), sub: growthSub(kpis.yoyGrowthPct, "de crecimiento"), tone: growthTone(kpis.yoyGrowthPct) },
+    { label: "Promedio mensual 12m", value: money(kpis.monthlyAvg12m || 0), sub: "últimos 12 meses", tone: "neutral" },
+    { label: "SKU comprados", value: intNumber(kpis.skus || 0), sub: `${intNumber(kpis.previousSkus || 0)} en la ventana anterior`, tone: (kpis.skus || 0) >= (kpis.previousSkus || 0) ? "good" : "warn" },
+    { label: "Empresas", value: `${kpis.companiesBought || 0} de ${kpis.companiesTotal || 0}`, sub: `${kpis.unitsBought || 0} de ${kpis.unitsTotal || 0} unidades de negocio`, tone: "neutral" },
+    { label: "Pedidos", value: intNumber(kpis.orders || 0), sub: `ticket ${money(kpis.avgTicket || 0)} · ${intNumber(kpis.purchaseDays || 0)} días con compra`, tone: "neutral" },
+  ]);
+
+  document.getElementById("pdvCompaniesNote").textContent =
+    `SKU distintos comprados en la ventana (neto de devoluciones), contra lo que compra un par típico (${meta.peerGroup}).`;
+  document.getElementById("pdvCompanies").innerHTML = (data.companies || []).map((item, index) => {
+    const via = (item.via || []).map((entry) => `${escapeHtml(entry.salesForce)}${entry.seller ? ` · ${escapeHtml(entry.seller)}` : ""}`).join("<br>");
+    const peerVia = (item.peerVia || []).join(", ");
+    return `
+      <article class="pdv-company-card ${item.skus ? "" : "is-empty"}" style="--company-color:${pdvCompanyColor(item.company, index)}">
+        <div class="pdv-company-name">${escapeHtml(item.company)}</div>
+        <div class="pdv-company-skus"><strong>${intNumber(item.skus)}</strong> SKU</div>
+        <div class="pdv-company-sales">${money(item.sales)}${item.sales ? ` · ${pctNumber(item.sharePct)} del PDV` : ""}</div>
+        ${pdvChip(item.status, pdvStatusTone(item.status))}
+        <div class="pdv-company-peer">Pares: ${pctNumber(item.peerPenetrationPct)} compran · ${decimalNumber(item.peerAvgSkus)} SKU prom.</div>
+        <div class="pdv-company-via">${via ? `Le llega por:<br>${via}` : peerVia ? `Sus pares la compran por: ${escapeHtml(peerVia)}` : ""}</div>
+        ${item.lastPurchase && !item.skus ? `<div class="pdv-company-peer">Última compra ${escapeHtml(item.lastPurchase)}</div>` : ""}
+      </article>
+    `;
+  }).join("");
+
+  const opportunities = data.opportunities || [];
+  document.getElementById("pdvOpportunities").innerHTML = opportunities.length
+    ? opportunities.map((item) => `
+        <article class="pdv-opportunity">
+          <div class="pdv-opportunity-rank">${item.priority}</div>
+          <div>
+            <div class="pdv-opportunity-title">${escapeHtml(item.title)}</div>
+            <div class="muted">${escapeHtml(item.detail)}</div>
+            <div class="pdv-opportunity-how"><strong>Cómo:</strong> ${escapeHtml(item.how)}</div>
+          </div>
+          <div class="pdv-opportunity-potential">${item.potential ? money(item.potential) : "-"}<span>potencial en ${meta.windowDays} días</span></div>
+        </article>
+      `).join("")
+    : "<div class='muted'>Sin brechas relevantes frente a sus pares en esta ventana.</div>";
+
+  document.getElementById("pdvUnits").innerHTML = `
+    <table class="pdv-table">
+      <thead><tr><th>Unidad</th><th>SKU vs pares</th><th>Venta</th><th>Pares que compran</th><th>Le llega por</th></tr></thead>
+      <tbody>
+        ${(data.businessUnits || []).map((item) => {
+          const ratio = item.peerAvgSkus ? Math.min(item.skus / item.peerAvgSkus, 1.5) : item.skus ? 1 : 0;
+          return `
+            <tr>
+              <td><strong>${escapeHtml(item.unit)}</strong><br>${pdvChip(item.status, pdvStatusTone(item.status))}</td>
+              <td>
+                ${intNumber(item.skus)} / ${decimalNumber(item.peerAvgSkus)}
+                <div class="pdv-bar"><span style="width:${Math.round((ratio / 1.5) * 100)}%" class="${ratio >= 1 ? "good" : ratio >= 0.5 ? "warn" : "bad"}"></span></div>
+              </td>
+              <td>${money(item.sales)}</td>
+              <td>${pctNumber(item.peerPenetrationPct)}</td>
+              <td>${escapeHtml((item.via || []).join(", ") || (item.peerVia?.length ? `pares: ${item.peerVia.join(", ")}` : "-"))}</td>
+            </tr>
+          `;
+        }).join("")}
+      </tbody>
+    </table>
+  `;
+
+  document.getElementById("pdvCoverage").innerHTML = `
+    <table class="pdv-table">
+      <thead><tr><th>Fuerza</th><th>Ruta y vendedor</th><th>Venta</th><th>Diagnóstico</th></tr></thead>
+      <tbody>
+        ${(data.coverage || []).map((item) => `
+          <tr>
+            <td><strong>${escapeHtml(item.salesForce)}</strong><br><span class="muted">${pctNumber(item.peerPenetrationPct)} de pares</span></td>
+            <td>${item.onRoute
+              ? `${escapeHtml(item.route || "-")} · ${escapeHtml(item.routeSeller || "sin vendedor asignado")}<br><span class="muted">visita ${escapeHtml(item.visitDays || "-")} · entrega ${escapeHtml(item.deliveryDays || "-")}</span>`
+              : `<span class="muted">Sin ruta${item.lastSeller ? ` · último vendedor ${escapeHtml(item.lastSeller)}` : ""}</span>`}</td>
+            <td>${money(item.sales)}<br><span class="muted">${intNumber(item.skus)} SKU</span></td>
+            <td>${pdvChip(item.diagnosis, item.tone)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+
+  renderPdvHistoryChart(data.history || []);
+  renderPdvSkus();
+}
+
+function renderPdvHistoryChart(history) {
+  if (typeof echarts === "undefined") {
+    const node = document.getElementById("pdvHistoryChart");
+    if (node) node.innerHTML = "<div class='muted'>ECharts no está disponible en esta sesión.</div>";
+    return;
+  }
+  const companies = [...new Set(history.flatMap((row) => Object.keys(row.byCompany || {})))]
+    .sort((a, b) => (PDV_COMPANY_COLORS[b] ? 1 : 0) - (PDV_COMPANY_COLORS[a] ? 1 : 0) || a.localeCompare(b));
+  mountDashboardChart("pdvHistoryChart", {
+    tooltip: { trigger: "axis", valueFormatter: (value) => money(value) },
+    legend: { top: 0, textStyle: { color: "#6b7280" } },
+    grid: { left: 64, right: 24, top: 48, bottom: 40, containLabel: true },
+    xAxis: {
+      type: "category",
+      data: history.map((row) => row.period),
+      axisLabel: { color: "#6b7280", formatter: (value) => formatMonthAxisLabel(value) },
+    },
+    yAxis: { type: "value", axisLabel: { color: "#6b7280", formatter: (value) => compactMoney(value) } },
+    series: companies.map((company, index) => ({
+      name: company,
+      type: "bar",
+      stack: "total",
+      itemStyle: { color: pdvCompanyColor(company, index) },
+      data: history.map((row) => row.byCompany?.[company] || 0),
+    })),
+  });
+}
+
+function renderPdvSkus() {
+  const data = state.pdv.data;
+  const node = document.getElementById("pdvSkus");
+  if (!data || !node) return;
+  const tab = state.pdv.skuTab || "top";
+  document.querySelectorAll("[data-pdv-sku]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.pdvSku === tab);
+  });
+  const rows = data.skus?.[tab] || [];
+  const salesLabel = tab === "lost" ? "Venta ventana anterior" : "Venta";
+  node.innerHTML = rows.length
+    ? `
+      <table class="pdv-table">
+        <thead><tr><th>Producto</th><th>Unidad / línea</th><th>Empresa</th><th>${salesLabel}</th><th>Cantidad</th><th>Última compra</th></tr></thead>
+        <tbody>
+          ${rows.map((item) => `
+            <tr>
+              <td><strong>${escapeHtml(item.product)}</strong><br><span class="muted">${escapeHtml(item.productKey)}${item.brand ? ` · ${escapeHtml(item.brand)}` : ""}</span></td>
+              <td>${escapeHtml(item.unit)}${item.line ? `<br><span class="muted">${escapeHtml(item.line)}</span>` : ""}</td>
+              <td>${escapeHtml(item.company || "-")}</td>
+              <td>${money(item.sales)}</td>
+              <td>${decimalNumber(item.quantity)}</td>
+              <td>${escapeHtml(item.lastPurchase || "-")}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `
+    : `<div class='muted'>${tab === "lost" ? "No dejó de comprar SKU habituales." : "Sin SKU para mostrar."}</div>`;
+}
+
+function setPdvMode(mode) {
+  state.pdv.mode = mode === "single" ? "single" : "portfolio";
+  document.getElementById("pdvPortfolio")?.classList.toggle("hidden", state.pdv.mode !== "portfolio");
+  document.getElementById("pdvSingle")?.classList.toggle("hidden", state.pdv.mode !== "single");
+  document.querySelectorAll("[data-pdv-mode]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.pdvMode === state.pdv.mode);
+  });
+  // Tabulator no calcula anchos dentro de un contenedor oculto.
+  Object.values(state.pdv.tables).forEach((table) => table?.redraw?.(true));
+}
+
+function fillPdvSelect(id, options, placeholder) {
+  const select = document.getElementById(id);
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>`
+    + options.map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join("");
+  if (options.some((item) => item.value === current)) select.value = current;
+}
+
+function renderPdvRouteOptions() {
+  const options = state.pdv.options;
+  if (!options) return;
+  const seller = document.getElementById("pdvFilterSeller")?.value || "";
+  const force = document.getElementById("pdvFilterForce")?.value || "";
+  const routes = (options.routes || []).filter((route) =>
+    (!seller || route.seller === seller) && (!force || route.salesForce === force));
+  fillPdvSelect("pdvFilterRoute", routes.map((route) => ({ value: route.id, label: `${route.label} (${route.clients})` })), "Todas");
+}
+
+function loadPdvPortfolioOptions() {
+  if (!state.pdv.optionsPromise) {
+    state.pdv.optionsPromise = fetchPdvPortfolioOptions().catch((error) => {
+      state.pdv.optionsPromise = null;
+      throw error;
+    });
+  }
+  return state.pdv.optionsPromise;
+}
+
+async function fetchPdvPortfolioOptions() {
+  const options = await api("/api/pdv/portfolio/options");
+  state.pdv.options = options;
+  fillPdvSelect("pdvFilterSeller", (options.sellers || []).map((item) => ({
+    value: item.name,
+    label: item.salesForces?.length ? `${item.name} · ${item.salesForces.join(", ")}` : item.name,
+  })), options.restrictedToSellers ? "Toda mi cartera" : "Todos");
+  fillPdvSelect("pdvFilterForce", (options.salesForces || []).map((name) => ({ value: name, label: name })), "Todas");
+  fillPdvSelect("pdvFilterType", (options.businessTypes || []).map((item) => ({ value: item.name, label: `${item.name} (${intNumber(item.clients)})` })), "Todos");
+  renderPdvRouteOptions();
+}
+
+const PDV_PORTFOLIO_URL_FILTERS = { seller: "pdvFilterSeller", route: "pdvFilterRoute", salesForce: "pdvFilterForce", businessType: "pdvFilterType" };
+
+function openSellerPortfolio(sellerName) {
+  if (!sellerName) {
+    setStatus("Elegí un vendedor para ver su cartera.");
+    return;
+  }
+  // PDV 360 vive en Comercial: se abre allá con la cartera ya filtrada.
+  window.location.assign(`/pdv?seller=${encodeURIComponent(sellerName)}`);
+}
+
+async function openPdvPortfolioFromUrl(params) {
+  showPdvPanel();
+  setPdvMode("portfolio");
+  await loadPdvPortfolioOptions();
+  Object.entries(PDV_PORTFOLIO_URL_FILTERS).forEach(([param, selectId]) => {
+    const value = params.get(param);
+    const select = document.getElementById(selectId);
+    if (!value || !select) return;
+    if (param === "seller" || param === "salesForce") renderPdvRouteOptions();
+    if (![...select.options].some((option) => option.value === value)) {
+      select.insertAdjacentHTML("beforeend", `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`);
+    }
+    select.value = value;
+    if (param === "seller" || param === "salesForce") renderPdvRouteOptions();
+  });
+  await runPdvPortfolio();
+  document.querySelector('[data-dashboard-panel="pdv"]')?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function runPdvPortfolio() {
+  const params = new URLSearchParams({ windowDays: String(pdvWindowDays()) });
+  const filters = {
+    seller: document.getElementById("pdvFilterSeller")?.value || "",
+    route: document.getElementById("pdvFilterRoute")?.value || "",
+    salesForce: document.getElementById("pdvFilterForce")?.value || "",
+    businessType: document.getElementById("pdvFilterType")?.value || "",
+  };
+  Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); });
+  const { fechaHasta } = salesCoachRange();
+  if (fechaHasta) params.set("fechaHasta", fechaHasta);
+  setStatus("Analizando la cartera contra sus pares...");
+  const data = await withProgress("Analizando la cartera contra sus pares...", () => api(`/api/pdv/portfolio?${params.toString()}`), { operationType: "pdv_portfolio" });
+  state.pdv.portfolio = data;
+  renderPdvPortfolio(data);
+  setStatus(`Cartera lista: ${intNumber(data.summary?.clients || 0)} PDV, ${intNumber(data.summary?.opportunities || 0)} oportunidades.`);
+}
+
+function pdvFlagClass(flag) {
+  return { gap: "pdv-cell-gap", low: "pdv-cell-low", ok: "pdv-cell-ok" }[flag] || "pdv-cell-na";
+}
+
+function renderPdvPenetrationBars(targetId, title, rows, labelKey) {
+  const node = document.getElementById(targetId);
+  if (!node) return;
+  const visible = rows.filter((item) => item.expectedPct >= 1 || item.penetrationPct >= 1);
+  node.innerHTML = `
+    <h4>${escapeHtml(title)}</h4>
+    ${visible.map((item) => {
+      const gap = item.expectedPct - item.penetrationPct;
+      const tone = gap >= 15 ? "bad" : gap >= 5 ? "warn" : "good";
+      return `
+        <div class="pdv-pen-row">
+          <div class="pdv-pen-label">${escapeHtml(item[labelKey])}</div>
+          <div class="pdv-pen-track">
+            <span class="pdv-pen-fill ${tone}" style="width:${Math.min(item.penetrationPct, 100)}%"></span>
+            <span class="pdv-pen-expected" style="left:${Math.min(item.expectedPct, 100)}%" title="Esperable según pares: ${pctNumber(item.expectedPct)}"></span>
+          </div>
+          <div class="pdv-pen-value">${pctNumber(item.penetrationPct)} <span class="muted">vs ${pctNumber(item.expectedPct)}</span></div>
+        </div>
+      `;
+    }).join("") || "<div class='muted'>Sin datos.</div>"}
+  `;
+}
+
+function renderPdvPortfolio(data) {
+  const summary = data.summary || {};
+  const meta = data.meta || {};
+  document.getElementById("pdvPortfolioEmpty")?.classList.add("hidden");
+  document.getElementById("pdvPortfolioContent")?.classList.remove("hidden");
+  const filters = Object.entries(meta.filters || {}).map(([key, value]) => {
+    if (key === "route") {
+      return (state.pdv.options?.routes || []).find((route) => route.id === value)?.label || value;
+    }
+    return value;
+  });
+  document.getElementById("pdvPortfolioSummary").textContent =
+    `${filters.length ? filters.join(" · ") : "Toda la base"} · ventana ${meta.windowStart} a ${meta.windowEnd} · cada PDV se compara con sus pares del mismo tipo de negocio en toda la base`
+    + (meta.scopeRestricted ? " · vista acotada a tu alcance" : "");
+
+  const byType = summary.byType || {};
+  renderMetricTiles("pdvPortfolioKpis", [
+    { label: "PDV en la selección", value: intNumber(summary.clients || 0), sub: `${intNumber(summary.activeClients || 0)} compraron en la ventana`, tone: "neutral" },
+    { label: "Sin compras", value: intNumber(byType.inactive || 0), sub: "en ruta y sin compras en la ventana", tone: (byType.inactive || 0) ? "warn" : "good" },
+    { label: "Huecos de portfolio", value: intNumber((byType.portfolio_gap || 0) + (byType.company_gap || 0)), sub: "unidades o empresas que sus pares sí compran", tone: "warn" },
+    { label: "Amplitud baja", value: intNumber(byType.low_breadth || 0), sub: "compran menos de la mitad de SKU que sus pares", tone: "warn" },
+    { label: "Potencial estimado", value: money(summary.potential || 0), sub: `en ${meta.windowDays} días · venta actual ${money(summary.sales || 0)}`, tone: "neutral" },
+  ]);
+
+  renderPdvPenetrationBars("pdvPenetrationCompanies", "Por empresa", data.penetration?.companies || [], "company");
+  renderPdvPenetrationBars("pdvPenetrationUnits", "Por unidad de negocio", data.penetration?.units || [], "unit");
+
+  const typeLabels = {
+    inactive: "Sin compras",
+    portfolio_gap: "No compra unidad",
+    company_gap: "No compra empresa",
+    low_breadth: "Amplitud baja",
+    visited_no_sale: "En ruta sin venta",
+  };
+  const worklistRows = (data.worklist || []).map((item, index) => ({
+    rank: index + 1,
+    clientKey: item.clientKey,
+    client: item.client,
+    businessType: item.businessType || "-",
+    typeLabel: typeLabels[item.type] || item.type,
+    title: item.title,
+    detail: item.detail,
+    how: item.how,
+    force: item.channel?.salesForce || "-",
+    seller: item.channel?.seller || (item.channel && !item.channel.onRoute ? "Sin ruta" : "-"),
+    onRoute: item.channel?.onRoute ? "Sí" : "No",
+    potential: item.potential || 0,
+  }));
+  document.getElementById("pdvWorklistNote").textContent =
+    `${intNumber(summary.opportunities || 0)} oportunidades${data.worklistTruncated ? ` (se muestran las ${intNumber(worklistRows.length)} de mayor potencial)` : ""}. Tocá una fila para abrir la ficha del PDV.`;
+  mountPdvTable("worklist", "pdvWorklistTable", worklistRows, [
+    { title: "#", field: "rank", width: 56, hozAlign: "right" },
+    { title: "PDV", field: "client", minWidth: 180, headerFilter: "input", cssClass: "coach-link" },
+    { title: "Tipo", field: "businessType", width: 90, headerFilter: "list", headerFilterParams: { valuesLookup: true, clearable: true } },
+    { title: "Oportunidad", field: "typeLabel", width: 150, headerFilter: "list", headerFilterParams: { valuesLookup: true, clearable: true } },
+    { title: "Detalle", field: "title", minWidth: 180, tooltip: (_event, cell) => cell.getRow().getData().detail },
+    { title: "Cómo", field: "how", minWidth: 260, formatter: "textarea" },
+    { title: "Fuerza", field: "force", width: 110, headerFilter: "list", headerFilterParams: { valuesLookup: true, clearable: true } },
+    { title: "Vendedor", field: "seller", minWidth: 140, headerFilter: "list", headerFilterParams: { valuesLookup: true, clearable: true } },
+    { title: "Potencial", field: "potential", width: 120, hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
+  ]);
+
+  const companies = meta.companies || [];
+  const units = meta.units || [];
+  const matrixRows = (data.matrix || []).map((row) => {
+    const flat = {
+      clientKey: row.clientKey,
+      client: row.client,
+      businessType: row.businessType || "-",
+      status: row.status,
+      sales: row.sales,
+      skus: row.skus,
+      routes: (row.routes || []).map((route) => `${route.salesForce}: ${route.seller || "-"}`).join(" · ") || "Sin ruta",
+      opportunities: row.opportunities,
+      potential: row.potential,
+      topOpportunity: row.topOpportunity || "-",
+    };
+    companies.forEach((company, index) => {
+      const cell = row.companies?.[company] || {};
+      flat[`c${index}`] = cell.skus || 0;
+      flat[`c${index}_flag`] = cell.flag || "na";
+    });
+    units.forEach((unit, index) => {
+      const cell = row.units?.[unit] || {};
+      flat[`u${index}`] = cell.skus || 0;
+      flat[`u${index}_flag`] = cell.flag || "na";
+      flat[`u${index}_peer`] = cell.peerAvgSkus || 0;
+    });
+    return flat;
+  });
+  const flagColumn = (title, field, peerField) => ({
+    title,
+    field,
+    width: 96,
+    hozAlign: "center",
+    headerTooltip: title,
+    formatter: (cell) => {
+      const data = cell.getRow().getData();
+      const element = cell.getElement();
+      element.classList.remove("pdv-cell-gap", "pdv-cell-low", "pdv-cell-ok", "pdv-cell-na");
+      element.classList.add(pdvFlagClass(data[`${field}_flag`]));
+      return peerField ? `${cell.getValue()} <span class="pdv-cell-peer">/ ${decimalNumber(data[peerField])}</span>` : String(cell.getValue());
+    },
+  });
+  document.getElementById("pdvMatrixNote").textContent =
+    `SKU comprados en la ventana (unidades: propios / promedio de pares). Rojo: no compra algo que compra al menos el ${meta.expectedPenetrationPct}% de sus pares. Ámbar: menos de la mitad de los SKU de sus pares.`
+    + (data.matrixTruncated ? ` Se muestran los ${intNumber(matrixRows.length)} PDV de mayor potencial.` : "");
+  mountPdvTable("matrix", "pdvMatrixTable", matrixRows, [
+    { title: "PDV", field: "client", minWidth: 180, frozen: true, headerFilter: "input", cssClass: "coach-link" },
+    { title: "Tipo", field: "businessType", width: 86, headerFilter: "list", headerFilterParams: { valuesLookup: true, clearable: true } },
+    { title: "Estado", field: "status", width: 100, headerFilter: "list", headerFilterParams: { valuesLookup: true, clearable: true } },
+    { title: "Venta", field: "sales", width: 110, hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
+    { title: "SKU", field: "skus", width: 64, hozAlign: "right" },
+    { title: "Empresas", columns: companies.map((company, index) => flagColumn(company, `c${index}`)) },
+    { title: "Unidades de negocio", columns: units.map((unit, index) => flagColumn(unit, `u${index}`, `u${index}_peer`)) },
+    { title: "Rutas", field: "routes", minWidth: 200, headerFilter: "input" },
+    { title: "Oport.", field: "opportunities", width: 70, hozAlign: "right" },
+    { title: "Potencial", field: "potential", width: 120, hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
+  ]);
+}
+
+function mountPdvTable(key, hostId, rows, columns) {
+  const host = document.getElementById(hostId);
+  if (!host || typeof Tabulator === "undefined") return;
+  const existing = state.pdv.tables[key];
+  if (existing) {
+    existing.setColumns(columns);
+    existing.replaceData(rows);
+    return;
+  }
+  const table = new Tabulator(host, {
+    data: rows,
+    layout: "fitDataStretch",
+    height: "460px",
+    pagination: true,
+    paginationSize: 25,
+    placeholder: "Sin registros para mostrar",
+    columns,
+  });
+  table.on("rowClick", (_event, row) => {
+    const clientKey = row.getData().clientKey;
+    if (clientKey) openPdv360(clientKey).catch(showError);
+  });
+  state.pdv.tables[key] = table;
+}
+
+function downloadPdvTable(key, filename) {
+  const table = state.pdv.tables[key];
+  if (!table) {
+    setStatus("Primero generá la cartera.");
+    return;
+  }
+  table.download("csv", filename, { bom: true, delimiter: ";" });
+}
+
+function initializePdv360Controls() {
+  const input = document.getElementById("pdvSearchInput");
+  const results = document.getElementById("pdvSearchResults");
+  if (!input || !results) return;
+  let timer = null;
+  let requestId = 0;
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    const query = input.value.trim();
+    if (query.length < 2) {
+      results.classList.add("hidden");
+      results.innerHTML = "";
+      return;
+    }
+    timer = setTimeout(async () => {
+      const current = ++requestId;
+      try {
+        const data = await api(`/api/pdv/search?q=${encodeURIComponent(query)}`);
+        if (current !== requestId) return;
+        const items = data.results || [];
+        results.innerHTML = items.length
+          ? items.map((item) => `
+              <button type="button" data-pdv-client="${escapeHtml(item.clientKey)}">
+                <strong>${escapeHtml(item.name || item.clientKey)}</strong>
+                <span>${escapeHtml(item.clientKey)}${item.businessType ? ` · ${escapeHtml(item.businessType)}` : ""} · última compra ${escapeHtml(item.lastPurchase)}</span>
+              </button>
+            `).join("")
+          : "<div class='muted'>Sin resultados.</div>";
+        results.classList.remove("hidden");
+      } catch (error) {
+        showError(error);
+      }
+    }, 250);
+  });
+  results.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-pdv-client]");
+    if (!button) return;
+    results.classList.add("hidden");
+    input.value = "";
+    openPdv360(button.dataset.pdvClient).catch(showError);
+  });
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".pdv-search")) results.classList.add("hidden");
+  });
+  document.getElementById("pdvWindowSelect")?.addEventListener("change", () => {
+    state.pdv.windowDays = pdvWindowDays();
+    if (state.pdv.mode === "single" && state.pdv.clientKey) openPdv360(state.pdv.clientKey, false).catch(showError);
+    if (state.pdv.mode === "portfolio" && state.pdv.portfolio) runPdvPortfolio().catch(showError);
+  });
+  document.getElementById("pdvModeTabs")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-pdv-mode]");
+    if (button) setPdvMode(button.dataset.pdvMode);
+  });
+  document.getElementById("pdvFilterSeller")?.addEventListener("change", renderPdvRouteOptions);
+  document.getElementById("pdvFilterForce")?.addEventListener("change", renderPdvRouteOptions);
+  document.getElementById("pdvPortfolioRun")?.addEventListener("click", () => runPdvPortfolio().catch(showError));
+  document.getElementById("pdvWorklistDownload")?.addEventListener("click", () => downloadPdvTable("worklist", "pdv_lista_de_trabajo.csv"));
+  document.getElementById("pdvMatrixDownload")?.addEventListener("click", () => downloadPdvTable("matrix", "pdv_matriz_penetracion.csv"));
+  document.getElementById("pdvSkuTabs")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-pdv-sku]");
+    if (!button) return;
+    state.pdv.skuTab = button.dataset.pdvSku;
+    renderPdvSkus();
+  });
 }
 
 function renderHistoryDashboardTable(dashboard) {
@@ -6172,92 +6761,6 @@ function summaryValueClass(value) {
   return "";
 }
 
-function renderSemaphores(items, summary = {}, forecast = {}, meta = {}, mode = "mixed") {
-  const normalized = [...(items || [])];
-  const comparisonLabel = meta?.comparison?.comparisonLabel || summary.comparisonLabel || "período anterior equivalente";
-  if (normalized[0]) {
-    normalized[0] = {
-      ...normalized[0],
-      detail: mode === "sales"
-        ? `${summary.periodLabel || "Período"}: ${summary.salesGrowthPct}% vs ${comparisonLabel.toLowerCase()}`
-        : mode === "mixed"
-          ? `${summary.periodLabel || "Período"}: ${summary.unitsGrowthPct}% en bultos y ${summary.salesGrowthPct}% en pesos`
-          : `${summary.periodLabel || "Período"}: ${summary.unitsGrowthPct}% vs ${comparisonLabel.toLowerCase()}`,
-    };
-  }
-  if (normalized[normalized.length - 1]) {
-    normalized[normalized.length - 1] = {
-      ...normalized[normalized.length - 1],
-      detail: mode === "sales"
-        ? `Próxima ventana: ${money(forecast.projectedQuarterSales || 0)}`
-        : mode === "mixed"
-          ? `Próxima ventana: ${decimalNumber(forecast.projectedQuarterUnits || 0)} bultos y ${money(forecast.projectedQuarterSales || 0)}`
-          : `Próxima ventana: ${decimalNumber(forecast.projectedQuarterUnits || 0)} bultos`,
-    };
-  }
-  document.getElementById("semaphores").innerHTML = normalized.map((item) => `
-    <div class="semaphore">
-      <div><span class="dot ${item.color}"></span><strong>${item.name}</strong></div>
-      <div class="muted">${item.detail}</div>
-    </div>
-  `).join("");
-}
-
-function renderCoverage(coverage, datasets) {
-  const items = [
-    `Rutas: ${coverage.routeCoveragePct}% de cobertura · ${money(coverage.salesWithoutRoute)} sin ruta`,
-    `Artículos: ${coverage.articleCoveragePct}% de cobertura · ${money(coverage.salesWithoutArticle)} sin enriquecer`,
-    `Vendedores: ${coverage.sellerCoveragePct}% de cobertura · ${money(coverage.salesWithoutSeller)} sin vendedor consistente`,
-  ];
-
-  for (const dataset of datasets || []) {
-    if (dataset.datasetType === "sales" && dataset.sources?.length) {
-      items.push(`Venta por cliente: ${dataset.sourceCount} archivo(s) · ${dataset.rowsValid} filas válidas consolidadas`);
-      dataset.sources.forEach((source) => {
-        items.push(`Ventas: ${lookupFileName(source.file)} · hoja ${source.sheet} · ${source.rowsValid} filas válidas`);
-      });
-    } else {
-      items.push(`${dataset.label}: ${lookupFileName(dataset.file)} · ${dataset.rowsValid} filas válidas`);
-    }
-  }
-  document.getElementById("coverageCards").innerHTML = items.map((item) => `<div class="insight-item">${item}</div>`).join("");
-}
-
-function renderInsights(items, summary = {}, meta = {}, mode = "mixed") {
-  document.getElementById("insights").innerHTML = (items || []).slice(0, 6)
-    .map((item) => `<div class="insight-item">${item}</div>`)
-    .join("");
-}
-
-function renderActionPlan(items) {
-  document.getElementById("actionPlan").innerHTML = (items || []).map((item) => `
-    <div class="action-item">
-      <div class="subpanel-header">
-        <strong>${item.title}</strong>
-        <span class="pill">${item.priority}</span>
-      </div>
-      <div class="muted">Responsable: ${item.owner} · Horizonte: ${item.horizon}</div>
-      <div>${item.detail}</div>
-    </div>
-  `).join("");
-}
-
-function metricTone(value, thresholds = [], inverse = false) {
-  if (!Number.isFinite(Number(value))) {
-    return "neutral";
-  }
-  const numeric = Number(value);
-  const [warnAt = 0, goodAt = 0] = thresholds;
-  if (inverse) {
-    if (numeric <= warnAt) return "good";
-    if (numeric <= goodAt) return "warn";
-    return "bad";
-  }
-  if (numeric >= goodAt) return "good";
-  if (numeric >= warnAt) return "warn";
-  return "bad";
-}
-
 function renderMetricTiles(targetId, metrics) {
   document.getElementById(targetId).innerHTML = `
     <div class="metric-grid">
@@ -6270,126 +6773,6 @@ function renderMetricTiles(targetId, metrics) {
       `).join("")}
     </div>
   `;
-}
-
-function renderRatios(ratios, opportunities, supplierFocus = {}, summary = {}, mode = "mixed") {
-  const title = document.getElementById("ratiosSectionTitle");
-  if (supplierFocus?.selected) {
-    if (title) {
-      title.textContent = `Palancas del proveedor · ${supplierFocus.label}`;
-    }
-    const focusRatios = supplierFocus.ratios || {};
-    const focusTotals = supplierFocus.totals || {};
-    const metrics = [
-      { label: "Cobertura mensual", value: pctNumber(focusRatios.penetracionPct), sub: `${intNumber(focusRatios.clientesCompradores || 0)} sobre ${intNumber(focusRatios.clientesActivosTotales || 0)} compradores del mes`, tone: metricTone(focusRatios.penetracionPct, [20, 35]) },
-      { label: "Crecimiento mensual", value: pctNumber(focusRatios.growthPct), sub: `${focusRatios.mesActual || "-"} vs ${focusRatios.mesAnterior || "-"}`, tone: metricTone(focusRatios.growthPct, [0, 6]) },
-      { label: "Facturación / cliente", value: money(focusRatios.facturacionCliente), sub: `${supplierFocus.label} sobre padrón activo`, tone: "neutral" },
-      { label: "Rotación", value: decimalNumber(focusRatios.rotacion), sub: "bultos por cliente activo", tone: metricTone(focusRatios.rotacion, [1, 2]) },
-      { label: "Mix proveedor", value: pctNumber(focusRatios.mixMarcaPct), sub: `${money(focusTotals.sales || 0)} facturación del proveedor`, tone: metricTone(focusRatios.mixMarcaPct, [8, 15]) },
-      { label: "Ticket proveedor", value: money(focusRatios.ticket), sub: `${decimalNumber(focusTotals.units || 0)} bultos del período`, tone: "neutral" },
-      { label: "Clientes únicos período", value: intNumber(focusRatios.clientesCompradoresPeriodo || 0), sub: `sobre ${intNumber(focusRatios.clientesUnicosPeriodo || 0)} compradores distintos`, tone: "neutral" },
-      { label: "Bultos / cliente", value: decimalNumber(focusRatios.bultosCliente), sub: "intensidad comercial del proveedor", tone: metricTone(focusRatios.bultosCliente, [1, 2]) },
-    ];
-    renderMetricTiles("ratiosCards", metrics);
-    return;
-  }
-
-  if (title) {
-    title.textContent = "Palancas comerciales";
-  }
-  const opportunityPct = (summary?.salesCurrent || 0) > 0 ? (opportunities.totalPotential || 0) / summary.salesCurrent * 100 : 0;
-  const metrics = mode === "sales" ? [
-    { label: "Cobertura de compra", value: pctNumber(ratios.buyingClientRatioPct), sub: `${intNumber(ratios.buyingClients)} clientes compradores sobre ${intNumber(ratios.totalClients)}`, tone: metricTone(ratios.buyingClientRatioPct, [55, 70]) },
-    { label: "Recurrencia", value: pctNumber(ratios.recurringRatioPct), sub: `${intNumber(ratios.recurringClients)} clientes compran 4+ meses`, tone: metricTone(ratios.recurringRatioPct, [30, 45]) },
-    { label: "Dormidos", value: pctNumber(ratios.dormantRatioPct), sub: `${intNumber(ratios.dormantClients)} clientes a recuperar`, tone: metricTone(ratios.dormantRatioPct, [12, 20], true) },
-    { label: "Perdidos", value: pctNumber(ratios.lostRatioPct), sub: `${intNumber(ratios.lostClients)} clientes sin retorno`, tone: metricTone(ratios.lostRatioPct, [8, 15], true) },
-    { label: "Venta / vendedor", value: money(ratios.salesPerSeller), sub: `${decimalNumber(ratios.ordersPerSeller)} pedidos por vendedor`, tone: "neutral" },
-    { label: "Ticket promedio", value: money(ratios.avgOrderValue), sub: `${decimalNumber(ratios.avgUnitsPerOrder)} unidades por pedido`, tone: "neutral" },
-    { label: "Concentración vendedores", value: pctNumber(ratios.top3SellersSharePct), sub: "participación de los 3 principales", tone: metricTone(ratios.top3SellersSharePct, [45, 60], true) },
-    { label: "Concentración clientes", value: pctNumber(ratios.top10ClientsSharePct), sub: "participación de las 10 cuentas principales", tone: metricTone(ratios.top10ClientsSharePct, [35, 50], true) },
-    { label: "Dependencia canal", value: pctNumber(ratios.topChannelSharePct), sub: "peso del canal líder", tone: metricTone(ratios.topChannelSharePct, [35, 50], true) },
-    { label: "Profundidad de mix", value: decimalNumber(ratios.familyBreadthPerBuyingClient), sub: "familias por cliente comprador", tone: metricTone(ratios.familyBreadthPerBuyingClient, [1.8, 3]) },
-    { label: "Venta mapeada BI", value: pctNumber(ratios.mappedSalesPct), sub: `${pctNumber(ratios.routeLeakagePct)} sin ruta · ${pctNumber(ratios.sellerLeakagePct)} sin vendedor`, tone: metricTone(ratios.mappedSalesPct, [92, 97]) },
-    { label: "Potencial accionable", value: money(opportunities.totalPotential), sub: `${pctNumber(opportunityPct)} sobre venta actual`, tone: metricTone(opportunityPct, [8, 15]) },
-  ] : mode === "units" ? [
-    { label: "Cobertura de compra", value: pctNumber(ratios.buyingClientRatioPct), sub: `${intNumber(ratios.buyingClients)} clientes compradores sobre ${intNumber(ratios.totalClients)}`, tone: metricTone(ratios.buyingClientRatioPct, [55, 70]) },
-    { label: "Recurrencia", value: pctNumber(ratios.recurringRatioPct), sub: `${intNumber(ratios.recurringClients)} clientes compran 4+ meses`, tone: metricTone(ratios.recurringRatioPct, [30, 45]) },
-    { label: "Dormidos", value: pctNumber(ratios.dormantRatioPct), sub: `${intNumber(ratios.dormantClients)} clientes a recuperar`, tone: metricTone(ratios.dormantRatioPct, [12, 20], true) },
-    { label: "Bultos / vendedor", value: decimalNumber(ratios.unitsPerSeller), sub: `${decimalNumber(ratios.ordersPerSeller)} pedidos por vendedor`, tone: "neutral" },
-    { label: "Bultos / pedido", value: decimalNumber(ratios.avgUnitsPerOrder), sub: `${decimalNumber(ratios.purchaseFrequencyMonthly)} compras por cliente/mes`, tone: metricTone(ratios.avgUnitsPerOrder, [8, 15]) },
-    { label: "Clientes / vendedor", value: decimalNumber(ratios.clientsPerSeller), sub: "cobertura comercial por cartera", tone: metricTone(ratios.clientsPerSeller, [80, 140]) },
-    { label: "Concentración vendedores", value: pctNumber(ratios.top3SellersSharePct), sub: "participación de los 3 principales", tone: metricTone(ratios.top3SellersSharePct, [45, 60], true) },
-    { label: "Concentración clientes", value: pctNumber(ratios.top10ClientsSharePct), sub: "participación de las 10 cuentas principales", tone: metricTone(ratios.top10ClientsSharePct, [35, 50], true) },
-    { label: "Dependencia marca", value: pctNumber(ratios.topBrandSharePct), sub: "peso de la marca líder", tone: metricTone(ratios.topBrandSharePct, [30, 45], true) },
-    { label: "Profundidad de mix", value: decimalNumber(ratios.familyBreadthPerBuyingClient), sub: "familias por cliente comprador", tone: metricTone(ratios.familyBreadthPerBuyingClient, [1.8, 3]) },
-    { label: "Venta mapeada BI", value: pctNumber(ratios.mappedSalesPct), sub: `${pctNumber(ratios.routeLeakagePct)} sin ruta · ${pctNumber(ratios.articleLeakagePct)} sin artículo`, tone: metricTone(ratios.mappedSalesPct, [92, 97]) },
-    { label: "Potencial accionable", value: money(opportunities.totalPotential), sub: `${pctNumber(opportunityPct)} sobre venta actual`, tone: metricTone(opportunityPct, [8, 15]) },
-  ] : [
-    { label: "Cobertura de compra", value: pctNumber(ratios.buyingClientRatioPct), sub: `${intNumber(ratios.buyingClients)} clientes compradores sobre ${intNumber(ratios.totalClients)}`, tone: metricTone(ratios.buyingClientRatioPct, [55, 70]) },
-    { label: "Recurrencia", value: pctNumber(ratios.recurringRatioPct), sub: `${intNumber(ratios.recurringClients)} clientes compran 4+ meses`, tone: metricTone(ratios.recurringRatioPct, [30, 45]) },
-    { label: "Dormidos", value: pctNumber(ratios.dormantRatioPct), sub: `${intNumber(ratios.dormantClients)} clientes a recuperar`, tone: metricTone(ratios.dormantRatioPct, [12, 20], true) },
-    { label: "Venta / cliente", value: money(ratios.salesPerBuyingClient), sub: `${decimalNumber(ratios.purchaseFrequencyMonthly)} compras por cliente/mes`, tone: "neutral" },
-    { label: "Venta / vendedor", value: money(ratios.salesPerSeller), sub: `${decimalNumber(ratios.ordersPerSeller)} pedidos por vendedor`, tone: "neutral" },
-    { label: "Ticket promedio", value: money(ratios.avgOrderValue), sub: `${decimalNumber(ratios.avgUnitsPerOrder)} bultos por pedido`, tone: metricTone(ratios.avgOrderValue, [50000, 120000]) },
-    { label: "Concentración vendedores", value: pctNumber(ratios.top3SellersSharePct), sub: "participación de los 3 principales", tone: metricTone(ratios.top3SellersSharePct, [45, 60], true) },
-    { label: "Concentración clientes", value: pctNumber(ratios.top10ClientsSharePct), sub: "participación de las 10 cuentas principales", tone: metricTone(ratios.top10ClientsSharePct, [35, 50], true) },
-    { label: "Dependencia canal", value: pctNumber(ratios.topChannelSharePct), sub: "peso del canal líder", tone: metricTone(ratios.topChannelSharePct, [35, 50], true) },
-    { label: "Profundidad de mix", value: decimalNumber(ratios.familyBreadthPerBuyingClient), sub: "familias por cliente comprador", tone: metricTone(ratios.familyBreadthPerBuyingClient, [1.8, 3]) },
-    { label: "Venta mapeada BI", value: pctNumber(ratios.mappedSalesPct), sub: `${pctNumber(ratios.routeLeakagePct)} sin ruta · ${pctNumber(ratios.sellerLeakagePct)} sin vendedor`, tone: metricTone(ratios.mappedSalesPct, [92, 97]) },
-    { label: "Potencial accionable", value: money(opportunities.totalPotential), sub: `${pctNumber(opportunityPct)} sobre venta actual`, tone: metricTone(opportunityPct, [8, 15]) },
-  ];
-  renderMetricTiles("ratiosCards", metrics);
-}
-
-function renderForecast(forecast, meta = {}, mode = "mixed") {
-  const nextLabel = forecast.nextWindowLabel || meta?.comparison?.comparisonLabel || "la próxima ventana";
-  const items = mode === "mixed" ? [
-    `Base media del período: ${decimalNumber(forecast.baseMonthlyUnits)} bultos`,
-    `Base media del período: ${money(forecast.baseMonthlySales)}`,
-    `Tendencia reciente: ${forecast.unitsTrendPct}% en bultos · ${forecast.trendPct}% en pesos`,
-    `Proyección ${nextLabel.toLowerCase()}: ${decimalNumber(forecast.projectedQuarterUnits)} bultos`,
-    `Proyección ${nextLabel.toLowerCase()}: ${money(forecast.projectedQuarterSales)}`,
-  ] : mode === "units" ? [
-    `Base media del período: ${decimalNumber(forecast.baseMonthlyUnits)} bultos`,
-    `Tendencia reciente: ${forecast.unitsTrendPct}%`,
-    `Proyección ${nextLabel.toLowerCase()}: ${decimalNumber(forecast.projectedQuarterUnits)} bultos`,
-    `Referencia monetaria: ${money(forecast.projectedQuarterSales)}`,
-  ] : [
-    `Base media del período: ${money(forecast.baseMonthlySales)}`,
-    `Tendencia reciente: ${forecast.trendPct}%`,
-    `Proyección ${nextLabel.toLowerCase()}: ${money(forecast.projectedQuarterSales)}`,
-  ];
-  document.getElementById("forecastCards").innerHTML = items.map((item) => `<div class="insight-item">${item}</div>`).join("");
-}
-
-function renderCharts(charts, supplierFocus = {}, mode = "mixed") {
-  const unitsMode = mode !== "sales";
-  const formatter = unitsMode ? decimalNumber : money;
-  document.getElementById("chartSalesByMonthTitle").textContent = unitsMode ? "Bultos por mes" : "Ventas por mes";
-  document.getElementById("chartForecastTitle").textContent = unitsMode ? "Proyección en bultos" : "Proyección en pesos";
-  document.getElementById("chartZoneSalesTitle").textContent = unitsMode ? "Bultos por fuerza de ventas" : "Ventas por fuerza de ventas";
-  document.getElementById("chartSellerSalesTitle").textContent = unitsMode ? "Bultos por vendedor · evolución mensual" : "Ventas por vendedor · evolución mensual";
-  document.getElementById("chartFamilyMomentumTitle").textContent = unitsMode ? "Bultos por marca · evolución mensual" : "Ventas por marca · evolución mensual";
-  document.getElementById("chartCoverageTitle").textContent = unitsMode ? "Bultos por canal · evolución mensual" : "Ventas por canal · evolución mensual";
-  document.getElementById("chartSalesByMonth").innerHTML = renderLineChart(unitsMode ? (charts.salesByMonthUnits || []) : (charts.salesByMonthMoney || []), formatter);
-  document.getElementById("chartForecast").innerHTML = renderBars(unitsMode ? (charts.salesForecastUnits || []) : (charts.salesForecastMoney || []), formatter);
-  document.getElementById("chartZoneSales").innerHTML = renderBars(unitsMode ? (charts.salesForceUnits || []) : (charts.salesForceMoney || []), formatter);
-  document.getElementById("chartSellerSales").innerHTML = renderMonthlyBreakdown(
-    unitsMode ? (charts.sellerMonthlyUnits || []) : (charts.sellerMonthlyMoney || []),
-    formatter,
-    unitsMode ? "#0f766e" : "#1d4ed8",
-  );
-  document.getElementById("chartFamilyMomentum").innerHTML = renderMonthlyBreakdown(
-    unitsMode ? (charts.brandMonthlyUnits || []) : (charts.brandMonthlyMoney || []),
-    formatter,
-    unitsMode ? "#b45309" : "#15803d",
-  );
-  document.getElementById("chartCoverage").innerHTML = renderMonthlyBreakdown(
-    unitsMode ? (charts.channelMonthlyUnits || []) : (charts.channelMonthlyMoney || []),
-    formatter,
-    unitsMode ? "#0f766e" : "#7c3aed",
-  );
-  renderSupplierFocusChart(supplierFocus);
 }
 
 function renderSupplierFocusChart(supplierFocus = {}) {
@@ -6567,41 +6950,6 @@ function filterSelectableOptions(options, searchValue) {
   return (options || []).filter((option) => normalizeText(`${option.label} ${option.value}`).includes(query));
 }
 
-function renderLineChart(items, formatter) {
-  if (!items.length) {
-    return "<div class='muted'>Sin datos para graficar.</div>";
-  }
-  const width = 640;
-  const height = 200;
-  const maxValue = Math.max(...items.map((item) => item.value), 1);
-  const stepX = items.length === 1 ? width / 2 : width / (items.length - 1);
-  const points = items.map((item, index) => {
-    const x = index * stepX;
-    const y = height - (item.value / maxValue) * (height - 20) - 10;
-    return `${x},${y}`;
-  }).join(" ");
-  const last = items[items.length - 1];
-  const axisLabels = buildLineAxisLabels(items);
-  return `
-    <div class="chart-shell">
-      <div class="line-chart">
-        <svg viewBox="0 0 ${width} ${height}">
-          <polyline fill="none" stroke="#0f766e" stroke-width="4" points="${points}" />
-          ${items.map((item, index) => {
-            const x = index * stepX;
-            const y = height - (item.value / maxValue) * (height - 20) - 10;
-            return `<circle cx="${x}" cy="${y}" r="4" fill="#0f766e"></circle>`;
-          }).join("")}
-        </svg>
-      </div>
-      <div class="line-axis">
-        ${axisLabels}
-      </div>
-      <div class="line-axis-summary">${last.label} · ${formatter(last.value)}</div>
-    </div>
-  `;
-}
-
 function renderMultiLineChart(seriesList, formatterOrOptions) {
   const normalizedSeries = (seriesList || []).filter((serie) => (serie.data || []).length);
   if (!normalizedSeries.length) {
@@ -6739,84 +7087,6 @@ function buildLineAxisLabels(items, startPct = 0, endPct = 100, maxLabels = 8) {
   return labels.map(({ item, index }) => `
     <span class="line-axis-label${index === 0 ? " edge-start" : ""}${index === totalSteps ? " edge-end" : ""}" style="left:${startPct + ((index / totalSteps) * (endPct - startPct))}%">${escapeHtml(item.label)}</span>
   `).join("");
-}
-
-function renderBars(items, formatter, forceNegative = false, diverging = false) {
-  if (!items.length) {
-    return "<div class='muted'>Sin datos para graficar.</div>";
-  }
-  const maxValue = Math.max(...items.map((item) => Math.abs(item.value)), 1);
-  return `
-    <div class="bars">
-      ${items.slice(0, 8).map((item) => {
-        const width = Math.max(Math.abs(item.value) / maxValue * 100, 2);
-        const negative = forceNegative ? false : diverging && item.value < 0;
-        return `
-          <div class="bar-row">
-            <div class="bar-label">
-              <span>${escapeHtml(item.label)}</span>
-              <span>${formatter(item.value)}</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill ${negative ? "negative" : ""}" style="width:${width}%"></div>
-            </div>
-          </div>
-        `;
-      }).join("")}
-    </div>
-  `;
-}
-
-function renderMonthlyBreakdown(items, formatter, color = "#0f766e") {
-  if (!items.length) {
-    return "<div class='muted'>Sin datos para graficar.</div>";
-  }
-  return `
-    <div class="spark-list">
-      ${items.slice(0, 8).map((item) => `
-        <div class="spark-row">
-          <div class="spark-header">
-            <span class="spark-label">${escapeHtml(item.label)}</span>
-            <span class="spark-value">${formatter(item.value)}</span>
-          </div>
-          <div class="spark-chart-wrap">
-            ${renderSparkline(item.series || [], color)}
-          </div>
-        </div>
-      `).join("")}
-    </div>
-  `;
-}
-
-function renderSparkline(items, color) {
-  if (!items.length) {
-    return "<div class='muted'>Sin serie.</div>";
-  }
-  const width = 320;
-  const height = 72;
-  const maxValue = Math.max(...items.map((item) => Number(item.value || 0)), 1);
-  const stepX = items.length === 1 ? width / 2 : width / (items.length - 1);
-  const points = items.map((item, index) => {
-    const x = index * stepX;
-    const value = Number(item.value || 0);
-    const y = height - (value / maxValue) * (height - 18) - 9;
-    return { x, y, label: item.label, value };
-  });
-  const polyline = points.map((point) => `${point.x},${point.y}`).join(" ");
-  const first = items[0]?.label || "";
-  const last = items[items.length - 1]?.label || "";
-  return `
-    <div class="spark-chart">
-      <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
-        <polyline fill="none" stroke="${color}" stroke-width="3" points="${polyline}" />
-        ${points.map((point, index) => `<circle cx="${point.x}" cy="${point.y}" r="${index === points.length - 1 ? 3.8 : 2.8}" fill="${color}"></circle>`).join("")}
-      </svg>
-      <div class="spark-axis">
-        <span>${escapeHtml(formatMonthAxisLabel(first))}</span>
-        <span>${escapeHtml(formatMonthAxisLabel(last))}</span>
-      </div>
-    </div>
-  `;
 }
 
 function clientLine(item, metricMode = "units") {
@@ -7297,322 +7567,6 @@ function bindChange(id, handler) {
   }
 }
 
-// ─── Fase 6: Motor dinámico de análisis ─────────────────────────────────────
-
-function renderDynamicPanel(data) {
-  state.dynamic.tasks        = data.availableAnalyses || [];
-  state.dynamic.selectedTaskId = null;
-  const sum = data.insightsSummary || {};
-  document.getElementById("dynSummaryLine").textContent =
-    `${sum.total || 0} insights detectados — ${state.dynamic.tasks.length} tipos de análisis disponibles`;
-  renderDynTaskHelper();
-  renderDynTaskSelector();
-  renderDynKpis(data.kpiSet || {});
-  renderDynInsights(data.dynamicInsights || [], sum);
-  document.getElementById("dynSemaphores").innerHTML = renderDynSemaphoresHtml(data.kpiSet?.semaphores || []);
-  document.getElementById("dynViz").innerHTML = "<div class='muted'>Seleccioná un tipo de análisis y ejecutá para ver la visualización.</div>";
-  document.getElementById("dynResults").classList.remove("hidden");
-}
-
-function renderDynTaskSelector() {
-  const container = document.getElementById("dynTaskSelector");
-  const tasks = state.dynamic.tasks;
-  if (!tasks.length) {
-    container.innerHTML = "<div class='muted'>No hay análisis disponibles para los datos actuales.</div>";
-    renderDynTaskHelper();
-    return;
-  }
-  const domainOrder = ["tiempo","cartera","territorio","producto","canal","margen","fuerza","general"];
-  const domainLabels = {
-    tiempo: "Tiempo", cartera: "Cartera", territorio: "Territorio",
-    producto: "Producto", canal: "Canal", margen: "Margen",
-    fuerza: "Fuerza de ventas", general: "General",
-  };
-  const byDomain = {};
-  tasks.forEach((t) => {
-    const d = t.domain || "general";
-    if (!byDomain[d]) byDomain[d] = [];
-    byDomain[d].push(t);
-  });
-  container.innerHTML = domainOrder.filter((d) => byDomain[d]).map((d) => `
-    <div class="dyn-domain-group">
-      <span class="dyn-domain-label">${escapeHtml(domainLabels[d] || d)}</span>
-      ${byDomain[d].map((t) => `
-        <button class="dyn-task-pill${t.id === state.dynamic.selectedTaskId ? " active" : ""}" data-task-id="${t.id}">
-          ${escapeHtml(t.label)}
-        </button>
-      `).join("")}
-    </div>
-  `).join("");
-  container.querySelectorAll("[data-task-id]").forEach((btn) => {
-    btn.addEventListener("click", () => onSelectDynTask(btn.dataset.taskId));
-  });
-}
-
-function onSelectDynTask(taskId) {
-  state.dynamic.selectedTaskId = taskId;
-  renderDynTaskSelector();
-  renderDynTaskHelper(taskId);
-  const task = state.dynamic.tasks.find((t) => t.id === taskId);
-  if (!task) return;
-  const comboRow    = document.getElementById("dynComboRow");
-  const comboSelect = document.getElementById("dynComboSelect");
-  comboRow.classList.remove("hidden");
-  if (task.combos && task.combos.length) {
-    comboSelect.style.display = "";
-    comboSelect.innerHTML = task.combos.map((c, i) =>
-      `<option value="${i}">${escapeHtml(c.label)}</option>`
-    ).join("");
-  } else {
-    comboSelect.style.display = "none";
-    comboSelect.innerHTML = "";
-  }
-}
-
-function renderDynTaskHelper(taskId = state.dynamic.selectedTaskId) {
-  const container = document.getElementById("dynTaskHelp");
-  if (!container) {
-    return;
-  }
-  const task = state.dynamic.tasks.find((item) => item.id === taskId);
-  if (!task) {
-    container.innerHTML = `
-      <div class="dyn-help-card">
-        <strong>Cómo elegir un análisis puntual</strong>
-        <div class="muted">Primero corré "Actualizar informe". Después elegí una pastilla según la pregunta de negocio que quieras responder. Si no sabés cuál usar, empezá por evolución temporal, ranking o recurrencia/churn.</div>
-      </div>
-    `;
-    return;
-  }
-  const playbook = ANALYSIS_PLAYBOOK[task.id] || {};
-  const combos = (task.combos || []).slice(0, 4).map((combo) => combo.label).filter(Boolean);
-  container.innerHTML = `
-    <div class="dyn-help-card">
-      <div class="dyn-help-header">
-        <strong>${escapeHtml(task.label)}</strong>
-        <span class="pill">Prioridad ${task.priority || "-"}</span>
-      </div>
-      <div class="muted">${escapeHtml(playbook.summary || "Análisis puntual sobre el recorte actual del informe.")}</div>
-      <div class="dyn-help-grid">
-        <div>
-          <div class="dyn-help-title">Cuándo usarlo</div>
-          <div class="muted">${escapeHtml(playbook.when || "Cuando quieras profundizar una dimensión concreta del negocio.")}</div>
-        </div>
-        <div>
-          <div class="dyn-help-title">Preguntas que responde</div>
-          <div class="guide-examples">
-            ${(playbook.questions || ["¿Qué está pasando en esta dimensión del negocio?"]).map((item) => `<span class="guide-chip">${escapeHtml(item)}</span>`).join("")}
-          </div>
-        </div>
-        <div>
-          <div class="dyn-help-title">Aperturas disponibles</div>
-          <div class="guide-examples">
-            ${(combos.length ? combos : ["Sin apertura adicional"]).map((item) => `<span class="guide-chip">${escapeHtml(item)}</span>`).join("")}
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-async function runDynamicTask() {
-  const taskId = state.dynamic.selectedTaskId;
-  if (!taskId) { setStatus("Seleccioná un tipo de análisis primero."); return; }
-  const task = state.dynamic.tasks.find((t) => t.id === taskId);
-  const comboSelect = document.getElementById("dynComboSelect");
-  const comboIdx = Number(comboSelect.value || 0);
-  const combo = (task?.combos || [])[comboIdx] || null;
-
-  const datasetsPayload = {};
-  if (state.datasets.sales.sourceMode === "erp" || state.datasets.sales.sourceMode === "mongo" || state.datasets.sales.sourceMode === "clickhouse" || state.datasets.sales.sourceMode === "auto") {
-    const { fechaDesde, fechaHasta } = state.datasets.sales.erp;
-    if (!fechaDesde || !fechaHasta) {
-      setStatus(isBiSurface ? "Elegí fecha desde y fecha hasta para consultar la base comercial." : "Elegí fecha desde y fecha hasta para consultar ventas ERP.");
-      return;
-    }
-    datasetsPayload.sales = {
-      source: state.datasets.sales.sourceMode,
-      fechaDesde,
-      fechaHasta,
-      erp: { enabled: state.datasets.sales.sourceMode === "erp", fechaDesde, fechaHasta },
-    };
-  } else {
-    const salesSources = state.datasets.sales.sources
-      .filter((s) => s.file && s.sheet)
-      .map((s) => ({ file: s.file, sheet: s.sheet, headerRow: Number(s.headerRow || 0) }));
-    if (!salesSources.length) { setStatus("No hay datos cargados para analizar."); return; }
-    datasetsPayload.sales = { source: "files", sources: salesSources, mapping: state.datasets.sales.mapping };
-  }
-
-  for (const dt of datasetOrder.filter((d) => d !== "sales")) {
-    const ds = state.datasets[dt];
-    if (ds.file && ds.sheet) {
-      datasetsPayload[dt] = { file: ds.file, sheet: ds.sheet, headerRow: Number(ds.headerRow || 0), mapping: ds.mapping };
-    }
-  }
-
-  const btn = document.getElementById("dynRunBtn");
-  btn.disabled = true;
-  setStatus(`Ejecutando: ${task?.label || taskId}...`);
-  try {
-    const data = await withProgress(`Ejecutando: ${task?.label || taskId}...`, () => api("/api/analyze-dynamic", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ datasets: datasetsPayload, filters: serializeFilters(), supplierFocus: normalizeSupplierFocusSelection(), task_id: taskId, combo }),
-    }), {
-      operationType: "dynamic",
-      fechaDesde: state.datasets.sales.erp?.fechaDesde,
-      fechaHasta: state.datasets.sales.erp?.fechaHasta,
-      sourceMode: state.datasets.sales.sourceMode,
-    });
-    renderDynKpis(data.kpiSet || {});
-    renderDynInsights(data.insights || [], data.insightsSummary || {});
-    document.getElementById("dynSemaphores").innerHTML = renderDynSemaphoresHtml(data.kpiSet?.semaphores || []);
-    renderVizSpec(data.vizSpec, "dynViz");
-    setStatus(`Análisis: ${task?.label || taskId}${combo ? " — " + combo.label : ""}`);
-  } catch (err) {
-    showError(err);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-function renderDynKpis(kpiSet) {
-  const kpis = kpiSet.kpis || [];
-  document.getElementById("dynKpiCards").innerHTML = kpis.slice(0, 8).map((k) => {
-    const fmtVal = fmtKpiValue(k.value, k.format);
-    const delta  = k.delta != null
-      ? `<div class="dyn-kpi-delta ${k.delta_dir || "flat"}">${k.delta >= 0 ? "▲" : "▼"} ${Math.abs(k.delta).toFixed(1)}${k.format === "pct" ? "%" : ""}</div>`
-      : "";
-    return `
-      <div class="dyn-kpi-card">
-        <div class="dyn-kpi-label">${escapeHtml(k.label)}</div>
-        <div class="dyn-kpi-value">${escapeHtml(fmtVal)}</div>
-        ${delta}
-        <div class="dyn-kpi-context muted">${escapeHtml(k.context || "")}</div>
-      </div>`;
-  }).join("");
-}
-
-function renderDynInsights(insights, summary) {
-  const typeLabels = { alert: "Alerta", opportunity: "Oportunidad", positive: "Positivo", trend: "Tendencia", context: "Contexto" };
-  document.getElementById("dynInsightsList").innerHTML = (insights || []).map((ins) => `
-    <div class="insight-item">
-      <span class="ins-badge ins-${ins.type}">${escapeHtml(typeLabels[ins.type] || ins.type)}</span>
-      ${escapeHtml(ins.text)}
-    </div>
-  `).join("") || "<div class='muted'>Sin insights para los datos actuales.</div>";
-}
-
-function renderDynSemaphoresHtml(semaphores) {
-  return (semaphores || []).map((s) => `
-    <div class="semaphore">
-      <div><span class="dot ${s.color}"></span><strong>${escapeHtml(s.label)}</strong></div>
-      <div class="muted">${escapeHtml(s.detail)}</div>
-    </div>
-  `).join("") || "<div class='muted'>Sin semáforos.</div>";
-}
-
-function fmtKpiValue(value, format) {
-  if (format === "money") return money(value);
-  if (format === "pct")   return `${Number(value).toFixed(1)}%`;
-  if (format === "int")   return Number(value).toLocaleString("es-AR");
-  return escapeHtml(String(value ?? ""));
-}
-
-function renderVizSpec(spec, containerId) {
-  const container = document.getElementById(containerId);
-  if (!spec || spec.empty || !spec.series?.length) {
-    container.innerHTML = "<div class='muted'>Sin datos suficientes para visualizar.</div>";
-    return;
-  }
-  const fmt = spec.format === "money" ? money
-    : spec.format === "pct" ? (v) => `${Number(v).toFixed(1)}%`
-    : (v) => Number(v).toLocaleString("es-AR");
-  const main = spec.series[0];
-  let vizHtml = "";
-  if (spec.type === "line" || spec.type === "area") {
-    vizHtml = spec.series.length > 1
-      ? renderMultiLineChart(spec.series, fmt)
-      : renderLineChart((main?.data || []).map((p) => ({ label: p.x, value: p.y })), fmt);
-  } else if (spec.type === "bar" || spec.type === "stacked_bar") {
-    const items = (main?.data || []).map((p) => ({ label: p.x, value: p.y }));
-    vizHtml = renderBars(items, fmt);
-  } else if (spec.type === "bar_horizontal") {
-    vizHtml = renderBarHorizontal(main?.data || [], fmt);
-  } else if (spec.type === "donut") {
-    vizHtml = renderDonutSVG(main?.data || [], fmt);
-  } else if (spec.type === "scatter") {
-    vizHtml = renderScatterSVG(main?.data || [], spec.axes || {});
-  } else {
-    const items = (main?.data || []).map((p) => ({ label: p.x, value: p.y }));
-    vizHtml = renderBars(items, fmt);
-  }
-  container.innerHTML = `<div class="dyn-viz-title">${escapeHtml(spec.title)}</div>` + vizHtml;
-}
-
-function renderBarHorizontal(data, formatter) {
-  if (!data.length) return "<div class='muted'>Sin datos.</div>";
-  const maxVal = Math.max(...data.map((p) => Math.abs(p.y)), 1);
-  return `<div class="bars">${data.slice(0, 10).map((p) => {
-    const w = Math.max(Math.abs(p.y) / maxVal * 100, 2);
-    const extra = p.z != null ? ` <span class="muted">(${typeof p.z === "number" ? p.z.toFixed(1) + "%" : p.z})</span>` : "";
-    return `
-      <div class="bar-row">
-        <div class="bar-label">
-          <span>${escapeHtml(String(p.x))}${extra}</span>
-          <span>${formatter(p.y)}</span>
-        </div>
-        <div class="bar-track"><div class="bar-fill" style="width:${w}%"></div></div>
-      </div>`;
-  }).join("")}</div>`;
-}
-
-function renderDonutSVG(data, formatter) {
-  if (!data.length) return "<div class='muted'>Sin datos.</div>";
-  const total = data.reduce((s, p) => s + Math.abs(p.y), 0) || 1;
-  const cx = 100, cy = 100, r = 70, sw = 36;
-  const circ = 2 * Math.PI * r;
-  const colors = ["#0f766e","#1d4ed8","#b45309","#7c3aed","#be185d","#15803d","#b91c1c","#0369a1"];
-  let offset = 0;
-  const slices = data.map((p, i) => {
-    const pct  = Math.abs(p.y) / total;
-    const dash = pct * circ;
-    const gap  = circ - dash;
-    const slice = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${colors[i % colors.length]}" stroke-width="${sw}" stroke-dasharray="${dash.toFixed(2)} ${gap.toFixed(2)}" stroke-dashoffset="${(-offset * circ).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})" />`;
-    offset += pct;
-    return slice;
-  });
-  const legend = data.slice(0, 8).map((p, i) => `
-    <div class="donut-legend-item">
-      <span class="donut-dot" style="background:${colors[i % colors.length]}"></span>
-      <span>${escapeHtml(String(p.x))}</span>
-      <span class="muted">${formatter(p.y)} · ${((Math.abs(p.y)/total)*100).toFixed(1)}%</span>
-    </div>`).join("");
-  return `<div class="donut-wrap"><svg viewBox="0 0 200 200" class="donut-svg">${slices.join("")}</svg><div class="donut-legend">${legend}</div></div>`;
-}
-
-function renderScatterSVG(data, axes) {
-  if (!data.length) return "<div class='muted'>Sin datos.</div>";
-  const W = 500, H = 300, pad = 45;
-  const xs = data.map((p) => p.x), ys = data.map((p) => p.y);
-  const minX = Math.min(...xs), maxX = Math.max(...xs) || 1;
-  const minY = Math.min(0, Math.min(...ys)), maxY = Math.max(...ys) || 1;
-  const sx = (v) => pad + (v - minX) / (maxX - minX || 1) * (W - pad * 2);
-  const sy = (v) => H - pad - (v - minY) / (maxY - minY || 1) * (H - pad * 2);
-  const dots = data.slice(0, 20).map((p) => {
-    const lbl = p.z ? escapeHtml(String(p.z)) : "";
-    return `<g><circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="5" fill="#0f766e" fill-opacity="0.75" />${lbl ? `<title>${lbl}</title>` : ""}</g>`;
-  });
-  return `<svg viewBox="0 0 ${W} ${H}" class="scatter-svg">
-    <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${H-pad}" stroke="#ccc" />
-    <line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#ccc" />
-    <text x="${W/2}" y="${H-8}" text-anchor="middle" font-size="11" fill="#999">${escapeHtml(axes.x || "X")}</text>
-    <text x="12" y="${H/2}" text-anchor="middle" font-size="11" fill="#999" transform="rotate(-90 12 ${H/2})">${escapeHtml(axes.y || "Y")}</text>
-    ${dots.join("")}
-  </svg>`;
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 
 function initializeVisualPreferences() {
@@ -7660,9 +7614,12 @@ bindClick("printTeamBrief", () => printSellerCoachSheet("team"));
 bindClick("printProductBrief", () => printProductSheet("sheet"));
 restorePrintOrientation();
 bindClick("printProductRanking", () => printProductSheet("ranking"));
-bindClick("dynRunBtn", () => runDynamicTask().catch(showError));
 bindClick("refreshAdminErrors", () => refreshAdminErrors().catch(showError));
 bindClick("logoutBtn", () => logout().catch(showError));
+bindClick("openSellerPortfolio", () => {
+  const select = document.getElementById("sellerBriefSelect");
+  openSellerPortfolio(select?.selectedOptions?.[0]?.textContent?.trim() || "");
+});
 bindClick("closeSalesCoachDetail", () => {
   const panel = document.getElementById("salesCoachDetailPanel");
   if (panel) panel.classList.add("hidden");
@@ -7719,4 +7676,18 @@ window.addEventListener("resize", () => {
   });
 });
 
-initializeAuthentication().then(boot).catch(showError);
+initializePdv360Controls();
+initializeAuthentication()
+  .then(boot)
+  .then(() => {
+    // La vista 360 no depende del informe comercial: abre directo desde la URL.
+    const params = new URLSearchParams(window.location.search);
+    if (window.location.pathname === "/pdv" && params.get("clientKey")) {
+      return openPdv360(params.get("clientKey"), false);
+    }
+    if (window.location.pathname === "/pdv" && Object.keys(PDV_PORTFOLIO_URL_FILTERS).some((key) => params.get(key))) {
+      return openPdvPortfolioFromUrl(params);
+    }
+    return null;
+  })
+  .catch(showError);

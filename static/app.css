@@ -3150,3 +3150,382 @@ textarea {
   display: block;
   margin-top: 8px;
 }
+
+/* --- PDV 360 --------------------------------------------------------------- */
+
+.pdv360 .pdv-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin: 8px 0 16px;
+}
+
+.pdv360 .pdv-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.pdv360 .pdv-search {
+  position: relative;
+  flex: 1 1 320px;
+  max-width: 520px;
+}
+
+.pdv360 .pdv-search input {
+  width: 100%;
+}
+
+.pdv-search-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  margin-top: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.pdv-search-results button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pdv-search-results button:hover {
+  background: var(--brand-soft);
+}
+
+.pdv-search-results button span,
+.pdv-search-results .muted {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pdv-search-results .muted {
+  padding: 10px 12px;
+}
+
+.pdv-empty {
+  padding: 24px 0;
+}
+
+.pdv-identity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.pdv-chip {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--paper-2);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.pdv-chip.good {
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  color: var(--ok);
+}
+
+.pdv-chip.warn {
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+
+.pdv-chip.bad {
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+.pdv-company-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.pdv-company-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--company-color, var(--brand));
+  border-radius: 14px;
+  background: var(--paper);
+}
+
+.pdv-company-card.is-empty {
+  background: var(--paper-2);
+}
+
+.pdv-company-name {
+  font-weight: 700;
+}
+
+.pdv-company-skus {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.pdv-company-skus strong {
+  font-size: 30px;
+  line-height: 1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.pdv-company-sales,
+.pdv-company-peer,
+.pdv-company-via {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pdv-company-via {
+  color: var(--ink);
+}
+
+.pdv-opportunities {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pdv-opportunity {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+}
+
+.pdv-opportunity-rank {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--brand);
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.pdv-opportunity-title {
+  font-weight: 700;
+}
+
+.pdv-opportunity-how {
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--brand);
+  background: var(--brand-soft);
+  border-radius: 0 8px 8px 0;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.pdv-opportunity-potential {
+  text-align: right;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pdv-opportunity-potential span {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.pdv-table-wrap {
+  overflow-x: auto;
+}
+
+.pdv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.pdv-table th {
+  padding: 8px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.pdv-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.pdv-table td:nth-child(n + 2) {
+  font-variant-numeric: tabular-nums;
+}
+
+.pdv-bar {
+  width: 100%;
+  max-width: 120px;
+  height: 5px;
+  margin-top: 4px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.pdv-bar span {
+  display: block;
+  height: 100%;
+  background: var(--brand);
+}
+
+.pdv-bar span.warn {
+  background: var(--warn);
+}
+
+.pdv-bar span.bad {
+  background: var(--danger);
+}
+
+.pdv-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+@media (max-width: 720px) {
+  .pdv-opportunity {
+    grid-template-columns: 28px 1fr;
+  }
+
+  .pdv-opportunity-potential {
+    grid-column: 2;
+    text-align: left;
+  }
+}
+
+.pdv-pen-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 170px) 1fr auto;
+  gap: 10px;
+  align-items: center;
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+.pdv-pen-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdv-pen-track {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--line);
+}
+
+.pdv-pen-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 5px;
+  background: var(--ok);
+}
+
+.pdv-pen-fill.warn {
+  background: var(--warn);
+}
+
+.pdv-pen-fill.bad {
+  background: var(--danger);
+}
+
+.pdv-pen-expected {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--ink);
+}
+
+.pdv-pen-value {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pdv360 h4 {
+  margin: 4px 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.tabulator-cell.pdv-cell-gap {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.tabulator-cell.pdv-cell-low {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+.tabulator-cell.pdv-cell-ok {
+  color: var(--ok);
+}
+
+.tabulator-cell.pdv-cell-na {
+  color: var(--muted);
+}
+
+.pdv-cell-peer {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* Comercial vs Sales Coach: secciones propias de cada superficie. */
+body[data-workspace="coach"] [data-workspace-only="bi"],
+body[data-workspace="bi"] [data-workspace-only="coach"] {
+  display: none !important;
+}
