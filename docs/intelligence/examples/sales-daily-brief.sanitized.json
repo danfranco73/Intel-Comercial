@@ -1,0 +1,773 @@
+{
+  "schema_version": "1.0",
+  "domain": "sales",
+  "status": "partial",
+  "generated_at": "2026-09-29T20:12:16.777448+00:00",
+  "period": {
+    "start": "2026-06-01",
+    "as_of": "2026-06-30",
+    "month_end": "2026-06-30",
+    "timezone": "America/Argentina/Cordoba",
+    "cutoff_basis": "requested_day"
+  },
+  "summary": {
+    "net_sales": {
+      "value": 270.0,
+      "metric_id": "net_sales",
+      "currency": null,
+      "currency_status": "not_configured",
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ]
+    },
+    "quantity": {
+      "value": 30.0,
+      "unit": "commercial_quantity",
+      "physical_unit_status": "unverified"
+    },
+    "active_clients": 3,
+    "objective": null,
+    "fulfillment_pct": null,
+    "closing_projection": {
+      "value": 270.0,
+      "quantity": 30.0,
+      "method": "existing_calendar_linear",
+      "seasonality_adjusted": false
+    },
+    "historical_benchmark": {
+      "value": 320.0,
+      "method": "Mediana de benchmarks",
+      "is_approved_objective": false,
+      "status": "available"
+    },
+    "comparisons": [
+      {
+        "id": "mom_mtd",
+        "status": "complete",
+        "start": "2026-05-01",
+        "end": "2026-05-30",
+        "alignment": "same_calendar_day",
+        "business_day_adjusted": false,
+        "sales": {
+          "current": 270.0,
+          "previous": 320.0,
+          "delta": -50.0,
+          "delta_pct": -15.6,
+          "status": "comparable"
+        },
+        "quantity": {
+          "current": 30.0,
+          "previous": 40.0,
+          "delta": -10.0,
+          "delta_pct": -25.0,
+          "status": "comparable"
+        }
+      },
+      {
+        "id": "yoy_mtd",
+        "status": "complete",
+        "start": "2025-06-01",
+        "end": "2025-06-30",
+        "alignment": "same_calendar_day",
+        "business_day_adjusted": false,
+        "sales": {
+          "current": 270.0,
+          "previous": 0,
+          "delta": 270.0,
+          "delta_pct": null,
+          "status": "zero_baseline"
+        },
+        "quantity": {
+          "current": 30.0,
+          "previous": 0,
+          "delta": 30.0,
+          "delta_pct": null,
+          "status": "zero_baseline"
+        }
+      }
+    ],
+    "objectives": [],
+    "budget": {
+      "source": "user_preferences",
+      "approved": false,
+      "data": {
+        "config": {
+          "dimension": "total",
+          "volumeGrowthPct": 0.0,
+          "monthlyTotals": {},
+          "dimensionShares": {
+            "channel": {},
+            "seller": {},
+            "family": {}
+          }
+        },
+        "summary": {
+          "monthsBudgeted": 0,
+          "latestBudget": 0.0,
+          "latestGapValue": 270.0,
+          "latestGapPct": 100.0,
+          "totalBudget": 0.0,
+          "totalGapValue": 590.0,
+          "totalGapPct": 100.0,
+          "dimension": "total",
+          "latestPeriod": "2026-06"
+        },
+        "kpis": [
+          {
+            "label": "Meses con plan",
+            "value": 0,
+            "format": "int",
+            "sub": "histórico visible",
+            "tone": "neutral"
+          },
+          {
+            "label": "Plan último mes",
+            "value": 0.0,
+            "format": "money",
+            "sub": "2026-06",
+            "tone": "neutral"
+          },
+          {
+            "label": "Gap último mes",
+            "value": 100.0,
+            "format": "pct",
+            "sub": "real vs plan",
+            "tone": "good"
+          },
+          {
+            "label": "Gap acumulado",
+            "value": 590.0,
+            "format": "money",
+            "sub": "real vs plan visible",
+            "tone": "good"
+          }
+        ],
+        "charts": {
+          "monthly": [
+            {
+              "label": "2026-05",
+              "sales": 320.0,
+              "quantity": 40.0,
+              "clients": 3,
+              "orders": 2,
+              "rolling3": 320.0,
+              "rolling6": 320.0,
+              "budgetTotal": 0.0,
+              "gapValue": 320.0,
+              "gapPct": 100.0
+            },
+            {
+              "label": "2026-06",
+              "sales": 270.0,
+              "quantity": 30.0,
+              "clients": 3,
+              "orders": 3,
+              "rolling3": 295.0,
+              "rolling6": 295.0,
+              "budgetTotal": 0.0,
+              "gapValue": 270.0,
+              "gapPct": 100.0
+            }
+          ],
+          "dimension": [
+            {
+              "label": "Total",
+              "actualSales": 270.0,
+              "actualSharePct": 100.0,
+              "budgetSharePct": 0.0,
+              "budgetSales": 0.0,
+              "gapValue": 270.0,
+              "gapPct": 100.0
+            }
+          ]
+        },
+        "rows": [
+          {
+            "label": "2026-05",
+            "sales": 320.0,
+            "quantity": 40.0,
+            "clients": 3,
+            "orders": 2,
+            "rolling3": 320.0,
+            "rolling6": 320.0,
+            "budgetTotal": 0.0,
+            "gapValue": 320.0,
+            "gapPct": 100.0
+          },
+          {
+            "label": "2026-06",
+            "sales": 270.0,
+            "quantity": 30.0,
+            "clients": 3,
+            "orders": 3,
+            "rolling3": 295.0,
+            "rolling6": 295.0,
+            "budgetTotal": 0.0,
+            "gapValue": 270.0,
+            "gapPct": 100.0
+          }
+        ],
+        "forecast": {
+          "period": "2026-07",
+          "basePeriods": [
+            "2026-05",
+            "2026-06"
+          ],
+          "pricePeriod": "2026-06",
+          "growthPct": 0.0,
+          "lines": [
+            {
+              "label": "Línea 1",
+              "average3Quantity": 17.5,
+              "growthPct": 0.0,
+              "targetQuantity": 17.5,
+              "lastUnitValue": 9.0,
+              "targetSales": 157.5
+            },
+            {
+              "label": "Línea 2",
+              "average3Quantity": 17.5,
+              "growthPct": 0.0,
+              "targetQuantity": 17.5,
+              "lastUnitValue": 9.0,
+              "targetSales": 157.5
+            }
+          ],
+          "sellers": [
+            {
+              "label": "Vendedora Norte",
+              "sharePct": 66.7,
+              "targetSales": 210.1
+            },
+            {
+              "label": "Vendedor Sur",
+              "sharePct": 33.3,
+              "targetSales": 104.89
+            }
+          ],
+          "sellerShareTotalPct": 100.0,
+          "totalQuantity": 35.0,
+          "totalSales": 315.0
+        },
+        "dimensionRows": [
+          {
+            "label": "Total",
+            "actualSales": 270.0,
+            "actualSharePct": 100.0,
+            "budgetSharePct": 0.0,
+            "budgetSales": 0.0,
+            "gapValue": 270.0,
+            "gapPct": 100.0
+          }
+        ],
+        "dimensionBaseRows": [
+          {
+            "label": "Total",
+            "actualSales": 270.0,
+            "actualSharePct": 100.0,
+            "budgetSharePct": 0.0,
+            "budgetSales": 0.0,
+            "gapValue": 270.0,
+            "gapPct": 100.0
+          }
+        ],
+        "insights": [
+          "Todavía no hay presupuesto cargado para comparar el histórico contra plan."
+        ],
+        "alerts": []
+      }
+    },
+    "opportunities": {
+      "recoverDormantSales": 0.0,
+      "crossSellPotential": 32.4,
+      "routeOptimizationPotential": 0.0,
+      "familyFocusPotential": 8.1,
+      "totalPotential": 40.5,
+      "lowBreadthClients": 4,
+      "routesTracked": 2
+    }
+  },
+  "deviations": [
+    {
+      "id": "b07a53fb218a41eddee08850fa47d0ff155e9796139ee8cc2ec612e1456d8f2f",
+      "domain": "sales",
+      "entity": {
+        "dimension": "client",
+        "key": "C2"
+      },
+      "metric": "net_sales",
+      "comparison": {
+        "id": "mom_mtd",
+        "current": 90.0,
+        "previous": 180.0,
+        "delta": -90.0,
+        "delta_pct": -50.0,
+        "status": "comparable"
+      },
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "severity": "unassessed",
+      "probable_cause": null,
+      "suggested_owner": null,
+      "suggested_action": null,
+      "confidence": {
+        "level": "unknown",
+        "method": "not_calibrated"
+      },
+      "analytical_status": "observed",
+      "management_status": "detected",
+      "available_management_states": [
+        "detected",
+        "assigned",
+        "in_progress",
+        "resolved",
+        "escalated"
+      ]
+    },
+    {
+      "id": "c8cf2fcca7b8687fd3c23422400ceff589b585ec3b86c8b2881a985851b945d3",
+      "domain": "sales",
+      "entity": {
+        "dimension": "client",
+        "key": "LOST"
+      },
+      "metric": "net_sales",
+      "comparison": {
+        "id": "mom_mtd",
+        "current": 0,
+        "previous": 50,
+        "delta": -50,
+        "delta_pct": -100.0,
+        "status": "comparable"
+      },
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "severity": "unassessed",
+      "probable_cause": null,
+      "suggested_owner": null,
+      "suggested_action": null,
+      "confidence": {
+        "level": "unknown",
+        "method": "not_calibrated"
+      },
+      "analytical_status": "observed",
+      "management_status": "detected",
+      "available_management_states": [
+        "detected",
+        "assigned",
+        "in_progress",
+        "resolved",
+        "escalated"
+      ]
+    }
+  ],
+  "drilldowns": {
+    "dimension": "client",
+    "filters": {},
+    "hierarchy": [
+      "structure",
+      "channel",
+      "seller",
+      "supplier",
+      "family",
+      "line",
+      "product",
+      "client"
+    ],
+    "available_dimensions": [
+      "company",
+      "structure",
+      "sales_force",
+      "business_unit",
+      "channel",
+      "seller",
+      "route",
+      "supplier",
+      "family",
+      "line",
+      "product",
+      "client"
+    ],
+    "structure_alias": "sales_force",
+    "nodes": [
+      {
+        "key": "C2",
+        "name": "Cliente Dos",
+        "sales": {
+          "current": 90.0,
+          "previous": 180.0,
+          "delta": -90.0,
+          "delta_pct": -50.0,
+          "status": "comparable"
+        },
+        "sales_yoy": {
+          "current": 90.0,
+          "previous": 0,
+          "delta": 90.0,
+          "delta_pct": null,
+          "status": "zero_baseline"
+        },
+        "quantity": {
+          "current": 10.0,
+          "previous": 20.0,
+          "delta": -10.0,
+          "delta_pct": -50.0,
+          "status": "comparable"
+        },
+        "active_clients": 1,
+        "additive_metrics": [
+          "sales",
+          "quantity"
+        ],
+        "non_additive_metrics": [
+          "active_clients"
+        ]
+      },
+      {
+        "key": "LOST",
+        "name": "Cliente sólo anterior",
+        "sales": {
+          "current": 0,
+          "previous": 50,
+          "delta": -50,
+          "delta_pct": -100.0,
+          "status": "comparable"
+        },
+        "sales_yoy": {
+          "current": 0,
+          "previous": 0,
+          "delta": 0,
+          "delta_pct": null,
+          "status": "zero_baseline"
+        },
+        "quantity": {
+          "current": 0,
+          "previous": 10.0,
+          "delta": -10.0,
+          "delta_pct": -100.0,
+          "status": "comparable"
+        },
+        "active_clients": 0,
+        "additive_metrics": [
+          "sales",
+          "quantity"
+        ],
+        "non_additive_metrics": [
+          "active_clients"
+        ]
+      },
+      {
+        "key": "C1",
+        "name": "Cliente Uno",
+        "sales": {
+          "current": 135.0,
+          "previous": 90.0,
+          "delta": 45.0,
+          "delta_pct": 50.0,
+          "status": "comparable"
+        },
+        "sales_yoy": {
+          "current": 135.0,
+          "previous": 0,
+          "delta": 135.0,
+          "delta_pct": null,
+          "status": "zero_baseline"
+        },
+        "quantity": {
+          "current": 15.0,
+          "previous": 10.0,
+          "delta": 5.0,
+          "delta_pct": 50.0,
+          "status": "comparable"
+        },
+        "active_clients": 1,
+        "additive_metrics": [
+          "sales",
+          "quantity"
+        ],
+        "non_additive_metrics": [
+          "active_clients"
+        ]
+      },
+      {
+        "key": "C3",
+        "name": "Cliente Tres",
+        "sales": {
+          "current": 45.0,
+          "previous": 0,
+          "delta": 45.0,
+          "delta_pct": null,
+          "status": "zero_baseline"
+        },
+        "sales_yoy": {
+          "current": 45.0,
+          "previous": 0,
+          "delta": 45.0,
+          "delta_pct": null,
+          "status": "zero_baseline"
+        },
+        "quantity": {
+          "current": 5.0,
+          "previous": 0,
+          "delta": 5.0,
+          "delta_pct": null,
+          "status": "zero_baseline"
+        },
+        "active_clients": 1,
+        "additive_metrics": [
+          "sales",
+          "quantity"
+        ],
+        "non_additive_metrics": [
+          "active_clients"
+        ]
+      }
+    ],
+    "total_nodes": 4,
+    "limit": 50,
+    "offset": 0,
+    "totals": {
+      "current": 270.0,
+      "previous": 320.0,
+      "delta": -50.0,
+      "delta_pct": -15.6,
+      "status": "comparable"
+    },
+    "ranking": "absolute_sales_delta",
+    "endpoint": "/api/intelligence/sales/drilldown"
+  },
+  "explanations": [
+    {
+      "origin": "existing_deterministic_engine",
+      "analytical_status": "legacy_rule",
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "content": "En 01/06/2026 al 30/06/2026 el volumen cae -25.0%, con 3 pedidos y 30 bultos frente a 01/05/2026 al 30/05/2026."
+    },
+    {
+      "origin": "existing_deterministic_engine",
+      "analytical_status": "legacy_rule",
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "content": "La productividad comercial actual equivale a 15.0 bultos por vendedor activo, con 10.0 bultos por pedido y $9 por bulto."
+    },
+    {
+      "origin": "existing_deterministic_engine",
+      "analytical_status": "legacy_rule",
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "content": "El mix activo hoy cubre 2 marcas, 0 unidades de negocio y 2 canales. La marca líder concentra 50.0% y el canal principal 66.7%."
+    },
+    {
+      "origin": "existing_deterministic_engine",
+      "analytical_status": "legacy_rule",
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "content": "La calidad de datos para BI queda en rutas 100.0%, artículos 100.0% y vendedores 100.0% de cobertura sobre ventas."
+    },
+    {
+      "origin": "existing_deterministic_engine",
+      "analytical_status": "legacy_rule",
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "content": "La proyección base para julio 2026 es 26 bultos, apoyada en una base media de 30 bultos por período y una tendencia de -25.0%."
+    },
+    {
+      "origin": "existing_deterministic_engine",
+      "analytical_status": "legacy_rule",
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "content": "Las palancas más claras hoy son recuperar cartera dormida ($0), venta cruzada ($32) y optimización de ruteo ($0)."
+    }
+  ],
+  "recommended_actions": [
+    {
+      "origin": "existing_deterministic_engine",
+      "analytical_status": "legacy_rule",
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "action": {
+        "title": "Plan de profundización de surtido",
+        "priority": "Alta",
+        "owner": "Ventas + trade",
+        "horizon": "30 días",
+        "detail": "Trabajar clientes activos de baja profundidad para capturar $32."
+      }
+    },
+    {
+      "origin": "existing_deterministic_engine",
+      "analytical_status": "legacy_rule",
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "action": {
+        "title": "Revisar proyección de la próxima ventana",
+        "priority": "Alta",
+        "owner": "Dirección comercial",
+        "horizon": "Próximo comité",
+        "detail": "Tomar la base proyectada de $245 para julio 2026 y convertirla en meta por zona y vendedor."
+      }
+    },
+    {
+      "origin": "existing_deterministic_engine",
+      "analytical_status": "legacy_rule",
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "action": {
+        "title": "Atender alerta principal",
+        "priority": "Alta",
+        "owner": "Gerencia comercial",
+        "horizon": "Inmediato",
+        "detail": "El top 10 concentra 100.0% de la venta."
+      }
+    }
+  ],
+  "data_quality": {
+    "issues": [
+      {
+        "code": "APPLICABLE_SALES_OBJECTIVE_MISSING"
+      },
+      {
+        "code": "QUANTITY_UNIT_UNVERIFIED"
+      },
+      {
+        "code": "CURRENCY_UNCONFIGURED"
+      }
+    ],
+    "coverage": {
+      "current": {
+        "status": "complete",
+        "start": "2026-06-01",
+        "end": "2026-06-30"
+      },
+      "mom": {
+        "status": "complete",
+        "start": "2026-05-01",
+        "end": "2026-05-30"
+      },
+      "yoy": {
+        "status": "complete",
+        "start": "2025-06-01",
+        "end": "2025-06-30"
+      },
+      "history": {
+        "status": "complete",
+        "start": "2025-06-01",
+        "end": "2026-06-30"
+      }
+    },
+    "expectation_model": {
+      "status": "not_modeled",
+      "supported_future_context": [
+        "business_day",
+        "intramonth",
+        "annual",
+        "channel",
+        "structure"
+      ]
+    },
+    "evidence": [
+      {
+        "id": "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a",
+        "source": "clickhouse",
+        "metric_version": "existing_v1",
+        "record_count": 6
+      }
+    ]
+  },
+  "context_id": "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a",
+  "scope": {
+    "filters": {},
+    "seller_attribution": "current_portfolio"
+  },
+  "legacy_alerts": [
+    {
+      "origin": "existing_deterministic_engine",
+      "seasonality_calibrated": false,
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "alert": {
+        "category": "Cartera",
+        "title": "Alta concentración en pocos clientes",
+        "detail": "El top 10 concentra 100.0% de la venta.",
+        "severity": "high"
+      }
+    },
+    {
+      "origin": "existing_deterministic_engine",
+      "seasonality_calibrated": false,
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "alert": {
+        "category": "Vendedores",
+        "title": "Dependencia comercial en pocos vendedores",
+        "detail": "Los 3 principales vendedores explican 100.0% de la venta.",
+        "severity": "medium"
+      }
+    },
+    {
+      "origin": "existing_deterministic_engine",
+      "seasonality_calibrated": false,
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "alert": {
+        "category": "Mix",
+        "title": "Familia B en retracción",
+        "detail": "La familia cae -25.0% contra 01/05/2026 al 30/05/2026.",
+        "severity": "medium"
+      }
+    },
+    {
+      "origin": "existing_deterministic_engine",
+      "seasonality_calibrated": false,
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "alert": {
+        "category": "Territorio",
+        "title": "Concentración alta por fuerza de ventas",
+        "detail": "Las 3 fuerzas de ventas principales explican 100.0% de la venta.",
+        "severity": "medium"
+      }
+    },
+    {
+      "origin": "existing_deterministic_engine",
+      "seasonality_calibrated": false,
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "alert": {
+        "category": "Mix",
+        "title": "Dependencia alta de una sola marca",
+        "detail": "La marca líder explica 50.0% de la venta.",
+        "severity": "medium"
+      }
+    },
+    {
+      "origin": "existing_deterministic_engine",
+      "seasonality_calibrated": false,
+      "evidence_ids": [
+        "0e789490fed5976cfa9e1368fa90f84dfbcac9f14ce36e698ff34769025cf59a"
+      ],
+      "alert": {
+        "category": "Canal",
+        "title": "Concentración alta por canal",
+        "detail": "El canal líder concentra 66.7% de la venta.",
+        "severity": "medium"
+      }
+    }
+  ]
+}

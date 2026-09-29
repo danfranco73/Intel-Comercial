@@ -21,9 +21,9 @@ APPROVE_ROLES = {"admin", "commercial_director"}
 
 
 class ObjectiveService:
-    def __init__(self, db):
+    def __init__(self, db, *, initialize_indexes=True):
         self.db = db
-        self.repository = ObjectiveRepository(db)
+        self.repository = ObjectiveRepository(db, initialize_indexes=initialize_indexes)
         self.default_company_key = (
             os.getenv("DEFAULT_COMPANY_KEY") or DEFAULT_COMPANY_KEY
         ).strip()
@@ -111,9 +111,9 @@ class ObjectiveService:
         self._get_authorized(objective_id, user, data_scope)
         return self.repository.history(objective_id)
 
-    def calculate_progress(self, objective: dict[str, Any]) -> dict[str, Any]:
+    def calculate_progress(self, objective: dict[str, Any], *, metric_provider=None, as_of=None) -> dict[str, Any]:
         start, end = self._period_range(objective["period"])
-        current_value = self._metric_value(
+        current_value = (metric_provider or self._metric_value)(
             objective["metric"],
             start,
             end,
@@ -123,7 +123,7 @@ class ObjectiveService:
         target = Decimal(str(objective["target_value"]))
         gap = current_value - target
         fulfillment = (current_value / target * Decimal("100")) if target else Decimal("0")
-        today = date.today()
+        today = as_of or date.today()
         if start <= today <= end:
             elapsed = (today - start).days + 1
             total = (end - start).days + 1
@@ -151,7 +151,7 @@ class ObjectiveService:
             "trend_pct": self._number(trend_pct) if trend_pct is not None else None,
             "period_start": start.isoformat(),
             "period_end": end.isoformat(),
-            "calculated_at": date.today().isoformat(),
+            "calculated_at": today.isoformat(),
             "formula": self._formula(objective["metric"]),
         }
 

@@ -1,0 +1,134 @@
+{
+  "schema_version": "1.0",
+  "domain": "stock",
+  "status": "partial",
+  "generated_at": "2026-09-29T20:12:16.781661+00:00",
+  "period": {
+    "stock_date": "2026-09-29",
+    "capture_started_at": "2026-09-29T20:12:16.781188+00:00",
+    "capture_finished_at": "2026-09-29T20:12:16.781512+00:00"
+  },
+  "summary": {
+    "snapshot_id": "446242157d3b4c09b48cdbe282fc0f72",
+    "observations": 2,
+    "distinct_articles": 2,
+    "expected_deposits": [
+      "99001",
+      "99002"
+    ],
+    "deposits": [
+      {
+        "deposit_id": "99001",
+        "started_at": "2026-09-29T20:12:16.781253+00:00",
+        "finished_at": "2026-09-29T20:12:16.781368+00:00",
+        "duration_ms": 0,
+        "rows_received": 2,
+        "rows_valid": 2,
+        "distinct_articles": 2,
+        "observed_warehouse_ids": [
+          "0"
+        ],
+        "errors": [],
+        "coverage_status": "complete",
+        "attempts": 1
+      },
+      {
+        "deposit_id": "99002",
+        "started_at": "2026-09-29T20:12:16.781427+00:00",
+        "finished_at": "2026-09-29T20:12:16.781468+00:00",
+        "duration_ms": 0,
+        "rows_received": null,
+        "rows_valid": 0,
+        "distinct_articles": null,
+        "observed_warehouse_ids": [],
+        "errors": [
+          {
+            "code": "STOCK_CAPTURE_FAILED",
+            "error_type": "TimeoutError"
+          }
+        ],
+        "coverage_status": "failed",
+        "attempts": 1
+      }
+    ],
+    "quantity_total": null,
+    "quantity_total_reason": "HETEROGENEOUS_PRODUCTS_AND_UNITS"
+  },
+  "deviations": [],
+  "drilldowns": {
+    "hierarchy": [
+      "group",
+      "company",
+      "branch",
+      "deposit",
+      "warehouse",
+      "product"
+    ],
+    "nodes": [
+      {
+        "company": null,
+        "branch": null,
+        "deposit_id": "99001",
+        "warehouse_id": "0",
+        "warehouse_metadata_status": "unverified",
+        "rows": 2,
+        "coverage_status": "complete",
+        "distinct_articles": 2
+      }
+    ],
+    "items_endpoint": "/api/intelligence/stock/items"
+  },
+  "explanations": [],
+  "recommended_actions": [],
+  "data_quality": {
+    "issues": [
+      {
+        "code": "PRODUCT_IDENTITY_UNVERIFIED"
+      },
+      {
+        "code": "UNIVERSE_UNVERIFIED"
+      },
+      {
+        "code": "LOCATION_RELATIONSHIPS_UNVERIFIED"
+      }
+    ],
+    "evidence": [
+      {
+        "id": "446242157d3b4c09b48cdbe282fc0f72",
+        "source": "ChessERP/stock",
+        "catalog_fingerprint": "39d4536701e77e8e1a0eb11d1591861677bce25f838ec5e0148276a29d5e87a2"
+      }
+    ],
+    "execution_coverage": "incomplete",
+    "universe_coverage": {
+      "status": "unknown",
+      "verified_at": null
+    },
+    "capabilities": {
+      "physical_stock": true,
+      "available_stock": false,
+      "committed_stock": false,
+      "days_of_supply": false,
+      "transfer_recommendations": false
+    },
+    "product_identity": {
+      "version": "4932658073ac4101d2fb6e0ec91fa9fa7b08bdde2775f49751dee971220c1605",
+      "row_counts": {
+        "verified": 1,
+        "ambiguous": 0,
+        "unknown": 1
+      }
+    },
+    "cross_domain": {
+      "allowed": false,
+      "blocking_reasons": [
+        "PRODUCT_IDENTITY_UNVERIFIED",
+        "UNITS_UNVERIFIED",
+        "LOCATION_UNVERIFIED"
+      ],
+      "heuristics_enabled": false
+    },
+    "capture_age_seconds": 0,
+    "max_capture_age_hours": 24
+  }
+}

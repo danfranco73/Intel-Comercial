@@ -29,6 +29,7 @@ DEFAULT_RETRY_DELAY = 0.75
 DEFAULT_SESSION_TTL = 1200
 
 _ERP_SESSION_LOCK = threading.Lock()
+_ERP_STOCK_LOCK = threading.Lock()
 _ERP_SESSION_CACHE = {
     "cookie": None,
     "response": None,
@@ -253,7 +254,36 @@ def fetch_articles_dataset(cookie=None):
         "headers": headers,
         "mapping": {},
         "records": records,
+        "identity_records": [
+            {"physical_article_id": _standard_key(row.get("idArticulo")),
+             "statistical_article_id": _standard_key(row.get("idArticuloEstadistico"))}
+            for row in raw_rows if row.get("idArticulo") and not row.get("anulado")
+        ],
     }
+
+
+def fetch_stock_dataset(deposit_id, stock_date, cookie=None):
+    """Read physical stock for one explicit deposit; never call movement APIs."""
+    from sales_coach.domain.stock import identifier
+    deposit = identifier(deposit_id)
+    day = date.fromisoformat(str(stock_date))
+    query = urlencode({"idDeposito": deposit, "frescura": "true", "fechaStock": day.strftime("%d/%m/%Y")})
+    with _ERP_STOCK_LOCK:
+        response, _ = _request_authenticated_json(
+            f"{get_erp_config()['base_url']}/stock/?{query}", cookie=cookie,
+            headers={"Accept": "application/json"})
+    def has_error(value):
+        if isinstance(value, dict):
+            return any((str(k).lower() in {"error", "errors"} and bool(v)) or has_error(v) for k, v in value.items())
+        return isinstance(value, list) and any(has_error(v) for v in value)
+    if not isinstance(response, dict) or has_error(response):
+        raise ERPError("Chess devolvió un error de stock")
+    container = response.get("dsStockFisicoApi", response)
+    rows = container.get("dsStock") if isinstance(container, dict) else None
+    if not isinstance(rows, list):
+        raise ERPError("Respuesta stock sin colección dsStock válida")
+    return {"records": rows, "deposit_id": deposit, "requested_stock_date": day.isoformat(),
+            "source": "ChessERP/stock", "frescura": True}
 
 
 def fetch_staff_dataset(cookie=None):

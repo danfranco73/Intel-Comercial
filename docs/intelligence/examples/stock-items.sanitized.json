@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0",
+  "snapshot_id": "446242157d3b4c09b48cdbe282fc0f72",
+  "rows": [
+    {
+      "physical_article_id": "77",
+      "deposit_id": "99001",
+      "warehouse_id": "0",
+      "article_name": "Producto sintético",
+      "packs": 2,
+      "units": 3,
+      "last_movement_date": "2026-09-01",
+      "expiry_date": "2026-12-01",
+      "raw": {
+        "idDeposito": 99001,
+        "idArticulo": 77,
+        "idAlmacen": 0,
+        "cantBultos": 2,
+        "cantUnidades": 3,
+        "fecha": "2026-09-01",
+        "fecVtoLote": "2026-12-01",
+        "dsArticulo": "Producto sintético",
+        "extra_dimension": "retained"
+      },
+      "source_ordinal": 0,
+      "product_identity": {
+        "version": "4932658073ac4101d2fb6e0ec91fa9fa7b08bdde2775f49751dee971220c1605",
+        "statistical_article_ids": [
+          "S77"
+        ],
+        "status": "verified"
+      },
+      "snapshot_id": "446242157d3b4c09b48cdbe282fc0f72",
+      "ordinal": 0,
+      "captured_at": "2026-09-29T20:12:16.781320+00:00"
+    },
+    {
+      "physical_article_id": "78",
+      "deposit_id": "99001",
+      "warehouse_id": "0",
+      "article_name": "Producto sintético",
+      "packs": 0,
+      "units": 0,
+      "last_movement_date": "2026-09-01",
+      "expiry_date": "2026-12-01",
+      "raw": {
+        "idDeposito": 99001,
+        "idArticulo": 78,
+        "idAlmacen": 0,
+        "cantBultos": 0,
+        "cantUnidades": 0,
+        "fecha": "2026-09-01",
+        "fecVtoLote": "2026-12-01",
+        "dsArticulo": "Producto sintético",
+        "extra_dimension": "retained"
+      },
+      "source_ordinal": 1,
+      "product_identity": {
+        "version": "4932658073ac4101d2fb6e0ec91fa9fa7b08bdde2775f49751dee971220c1605",
+        "status": "unknown",
+        "statistical_article_ids": []
+      },
+      "snapshot_id": "446242157d3b4c09b48cdbe282fc0f72",
+      "ordinal": 1,
+      "captured_at": "2026-09-29T20:12:16.781320+00:00"
+    }
+  ],
+  "total": 2,
+  "limit": 50,
+  "offset": 0
+}

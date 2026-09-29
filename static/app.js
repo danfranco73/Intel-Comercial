@@ -51,8 +51,10 @@ const UI_CACHE_DB = "codenoa_sales_coach_ui";
 const UI_CACHE_STORE = "reports";
 
 function uiCacheKey() {
+  // Un informe guardado por superficie: los filtros de Comercial no deben
+  // condicionar a Sales Coach ni al revés.
   const user = state.auth.user || {};
-  return String(user.id || user.email || "anonymous");
+  return `${String(user.id || user.email || "anonymous")}:${workspace}`;
 }
 
 function openUiCache() {
@@ -1090,6 +1092,11 @@ function renderClickHouseSalesPanel(erp) {
 }
 
 function normalizeSupplierFocusSelection(rawValue = state.supplierFocus) {
+  // El proveedor foco es análisis de negocio: en Sales Coach nunca aplica.
+  if (workspace !== "bi") {
+    state.supplierFocus = "";
+    return "";
+  }
   const options = state.prefilters.available?.supplier?.options || [];
   const match = options.find((option) => normalizeText(option.value) === normalizeText(rawValue));
   state.supplierFocus = match ? String(match.value) : "";
@@ -2540,7 +2547,8 @@ function buildSalesCoachHomeFromReport(report) {
 function renderResults(data) {
   document.getElementById("results").classList.remove("hidden");
   state.reportView.lastData = data;
-  state.supplierFocus = data.supplierFocus?.selected ? (data.supplierFocus.supplier || "") : normalizeSupplierFocusSelection();
+  state.supplierFocus = data.supplierFocus?.selected ? (data.supplierFocus.supplier || "") : "";
+  normalizeSupplierFocusSelection();
   state.filters.available = data.availableFilters || {};
   state.filters.selected = normalizeSelectedFilters(data.appliedFilters || {}, state.filters.available);
   renderFilterPanel(data.meta);
@@ -6903,6 +6911,9 @@ function bindFilterEvents() {
   if (clearButton) {
     clearButton.addEventListener("click", () => {
       state.filters.selected = normalizeSelectedFilters({}, state.filters.available);
+      // El proveedor foco también restringe el informe: limpiar lo quita.
+      state.supplierFocus = "";
+      renderDatasetConfigs();
       analyze().catch(showError);
     });
   }

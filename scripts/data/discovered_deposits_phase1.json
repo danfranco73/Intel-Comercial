@@ -1,0 +1,11 @@
+[
+  {"deposit_id": "1", "deposit_name": "CASA CENTRAL"},
+  {"deposit_id": "4", "deposit_name": "MAYORISTA"},
+  {"deposit_id": "5", "deposit_name": "DEP PRODUNOA"},
+  {"deposit_id": "6", "deposit_name": "DEPOSITO PYMES INDEPENDENCIA"},
+  {"deposit_id": "7", "deposit_name": "DEPOSITO PYMES LUGONES"},
+  {"deposit_id": "8", "deposit_name": "DEPOSITO PYMES BELGRANO"},
+  {"deposit_id": "20", "deposit_name": "FRESCO"},
+  {"deposit_id": "22", "deposit_name": "DEP TP LA BANDA"},
+  {"deposit_id": "23", "deposit_name": "TP CAMINOCOSTA"}
+]

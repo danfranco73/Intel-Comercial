@@ -67,6 +67,7 @@ from sales_coach.routes.coach_rule_routes import CoachRuleRoutesMixin
 from sales_coach.routes.alert_routes import AlertRoutesMixin
 from sales_coach.routes.meeting_routes import MeetingRoutesMixin
 from sales_coach.routes.pdv_routes import PdvRoutesMixin
+from sales_coach.routes.intelligence_routes import IntelligenceRoutesMixin
 
 
 CONFIG = load_app_config()
@@ -446,6 +447,7 @@ def _invert_ranges(fecha_desde, fecha_hasta, uncovered_ranges):
 
 
 class AppHandler(
+    IntelligenceRoutesMixin,
     AuthRoutesMixin,
     AnalysisRoutesMixin,
     OperationsRoutesMixin,
@@ -587,6 +589,13 @@ class AppHandler(
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/admin/intelligence":
+            if self._require_page_authentication("admin"):
+                self.serve_file(STATIC_DIR / "intelligence-admin.html", "text/html; charset=utf-8")
+            return
+        if parsed.path == "/intelligence-admin.js":
+            self.serve_file(STATIC_DIR / "intelligence-admin.js", "application/javascript; charset=utf-8")
+            return
         if parsed.path == "/favicon.ico":
             self.send_response(204)
             self._send_security_headers()

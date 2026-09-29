@@ -12,6 +12,11 @@ class RouteDefinition:
 
 
 GET_ROUTES = {
+    "/api/intelligence/sales/daily-brief": RouteDefinition("handle_intelligence_sales", pass_parsed_url=True),
+    "/api/intelligence/sales/drilldown": RouteDefinition("handle_intelligence_drilldown", pass_parsed_url=True),
+    "/api/intelligence/stock/daily-brief": RouteDefinition("handle_intelligence_stock", permission="admin", pass_parsed_url=True),
+    "/api/intelligence/stock/items": RouteDefinition("handle_intelligence_stock_items", permission="admin", pass_parsed_url=True),
+    "/api/intelligence/deposits": RouteDefinition("handle_intelligence_deposits", permission="admin"),
     "/api/auth/me": RouteDefinition("handle_auth_me"),
     "/api/users": RouteDefinition("handle_list_users", permission="admin"),
     "/api/access/companies": RouteDefinition("handle_list_access_companies", permission="admin"),
@@ -51,6 +56,10 @@ GET_ROUTES = {
 
 
 POST_ROUTES = {
+    "/api/intelligence/deposits": RouteDefinition("handle_intelligence_deposit_save", permission="admin", csrf=True),
+    "/api/intelligence/deposits/discover": RouteDefinition("handle_intelligence_deposit_discovery", permission="admin", csrf=True),
+    "/api/intelligence/deposits/universe": RouteDefinition("handle_intelligence_universe", permission="admin", csrf=True),
+    "/api/intelligence/stock/sync": RouteDefinition("handle_intelligence_stock_sync", permission="admin", csrf=True),
     "/api/auth/logout": RouteDefinition("handle_logout", csrf=True),
     "/api/users": RouteDefinition("handle_create_user", permission="admin", csrf=True),
     "/api/users/status": RouteDefinition("handle_update_user_status", permission="admin", csrf=True),

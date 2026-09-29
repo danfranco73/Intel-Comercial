@@ -126,6 +126,9 @@ class SyncService:
             marketing = fetch_marketing_dataset(cookie=cookie)
             sync_origin = f"{origin}_sync"
             article_summary = sync_erp_articles(articles["records"], origin=sync_origin)
+            if articles.get("identity_records"):
+                from sales_coach.repositories.product_identity_repository import ProductIdentityRepository
+                ProductIdentityRepository(get_db()).sync(articles["identity_records"])
             seller_summary = sync_erp_sellers(sellers["records"], origin=sync_origin)
             route_summary = sync_erp_routes(routes["records"], origin=sync_origin)
             marketing_summary = sync_erp_marketing(marketing["records"], origin=sync_origin)

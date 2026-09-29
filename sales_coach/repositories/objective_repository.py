@@ -13,12 +13,13 @@ OBJECTIVES_COLLECTION = "commercial_objectives"
 
 
 class ObjectiveRepository:
-    def __init__(self, db):
+    def __init__(self, db, *, initialize_indexes=True):
         if db is None:
             raise RuntimeError("MongoDB no está configurado")
         self.db = db
         self.collection = db[OBJECTIVES_COLLECTION]
-        self.ensure_indexes()
+        if initialize_indexes:
+            self.ensure_indexes()
 
     def ensure_indexes(self) -> None:
         self.collection.create_index(

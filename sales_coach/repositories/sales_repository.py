@@ -5,6 +5,23 @@ from mongo_client import load_erp_sales_dataset
 
 
 class SalesRepository:
+    def load_intelligence(self, db, start, end):
+        """No DDL, no ERP fetch, no writes. Coverage is evaluated by the context service."""
+        from datetime import date
+        from clickhouse_client import clickhouse_configured
+        errors = []
+        if clickhouse_configured():
+            try:
+                data = load_erp_sales_dataset_clickhouse(start, end, initialize_schema=False, allow_empty=True)
+                return data["records"], "clickhouse", errors
+            except Exception:
+                errors.append("CLICKHOUSE_UNAVAILABLE")
+        rows = list(db["erp_sales"].find({"date": {"$gte": start, "$lte": end}}, {"_id": 0}))
+        for row in rows:
+            if isinstance(row.get("date"), str):
+                row["date"] = date.fromisoformat(row["date"])
+        return rows, "mongo", errors
+
     def load_mongo(self, fecha_desde: str, fecha_hasta: str, require_coverage: bool = True):
         return load_erp_sales_dataset(fecha_desde, fecha_hasta, require_coverage=require_coverage)
 

@@ -367,11 +367,14 @@ def sync_erp_sales_clickhouse(records, fecha_desde, fecha_hasta, origin="manual"
     }
 
 
-def load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta):
+def load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta, *, initialize_schema=True, allow_empty=False):
+    fecha_desde = date.fromisoformat(fecha_desde).isoformat()
+    fecha_hasta = date.fromisoformat(fecha_hasta).isoformat()
     client = get_clickhouse_client()
     if client is None:
         raise RuntimeError("ClickHouse no está configurado")
-    _ensure_schema()
+    if initialize_schema:
+        _ensure_schema()
     result = client.query(
         f"""
         SELECT
@@ -438,7 +441,7 @@ def load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta):
                 "source": "ClickHouse",
             }
         )
-    if not records:
+    if not records and not allow_empty:
         raise ValueError("ClickHouse no tiene ventas ERP para el rango seleccionado")
     source_label = f"Base comercial {fecha_desde} a {fecha_hasta}"
     return {

@@ -115,6 +115,8 @@ class AuthRepository:
             "updated_at": now,
             "updated_by": actor_id,
         }
+        if "erp_company_keys" in payload:
+            document["erp_company_keys"] = _clean_list(payload["erp_company_keys"])
         self.db["access_companies"].update_one(
             {"company_key": company_key},
             {"$set": document, "$setOnInsert": {"created_at": now}},

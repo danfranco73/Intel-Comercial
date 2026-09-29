@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Depósitos · Intelligence</title><link rel="stylesheet" href="/app.css"></head>
+<body><main class="layout">
+<nav class="surface-switch"><a href="/admin">Volver a administración</a></nav>
+<section class="panel"><h1>Depósitos y cobertura de stock</h1>
+<p>Revisá cada depósito. Descubierto no significa activo ni incluido en análisis. Los depósitos sin relaciones validadas se muestran sin empresa o sucursal asignada.</p>
+<p id="catalogStatus" role="status"></p><button id="reload" type="button">Actualizar catálogo</button>
+<div id="catalog"></div></section>
+<section class="panel"><h2>Configurar depósito</h2>
+<form id="depositForm">
+<label>Código de depósito <input name="deposit_id" required pattern="[0-9]+"></label>
+<label>Nombre <input name="deposit_name" required maxlength="2000"></label>
+<label>Empresa <input name="company" maxlength="2000"></label>
+<label>Sucursal <input name="branch" maxlength="2000"></label>
+<label>Ubicación <input name="location" maxlength="2000"></label>
+<label>Tipo de depósito <input name="deposit_type" maxlength="2000"></label>
+<label>Notas <textarea name="notes" maxlength="2000"></textarea></label>
+<label><input name="active" type="checkbox"> Depósito activo</label>
+<label><input name="include_in_stock_analysis" type="checkbox"> Incluir en análisis de stock</label>
+<label><input name="relationships_verified" type="checkbox"> Verifiqué las relaciones con empresa y/o sucursal</label>
+<button type="submit">Guardar configuración</button><button id="newDeposit" type="button">Nuevo depósito</button>
+</form></section>
+<section class="panel"><h2>Cobertura del universo</h2>
+<p>Certificá únicamente después de comprobar que el catálogo contempla todos los depósitos relevantes, incluidos los que no tienen ventas.</p>
+<label><input id="universeConfirmed" type="checkbox"> Verifiqué la totalidad del catálogo y sus exclusiones</label>
+<button id="certify" type="button">Registrar validación</button><button id="revoke" type="button">Retirar validación</button>
+</section>
+<section class="panel"><h2>Capturar stock</h2><p>Se consultarán todos los depósitos configurados, activos e incluidos. La operación puede tardar varios minutos.</p>
+<label>Fecha de stock <input id="stockDate" type="date" required></label>
+<button id="capture" type="button">Capturar stock desde Chess</button>
+<button id="brief" type="button">Consultar último informe</button><pre id="output"></pre>
+</section><p id="message" role="alert"></p>
+</main><script src="/intelligence-admin.js"></script></body></html>

@@ -3529,3 +3529,152 @@ body[data-workspace="coach"] [data-workspace-only="bi"],
 body[data-workspace="bi"] [data-workspace-only="coach"] {
   display: none !important;
 }
+
+/* --- Modo oscuro: superficies con colores fijos ------------------------------
+   Muchas reglas usan fondos claros literales (#fffdfa, white, degradés
+   crema). En oscuro se remapean a los tokens del tema para que el texto
+   (que sí usa --ink/--muted) no quede claro sobre blanco. */
+
+[data-theme="dark"] {
+  --coach-blue: #17283a;
+  --warn: #e0a24a;
+  --ok: #4cc27a;
+  --danger: #f07b70;
+}
+
+/* Superficie base (tarjetas, controles, tablas). */
+[data-theme="dark"] .guide-card,
+[data-theme="dark"] .request-step,
+[data-theme="dark"] .access-checkbox-list,
+[data-theme="dark"] .coach-brief,
+[data-theme="dark"] .coach-seller-picker select,
+[data-theme="dark"] .planning-field input,
+[data-theme="dark"] .planning-field select,
+[data-theme="dark"] .interactive-report-controls select,
+[data-theme="dark"] select,
+[data-theme="dark"] input,
+[data-theme="dark"] textarea,
+[data-theme="dark"] button,
+[data-theme="dark"] .password-toggle,
+[data-theme="dark"] .sales-source,
+[data-theme="dark"] .check-inline input[type="checkbox"],
+[data-theme="dark"] .erp-panel,
+[data-theme="dark"] .file-item,
+[data-theme="dark"] .preview,
+[data-theme="dark"] table,
+[data-theme="dark"] .progress-card,
+[data-theme="dark"] .filter-box-toggle,
+[data-theme="dark"] .filter-box-panel,
+[data-theme="dark"] .filter-box-actions button,
+[data-theme="dark"] .filter-search,
+[data-theme="dark"] .check-option,
+[data-theme="dark"] .semaphore,
+[data-theme="dark"] .alert,
+[data-theme="dark"] .insight-item,
+[data-theme="dark"] .ranking-item,
+[data-theme="dark"] .scenario-item,
+[data-theme="dark"] .action-item,
+[data-theme="dark"] .tabulator .tabulator-row {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+/* Botones primarios y chips activos conservan su color de marca. */
+[data-theme="dark"] button.primary,
+[data-theme="dark"] .primary {
+  background: var(--brand);
+  color: #fff;
+}
+
+/* Superficie secundaria (paneles contenedores, encabezados, filas alternas). */
+[data-theme="dark"] .hero-note,
+[data-theme="dark"] .subpanel,
+[data-theme="dark"] .source-card,
+[data-theme="dark"] .guide-callout,
+[data-theme="dark"] .dyn-help-card,
+[data-theme="dark"] .chart-panel,
+[data-theme="dark"] .table-panel,
+[data-theme="dark"] .mongo-summary,
+[data-theme="dark"] th,
+[data-theme="dark"] .coach-comparison-bar,
+[data-theme="dark"] .coach-week-plan,
+[data-theme="dark"] .coach-mix-table tbody tr:nth-child(odd),
+[data-theme="dark"] .tabulator .tabulator-header,
+[data-theme="dark"] .tabulator .tabulator-header .tabulator-col,
+[data-theme="dark"] .tabulator .tabulator-row.tabulator-row-even,
+[data-theme="dark"] .metric-tile,
+[data-theme="dark"] .spark-chart-wrap,
+[data-theme="dark"] .line-summary-chip,
+[data-theme="dark"] .dashboard-view-badge,
+[data-theme="dark"] .segmented {
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+[data-theme="dark"] .check-option:hover,
+[data-theme="dark"] .floating-nav button:hover,
+[data-theme="dark"] .tabulator .tabulator-row.tabulator-selectable:hover {
+  background: #232c38;
+}
+
+[data-theme="dark"] .bar-track,
+[data-theme="dark"] .coach-mix-bar {
+  background: var(--line);
+}
+
+/* Superficies con tono semántico. */
+[data-theme="dark"] .metric-tile.good,
+[data-theme="dark"] .erp-status.ok,
+[data-theme="dark"] .ins-opportunity {
+  background: color-mix(in srgb, var(--ok) 12%, var(--paper-2));
+}
+
+[data-theme="dark"] .metric-tile.warn,
+[data-theme="dark"] .erp-status.warn,
+[data-theme="dark"] .coach-callout-recognition,
+[data-theme="dark"] .metric-chip {
+  background: color-mix(in srgb, var(--warn) 12%, var(--paper-2));
+}
+
+[data-theme="dark"] .metric-tile.bad,
+[data-theme="dark"] .erp-status.danger,
+[data-theme="dark"] .ins-alert {
+  background: color-mix(in srgb, var(--danger) 12%, var(--paper-2));
+}
+
+[data-theme="dark"] .ins-trend {
+  background: color-mix(in srgb, #3b82f6 12%, var(--paper-2));
+}
+
+[data-theme="dark"] .metric-chip.active {
+  background: #ea580c;
+  color: #fff;
+}
+
+[data-theme="dark"] .dashboard-view-chip.active {
+  background: var(--brand-soft);
+  color: #5fd3c1;
+}
+
+/* Textos con color oscuro fijo: se aclaran para mantener contraste. */
+[data-theme="dark"] .coach-link,
+[data-theme="dark"] .coach-table-link,
+[data-theme="dark"] .ins-trend {
+  color: #8db4ff;
+}
+
+[data-theme="dark"] .coach-positive,
+[data-theme="dark"] .company-access-validation.ready,
+[data-theme="dark"] .ins-opportunity,
+[data-theme="dark"] .ins-positive {
+  color: #5fd39a;
+}
+
+[data-theme="dark"] input::placeholder,
+[data-theme="dark"] textarea::placeholder {
+  color: var(--muted);
+}
+
+[data-theme="dark"] input[type="date"] {
+  color-scheme: dark;
+}
