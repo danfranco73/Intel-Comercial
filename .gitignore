@@ -25,3 +25,52 @@ env/
 
 # Claude Code (config local, no compartido)
 .claude/settings.local.json
+
+# Evidencia privada de Intelligence: no versionar cifras, originales ni exports.
+# Los informes permanecen disponibles localmente; CURRENT_STATE.md resume el cierre.
+/docs/intelligence/attribution-v1-audit/
+/docs/intelligence/history-audit-2026-09-29/
+/docs/intelligence/load-sheet-audit-2026-09-29/
+/docs/intelligence/sales-logistics-migration-plan/
+/docs/intelligence/sales-v2-offline-diagnosis/
+/docs/intelligence/sales-v2-pilot/
+/docs/intelligence/stock-physical-experimental/
+/docs/intelligence/supply-api-investigation/
+
+# Capturas y almacenamiento de trabajo; nunca usar git add -f para incluirlos.
+/private/
+/artifacts/
+/tmp/
+/temp/
+/dumps/
+/backups/
+/clickhouse-data/
+/pilot-data/
+*.dump
+*.bak
+*.backup
+*.sqlite
+*.sqlite3
+*.db
+*.jsonl
+*.jsonl.gz
+*.json.gz
+*.ndjson
+*.csv
+!tests/fixtures/*.csv
+*.dump.json
+*.backup.json
+*.sql.gz
+*.sql.zip
+*.parquet
+*.arrow
+*.feather
+*.tmp
+*.swp
+*.pem
+*.key
+cookies.txt
+*.cookies
+credentials.json
+token.json
+tokens.json

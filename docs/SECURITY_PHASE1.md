@@ -38,7 +38,7 @@ Un alcance sin asignaciones falla cerrado y produce un universo vacío. Los filt
 
 ```bash
 export BOOTSTRAP_ADMIN_EMAIL='admin@example.test'
-export BOOTSTRAP_ADMIN_PASSWORD='una-clave-larga-y-unica'
+export BOOTSTRAP_ADMIN_PASSWORD="<DEFINIR_LOCALMENTE_NO_VERSIONAR>"
 export BOOTSTRAP_ADMIN_NAME='Administrador'
 .venv/bin/python scripts/migrate_phase1_auth.py
 unset BOOTSTRAP_ADMIN_PASSWORD

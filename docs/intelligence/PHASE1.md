@@ -1,5 +1,10 @@
 # Entrega de Fase 1 — Intelligence Core
 
+> Informe histórico de la entrega inicial. Para el estado congelado, las restricciones
+> operativas y la distinción entre implementación y experimentos, consultar
+> [CURRENT_STATE.md](CURRENT_STATE.md). Los estados de disponibilidad y tests de este
+> documento corresponden a aquella entrega, no a una verificación actual de producción.
+
 Fecha: 29 de septiembre de 2026. Alcance: Intel-Comercial.
 
 ## A. Resumen ejecutivo

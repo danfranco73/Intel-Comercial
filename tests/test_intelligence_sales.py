@@ -6,6 +6,8 @@ import pytest
 from security.models import AuthenticatedUser
 from sales_coach.services.intelligence_context_service import IntelligenceContextService
 from sales_coach.services.intelligence_sales_service import IntelligenceSalesService
+from sales_coach.services.sales_coverage_service import SalesCoverageService
+from collections import Counter
 
 
 def admin():
@@ -26,7 +28,8 @@ def setup(datasets):
     db.sync_runs.insert_one({"run_id": "synthetic", "entity": "sales", "status": "success",
         "range": {"fechaDesde": "2025-01-01", "fechaHasta": "2026-06-30"},
         "rows_stored": {"clickhouse": len(records)}, "finished_at": datetime(2026, 7, 1)})
-    context = IntelligenceContextService(db, loader=lambda *_: (records, "clickhouse", []))
+    coverage = SalesCoverageService(db, daily_loader=lambda *_: dict(Counter(r["date"] for r in records)))
+    context = IntelligenceContextService(db, loader=lambda *_: (records, "clickhouse", []), coverage_service=coverage)
     return db, IntelligenceSalesService(db, context)
 
 
@@ -88,6 +91,8 @@ def test_sync_warning_or_active_writer_prevents_certifying_sales(datasets):
 def test_mtd_coverage_does_not_authorize_full_history_insights(datasets):
     db, service = setup(datasets)
     db.sync_runs.update_one({}, {"$set": {"range.fechaDesde": "2026-06-01"}})
+    records = service.context_service.loader(None, None, None)[0]
+    db.sync_runs.update_one({}, {"$set": {"rows_stored.clickhouse": sum(r["date"].month == 6 and r["date"].year == 2026 for r in records)}})
     result = service.brief({"as_of": "2026-06-30"}, admin())
     assert result["summary"]["net_sales"]["value"] is not None
     assert result["summary"]["historical_benchmark"]["value"] is None

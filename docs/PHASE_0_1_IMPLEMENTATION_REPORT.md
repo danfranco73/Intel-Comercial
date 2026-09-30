@@ -101,7 +101,7 @@ No se modificaron colecciones comerciales ni ClickHouse. Para crear el primer ad
 
 ```bash
 BOOTSTRAP_ADMIN_EMAIL=admin@example.test \
-BOOTSTRAP_ADMIN_PASSWORD='una-clave-fuerte-y-unica' \
+BOOTSTRAP_ADMIN_PASSWORD="<DEFINIR_LOCALMENTE_NO_VERSIONAR>" \
 .venv/bin/python scripts/migrate_phase1_auth.py
 ```
 

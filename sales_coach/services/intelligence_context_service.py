@@ -1,29 +1,17 @@
-from datetime import date, datetime, timedelta
 from bi.facts import enrich_sales_records
 from bi.tactical_month import _month_range
 from sales_coach.domain.intelligence import fingerprint
 from sales_coach.repositories.sales_repository import SalesRepository
 from sales_coach.schemas.intelligence import DIMENSIONS
 from security.authorization import resolve_data_scope
-
-
-def interval_covered(start, end, intervals):
-    cursor = start
-    for left, right in sorted(intervals):
-        if right < cursor:
-            continue
-        if left > cursor:
-            return False
-        if right >= end:
-            return True
-        cursor = right + timedelta(days=1)
-    return False
+from sales_coach.services.sales_coverage_service import SalesCoverageService
 
 
 class IntelligenceContextService:
-    def __init__(self, db, loader=None):
+    def __init__(self, db, loader=None, coverage_service=None):
         self.db = db
         self.loader = loader or SalesRepository().load_intelligence
+        self.coverage_service = coverage_service or SalesCoverageService(db)
 
     def build(self, request, user):
         end = request["as_of"]
@@ -75,48 +63,14 @@ class IntelligenceContextService:
         for dimension, value in request["filters"].items():
             field = DIMENSIONS[dimension][0]
             facts = [r for r in facts if str(r.get(field) or "__unclassified__") == value]
-        intervals = []
-        runs = list(self.db["sync_runs"].find({"entity": "sales"}, {"_id": 0, "run_id": 1,
-            "status": 1, "range": 1, "rows_stored": 1, "started_at": 1, "finished_at": 1}))
-        pending = []
-        for run in runs:
-            bounds = run.get("range") or {}
-            try:
-                left, right = date.fromisoformat(bounds["fechaDesde"]), date.fromisoformat(bounds["fechaHasta"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if right < start or left > end:
-                continue
-            # Only traces that acknowledge storage at the selected destination count.
-            if run.get("status") == "success" and (run.get("rows_stored") or {}).get(source, 0) > 0:
-                intervals.append((left, right))
-            elif run.get("status") in {"running", "failed", "warning"}:
-                pending.append((left, right, run))
-        if source == "mongo":
-            # Retention and physical bounds can narrow coverage, never expand it.
-            bounds = list(self.db["erp_sales"].find({}, {"date": 1}).sort("date", 1).limit(1))
-            minimum = bounds[0]["date"] if bounds else None
-            if isinstance(minimum, str):
-                minimum = date.fromisoformat(minimum)
-            intervals = [(max(a, minimum), b) for a, b in intervals if minimum and b >= minimum]
-        coverage = {}
-        for name, left, right in (("current", windows["currentStart"], end),
-                                  ("mom", windows["previousStart"], windows["previousEnd"]),
-                                  ("yoy", windows["yoyStart"], windows["yoyEnd"]),
-                                  ("history", start, end)):
-            complete = interval_covered(left, right, intervals)
-            for a, b, failed in pending:
-                if b < left or a > right:
-                    continue
-                # A newer successful range may supersede a failed attempt; an active writer never does.
-                superseded = failed.get("status") != "running" and any(
-                    r.get("status") == "success" and (r.get("rows_stored") or {}).get(source, 0) > 0
-                    and str(r.get("finished_at") or "") > str(failed.get("started_at") or "")
-                    and (r.get("range") or {}).get("fechaDesde", "9999") <= max(left, a).isoformat()
-                    and (r.get("range") or {}).get("fechaHasta", "") >= min(right, b).isoformat() for r in runs)
-                if not superseded:
-                    complete = False
-            coverage[name] = {"status": "complete" if complete else "unverified", "start": left.isoformat(), "end": right.isoformat()}
+        coverage = self.coverage_service.assess(source, {
+            "current": (windows["currentStart"], end),
+            "mom": (windows["previousStart"], windows["previousEnd"]),
+            "yoy": (windows["yoyStart"], windows["yoyEnd"]),
+            "history": (start, end)})
+        if user.role != "admin":
+            coverage = {name: {k: v for k, v in data.items() if k not in {"observed_rows", "observed_days"}}
+                        for name, data in coverage.items()}
         context_id = fingerprint({"facts": facts, "scope": scope, "user": user.id, "filters": request["filters"],
                                   "cutoff": end, "coverage": coverage})
         if request.get("context_id") and request["context_id"] != context_id:

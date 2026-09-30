@@ -1,0 +1,256 @@
+{
+  "schema_version": "1.0",
+  "version": 1,
+  "created_at": "2026-09-29T21:15:48.555917+00:00",
+  "mode": "simulation_only",
+  "production_active": false,
+  "historical_application": "Reglas confirmadas simuladas sobre el histórico disponible; null valid_from/valid_to no inventa una fecha de mudanza. Excepción futura excluida.",
+  "pending_clarifications": [
+    "Alcance verificable de mercadería de almacén: no igualar con fuerzas ni familias sin confirmar.",
+    "Alcance de ruta 100 por fuerza: sin restricción adicional confirmada; prioridad conservadora."
+  ],
+  "source_binding": {
+    "billing_company": {
+      "1": "CODENOA S.R.L.",
+      "2": "TODO PYMES SRL",
+      "3": "PDEV S.A.S.",
+      "4": "ERDASER S.R.L"
+    },
+    "sales_force": {
+      "1": "BEBIDAS",
+      "2": "MERCADERIA",
+      "3": "FRESCOS",
+      "4": "MAYORISTA",
+      "5": "B2B"
+    },
+    "route": "canonical commercial ID only, unavailable in historical ClickHouse facts"
+  },
+  "rules": [
+    {
+      "rule_id": "route-100-mayorista",
+      "version": 1,
+      "priority": 300,
+      "valid_from": null,
+      "valid_to": null,
+      "billing_company": [
+        "1",
+        "2",
+        "3",
+        "4"
+      ],
+      "sales_force": null,
+      "route": [
+        "100"
+      ],
+      "channel": null,
+      "product_scope": {},
+      "deposit_id": "4",
+      "business_operation": "mayorista",
+      "verified": true,
+      "verified_by": "Daniel — instrucciones de reglas V1 en esta sesión",
+      "notes": "Ruta 100 confirmada. No se limita a fuerza 4 sin confirmación adicional. Empresa debe ser identificable. Una ruta ausente no descarta esta excepción.",
+      "simulation_enabled": true
+    },
+    {
+      "rule_id": "todo-pymes-route-200",
+      "version": 1,
+      "priority": 300,
+      "valid_from": null,
+      "valid_to": null,
+      "billing_company": [
+        "2"
+      ],
+      "sales_force": null,
+      "route": [
+        "200"
+      ],
+      "channel": null,
+      "product_scope": {},
+      "deposit_id": "6",
+      "business_operation": "todo_pymes",
+      "verified": true,
+      "verified_by": "Daniel — instrucciones de reglas V1 en esta sesión",
+      "notes": "Empresa facturante TODO PYMES + ruta comercial confirmada; sin deducir ruta desde planilla, vendedor o cartera actual.",
+      "simulation_enabled": true
+    },
+    {
+      "rule_id": "todo-pymes-route-201",
+      "version": 1,
+      "priority": 300,
+      "valid_from": null,
+      "valid_to": null,
+      "billing_company": [
+        "2"
+      ],
+      "sales_force": null,
+      "route": [
+        "201"
+      ],
+      "channel": null,
+      "product_scope": {},
+      "deposit_id": "7",
+      "business_operation": "todo_pymes",
+      "verified": true,
+      "verified_by": "Daniel — instrucciones de reglas V1 en esta sesión",
+      "notes": "Empresa facturante TODO PYMES + ruta comercial confirmada; sin deducir ruta desde planilla, vendedor o cartera actual.",
+      "simulation_enabled": true
+    },
+    {
+      "rule_id": "todo-pymes-route-202",
+      "version": 1,
+      "priority": 300,
+      "valid_from": null,
+      "valid_to": null,
+      "billing_company": [
+        "2"
+      ],
+      "sales_force": null,
+      "route": [
+        "202"
+      ],
+      "channel": null,
+      "product_scope": {},
+      "deposit_id": "8",
+      "business_operation": "todo_pymes",
+      "verified": true,
+      "verified_by": "Daniel — instrucciones de reglas V1 en esta sesión",
+      "notes": "Empresa facturante TODO PYMES + ruta comercial confirmada; sin deducir ruta desde planilla, vendedor o cartera actual.",
+      "simulation_enabled": true
+    },
+    {
+      "rule_id": "todo-pymes-route-203",
+      "version": 1,
+      "priority": 300,
+      "valid_from": null,
+      "valid_to": null,
+      "billing_company": [
+        "2"
+      ],
+      "sales_force": null,
+      "route": [
+        "203"
+      ],
+      "channel": null,
+      "product_scope": {},
+      "deposit_id": "22",
+      "business_operation": "todo_pymes",
+      "verified": true,
+      "verified_by": "Daniel — instrucciones de reglas V1 en esta sesión",
+      "notes": "Empresa facturante TODO PYMES + ruta comercial confirmada; sin deducir ruta desde planilla, vendedor o cartera actual.",
+      "simulation_enabled": true
+    },
+    {
+      "rule_id": "todo-pymes-route-204",
+      "version": 1,
+      "priority": 300,
+      "valid_from": null,
+      "valid_to": null,
+      "billing_company": [
+        "2"
+      ],
+      "sales_force": null,
+      "route": [
+        "204"
+      ],
+      "channel": null,
+      "product_scope": {},
+      "deposit_id": "23",
+      "business_operation": "mayorista",
+      "verified": true,
+      "verified_by": "Daniel — instrucciones de reglas V1 en esta sesión",
+      "notes": "Empresa facturante TODO PYMES + ruta comercial confirmada; sin deducir ruta desde planilla, vendedor o cartera actual.",
+      "simulation_enabled": true
+    },
+    {
+      "rule_id": "todo-pymes-route-205",
+      "version": 1,
+      "priority": 300,
+      "valid_from": null,
+      "valid_to": null,
+      "billing_company": [
+        "2"
+      ],
+      "sales_force": null,
+      "route": [
+        "205"
+      ],
+      "channel": null,
+      "product_scope": {},
+      "deposit_id": "23",
+      "business_operation": "minorista_drugstore",
+      "verified": true,
+      "verified_by": "Daniel — instrucciones de reglas V1 en esta sesión",
+      "notes": "Empresa facturante TODO PYMES + ruta comercial confirmada; sin deducir ruta desde planilla, vendedor o cartera actual.",
+      "simulation_enabled": true
+    },
+    {
+      "rule_id": "pdev-frescos",
+      "version": 1,
+      "priority": 200,
+      "valid_from": null,
+      "valid_to": null,
+      "billing_company": [
+        "3"
+      ],
+      "sales_force": [
+        "3"
+      ],
+      "route": null,
+      "channel": null,
+      "product_scope": {},
+      "deposit_id": "20",
+      "business_operation": "frescos",
+      "verified": true,
+      "verified_by": "Daniel — instrucciones de reglas V1 en esta sesión",
+      "notes": "PDEV S.A.S. + fuerza histórica FRESCOS. No cubre CODENOA Frescos. No resuelve por sí sola una excepción de prioridad superior cuya ruta sea desconocida.",
+      "simulation_enabled": true
+    },
+    {
+      "rule_id": "codenoa-erdaser-almacen",
+      "version": 1,
+      "priority": 100,
+      "valid_from": null,
+      "valid_to": null,
+      "billing_company": [
+        "1",
+        "4"
+      ],
+      "sales_force": null,
+      "route": null,
+      "channel": null,
+      "product_scope": {
+        "storage_class": [
+          "almacen"
+        ]
+      },
+      "deposit_id": "1",
+      "business_operation": "almacen",
+      "verified": true,
+      "verified_by": "Daniel — instrucciones de reglas V1 en esta sesión",
+      "notes": "Mercadería de almacén confirmada conceptualmente. storage_class requiere clasificación histórica validada; no se equipara automáticamente con fuerza MERCADERIA ni BEBIDAS ni un maestro actual.",
+      "simulation_enabled": true
+    },
+    {
+      "rule_id": "codenoa-frescos-future",
+      "version": 1,
+      "priority": 250,
+      "valid_from": null,
+      "valid_to": null,
+      "billing_company": [
+        "1"
+      ],
+      "sales_force": [
+        "3"
+      ],
+      "route": null,
+      "channel": null,
+      "product_scope": {},
+      "deposit_id": "20",
+      "business_operation": "frescos",
+      "verified": true,
+      "verified_by": "Daniel — instrucciones de reglas V1 en esta sesión",
+      "notes": "Fecha efectiva pendiente. Fuera de simulación y producción. Nunca aplicar retrospectivamente. Activación temporal requiere nueva versión con valid_from definido.",
+      "simulation_enabled": false
+    }
+  ]
+}

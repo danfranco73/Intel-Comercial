@@ -9,7 +9,7 @@ Antes del primer inicio seguro:
 ```bash
 .venv/bin/python -m pip install -r requirements.txt
 BOOTSTRAP_ADMIN_EMAIL=admin@example.test \
-BOOTSTRAP_ADMIN_PASSWORD='definir-una-clave-fuerte' \
+BOOTSTRAP_ADMIN_PASSWORD="<DEFINIR_LOCALMENTE_NO_VERSIONAR>" \
 .venv/bin/python scripts/migrate_phase1_auth.py
 .venv/bin/python app.py
 ```
