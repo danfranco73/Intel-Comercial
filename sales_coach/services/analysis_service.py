@@ -37,12 +37,14 @@ class AnalysisService:
             supplier_focus=request.supplier_focus,
             planning=request.planning,
             scope_filters=scope_filters,
+            release_raw_sales=True,
         )
 
     def consistency(self, datasets: dict[str, Any], scope_filters):
         return build_consistency_report(
             self.dataset_resolver(datasets),
             scope_filters=scope_filters,
+            release_raw_sales=True,
         )
 
     def dynamic(self, payload: Any, scope_filters):
@@ -142,4 +144,5 @@ class AnalysisService:
             supplier_focus=request.supplier_focus,
             planning=request.planning,
             scope_filters=scope_filters,
+            release_raw_sales=True,
         )

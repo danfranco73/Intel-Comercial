@@ -367,6 +367,14 @@ def sync_erp_sales_clickhouse(records, fecha_desde, fecha_hasta, origin="manual"
     }
 
 
+def _stream_rows(client, query):
+    # Lee por bloques para no tener el resultado crudo completo en memoria al
+    # mismo tiempo que las filas ya convertidas.
+    with client.query_row_block_stream(query) as stream:
+        for block in stream:
+            yield from block
+
+
 def load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta, *, initialize_schema=True, allow_empty=False):
     fecha_desde = date.fromisoformat(fecha_desde).isoformat()
     fecha_hasta = date.fromisoformat(fecha_hasta).isoformat()
@@ -375,8 +383,7 @@ def load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta, *, initialize_sc
         raise RuntimeError("ClickHouse no está configurado")
     if initialize_schema:
         _ensure_schema()
-    result = client.query(
-        f"""
+    query = f"""
         SELECT
             date,
             year,
@@ -407,15 +414,14 @@ def load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta, *, initialize_sc
         FROM {_qualified_table()}
         WHERE date >= toDate('{fecha_desde}')
           AND date <= toDate('{fecha_hasta}')
-        ORDER BY date ASC
+        ORDER BY date, client_key, seller_key, product_key, invoice
         """
-    )
     records = []
     # Los textos se repiten en cientos de miles de filas; compartir una sola
     # instancia por valor ahorra ~200 MB por cada 300k filas.
     shared = {}
     share = lambda value: shared.setdefault(value, value) if isinstance(value, str) else value
-    for row in result.result_rows:
+    for row in _stream_rows(client, query):
         sale_date = row[0]
         if isinstance(sale_date, datetime):
             sale_date = sale_date.date()

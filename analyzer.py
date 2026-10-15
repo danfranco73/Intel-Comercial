@@ -218,7 +218,7 @@ def analyze_sources(sources, mapping, filters=None):
     return analyze_datasets(datasets, filters=filters)
 
 
-def load_bi_context(datasets):
+def load_bi_context(datasets, release_raw_sales=False):
     if "sales" not in datasets or not datasets["sales"]:
         raise ValueError("La venta por cliente es obligatoria para analizar")
 
@@ -235,6 +235,10 @@ def load_bi_context(datasets):
 
     sales_records = loaded["sales"]["records"]
     enriched_sales = enrich_sales_records(sales_records, loaded)
+    if release_raw_sales:
+        # Las filas enriquecidas ya copian todo lo necesario; vaciar la lista
+        # original (compartida con quien llamó) evita tener dos copias en memoria.
+        sales_records.clear()
     if not enriched_sales:
         raise ValueError("No quedaron ventas válidas para analizar")
 
@@ -254,8 +258,8 @@ def load_bi_context(datasets):
     }
 
 
-def build_consistency_report(datasets, scope_filters=None):
-    context = load_bi_context(datasets)
+def build_consistency_report(datasets, scope_filters=None, release_raw_sales=False):
+    context = load_bi_context(datasets, release_raw_sales=release_raw_sales)
     enriched_sales, selected_universe = apply_data_scope(context, scope_filters)
     consistency = evaluate_consistency(
         context["loaded"],
@@ -273,8 +277,8 @@ def build_consistency_report(datasets, scope_filters=None):
     }
 
 
-def build_tactical_month_report(datasets, filters=None, supplier_focus=None, planning=None, scope_filters=None):
-    context = load_bi_context(datasets)
+def build_tactical_month_report(datasets, filters=None, supplier_focus=None, planning=None, scope_filters=None, release_raw_sales=False):
+    context = load_bi_context(datasets, release_raw_sales=release_raw_sales)
     enriched_sales, selected_universe = apply_data_scope(context, scope_filters)
     sales_context = context["salesContext"]
     normalized_filters = remove_noop_filters(filters or {}, selected_universe, sales_context)
@@ -299,8 +303,8 @@ def build_tactical_month_report(datasets, filters=None, supplier_focus=None, pla
     }
 
 
-def analyze_datasets(datasets, filters=None, supplier_focus=None, planning=None, scope_filters=None):
-    context = load_bi_context(datasets)
+def analyze_datasets(datasets, filters=None, supplier_focus=None, planning=None, scope_filters=None, release_raw_sales=False):
+    context = load_bi_context(datasets, release_raw_sales=release_raw_sales)
     loaded = context["loaded"]
     enriched_sales, selected_unfiltered_sales = apply_data_scope(context, scope_filters)
     sales_context = context["salesContext"]

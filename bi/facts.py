@@ -173,6 +173,10 @@ def enrich_sales_records(sales_records, loaded):
     seller_by_route = master_maps["seller_by_route"]
 
     enriched = []
+    # Cliente, período y semana se repiten en cientos de miles de filas: se
+    # calculan una vez por valor y todas las filas comparten el mismo objeto.
+    canonical_by_client = {}
+    labels_by_date = {}
     for row in sales_records:
         product_key = row.get("product_key")
         seller_key = row.get("seller_key")
@@ -215,6 +219,14 @@ def enrich_sales_records(sales_records, loaded):
         if _looks_like_branch_or_force_route(route_name, master_maps):
             route_name = _resolve_route_name({}, route_master=route, seller_master=seller_master)
         date_value = row["date"]
+        labels = labels_by_date.get(date_value)
+        if labels is None:
+            iso = date_value.isocalendar()
+            labels = labels_by_date[date_value] = (date_value.strftime("%Y-%m"), f"{iso.year}-W{iso.week:02d}")
+        client_label = row.get("client_name") or row.get("client_key")
+        client_canonical = canonical_by_client.get(client_label)
+        if client_canonical is None:
+            client_canonical = canonical_by_client[client_label] = _normalize_text(client_label)
         invoice = _clean_text(row.get("invoice"))
         # La venta de referencia del análisis es el NETO sin IVA (subtotalNeto del
         # ERP), que es la base de la columna "Importe Neto" del pivot del ERP.
@@ -244,10 +256,10 @@ def enrich_sales_records(sales_records, loaded):
                 "amount": amount_net_value,
                 "amount_final": amount_final,
                 "amount_gross": amount_final,
-                "client": row.get("client_name") or row.get("client_key"),
-                "client_canonical": _normalize_text(row.get("client_name") or row.get("client_key")),
-                "period": date_value.strftime("%Y-%m"),
-                "week": f"{date_value.isocalendar().year}-W{date_value.isocalendar().week:02d}",
+                "client": client_label,
+                "client_canonical": client_canonical,
+                "period": labels[0],
+                "week": labels[1],
                 "seller_name": seller_name,
                 "seller_key": seller_key,
                 "original_seller_name": original_seller_name,

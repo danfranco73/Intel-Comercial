@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from datetime import date
 from threading import Barrier, local
 
@@ -59,6 +60,9 @@ class FakeClickHouse:
                 )
             ]
         )
+
+    def query_row_block_stream(self, query):
+        return nullcontext([self.query(query).result_rows])
 
 
 def test_load_from_clickhouse(monkeypatch):

@@ -57,6 +57,7 @@ from sales_coach.config import (
 from sales_coach.repositories import AuthRepository, SalesRepository
 from sales_coach.schemas import SyncRequest
 from sales_coach.services import AuthService, SyncService
+from sales_coach.concurrency import AnalysisCapacityExceeded, heavy_analysis_slot
 from sales_coach.routes import GET_ROUTES, POST_ROUTES
 from sales_coach.routes.auth_routes import AuthRoutesMixin
 from sales_coach.routes.analysis_routes import AnalysisRoutesMixin
@@ -648,7 +649,7 @@ class AppHandler(
             if not self._require_authentication(definition.permission):
                 return
             handler = getattr(self, definition.handler)
-            handler(parsed) if definition.pass_parsed_url else handler()
+            self._dispatch(definition, lambda: handler(parsed) if definition.pass_parsed_url else handler())
             return
         self.send_error(404, "Ruta no encontrada")
 
@@ -668,9 +669,19 @@ class AppHandler(
                 return
             if definition.csrf and not self._require_csrf():
                 return
-            getattr(self, definition.handler)()
+            self._dispatch(definition, getattr(self, definition.handler))
             return
         self.send_error(404, "Ruta no encontrada")
+
+    def _dispatch(self, definition, call):
+        if not definition.heavy:
+            call()
+            return
+        try:
+            with heavy_analysis_slot():
+                call()
+        except AnalysisCapacityExceeded as exc:
+            self.send_json({"error": str(exc)}, status=503)
 
     def handle_possible_analyses(self, parsed):
         """

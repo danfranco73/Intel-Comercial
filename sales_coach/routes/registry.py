@@ -9,11 +9,13 @@ class RouteDefinition:
     permission: str = "commercial.read"
     csrf: bool = False
     pass_parsed_url: bool = False
+    # Carga el universo de ventas completo: corre dentro del límite de análisis simultáneos.
+    heavy: bool = False
 
 
 GET_ROUTES = {
-    "/api/intelligence/sales/daily-brief": RouteDefinition("handle_intelligence_sales", pass_parsed_url=True),
-    "/api/intelligence/sales/drilldown": RouteDefinition("handle_intelligence_drilldown", pass_parsed_url=True),
+    "/api/intelligence/sales/daily-brief": RouteDefinition("handle_intelligence_sales", pass_parsed_url=True, heavy=True),
+    "/api/intelligence/sales/drilldown": RouteDefinition("handle_intelligence_drilldown", pass_parsed_url=True, heavy=True),
     "/api/intelligence/stock/daily-brief": RouteDefinition("handle_intelligence_stock", permission="admin", pass_parsed_url=True),
     "/api/intelligence/stock/items": RouteDefinition("handle_intelligence_stock_items", permission="admin", pass_parsed_url=True),
     "/api/intelligence/deposits": RouteDefinition("handle_intelligence_deposits", permission="admin"),
@@ -36,10 +38,10 @@ GET_ROUTES = {
     "/api/health": RouteDefinition("handle_health", permission="admin"),
     "/api/objectives": RouteDefinition("handle_list_objectives", pass_parsed_url=True),
     "/api/objectives/history": RouteDefinition("handle_objective_history", pass_parsed_url=True),
-    "/api/sales-coach/home": RouteDefinition("handle_sales_coach_home", pass_parsed_url=True),
-    "/api/sales-coach/sellers": RouteDefinition("handle_sales_coach_sellers", pass_parsed_url=True),
-    "/api/sales-coach/seller": RouteDefinition("handle_sales_coach_seller", pass_parsed_url=True),
-    "/api/sales-coach/client": RouteDefinition("handle_sales_coach_client", pass_parsed_url=True),
+    "/api/sales-coach/home": RouteDefinition("handle_sales_coach_home", pass_parsed_url=True, heavy=True),
+    "/api/sales-coach/sellers": RouteDefinition("handle_sales_coach_sellers", pass_parsed_url=True, heavy=True),
+    "/api/sales-coach/seller": RouteDefinition("handle_sales_coach_seller", pass_parsed_url=True, heavy=True),
+    "/api/sales-coach/client": RouteDefinition("handle_sales_coach_client", pass_parsed_url=True, heavy=True),
     "/api/pdv/360": RouteDefinition("handle_pdv_360", pass_parsed_url=True),
     "/api/pdv/search": RouteDefinition("handle_pdv_search", pass_parsed_url=True),
     "/api/pdv/portfolio": RouteDefinition("handle_pdv_portfolio", pass_parsed_url=True),
@@ -67,10 +69,10 @@ POST_ROUTES = {
     "/api/access/companies": RouteDefinition("handle_save_access_company", permission="admin", csrf=True),
     "/api/upload": RouteDefinition("handle_upload", permission="admin", csrf=True),
     "/api/clear-uploads": RouteDefinition("handle_clear_uploads", permission="admin", csrf=True),
-    "/api/analyze": RouteDefinition("handle_analyze", csrf=True),
-    "/api/bi/consistency": RouteDefinition("handle_bi_consistency", csrf=True),
-    "/api/bi/tactical-month": RouteDefinition("handle_bi_tactical_month", csrf=True),
-    "/api/analyze-dynamic": RouteDefinition("handle_analyze_dynamic", csrf=True),
+    "/api/analyze": RouteDefinition("handle_analyze", csrf=True, heavy=True),
+    "/api/bi/consistency": RouteDefinition("handle_bi_consistency", csrf=True, heavy=True),
+    "/api/bi/tactical-month": RouteDefinition("handle_bi_tactical_month", csrf=True, heavy=True),
+    "/api/analyze-dynamic": RouteDefinition("handle_analyze_dynamic", csrf=True, heavy=True),
     "/api/session": RouteDefinition("handle_save_session", csrf=True),
     "/api/erp/sync": RouteDefinition("handle_erp_sync", permission="admin", csrf=True),
     "/api/erp/sync-access-catalogs": RouteDefinition("handle_erp_sync_access_catalogs", permission="admin", csrf=True),
@@ -79,10 +81,10 @@ POST_ROUTES = {
     "/api/objectives/approve": RouteDefinition("handle_approve_objective", permission="commercial.write", csrf=True),
     "/api/objectives/close": RouteDefinition("handle_close_objective", permission="commercial.write", csrf=True),
     "/api/coach/rules": RouteDefinition("handle_create_coach_rule_version", permission="admin", csrf=True),
-    "/api/alerts/generate": RouteDefinition("handle_generate_alerts", csrf=True),
+    "/api/alerts/generate": RouteDefinition("handle_generate_alerts", csrf=True, heavy=True),
     "/api/alerts/assign": RouteDefinition("handle_assign_alert", csrf=True),
     "/api/alerts/transition": RouteDefinition("handle_transition_alert", csrf=True),
-    "/api/meetings": RouteDefinition("handle_create_meeting", csrf=True),
+    "/api/meetings": RouteDefinition("handle_create_meeting", csrf=True, heavy=True),
     "/api/meetings/pdf": RouteDefinition("handle_meeting_pdf", csrf=True),
     "/api/meetings/pptx": RouteDefinition("handle_meeting_pptx", csrf=True),
 }
