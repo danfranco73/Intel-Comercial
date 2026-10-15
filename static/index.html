@@ -14,13 +14,14 @@
           <span class="brand-mark" aria-hidden="true">C</span>
           <span><strong>Codenoa</strong><small>Intelligence</small></span>
         </a>
-        <div class="surface-links">
+        <button id="navigationToggle" class="mobile-menu-toggle" type="button" aria-expanded="false" aria-controls="surfaceLinks surfaceActions">Menú</button>
+        <div id="surfaceLinks" class="surface-links">
           <a class="active" href="/bi">Comercial</a>
           <a href="/sales-coach">Sales Coach</a>
           <a href="/admin">Admin</a>
           <a href="/users">Usuarios</a>
         </div>
-        <div class="surface-actions">
+        <div id="surfaceActions" class="surface-actions">
           <span id="headerPeriod" class="header-period">Período activo</span>
           <button id="themeToggle" class="icon-button" type="button" aria-label="Cambiar modo de color">◐</button>
           <span id="currentUser" class="current-user"></span>
@@ -258,7 +259,7 @@
                 <div class="muted">Números, proporciones, comparación y ranking por línea.</div>
               </div>
             </div>
-            <div class="coach-table-wrap">
+            <div class="coach-table-wrap" tabindex="0" role="region" aria-label="Tabla con desplazamiento horizontal">
               <table class="coach-mix-table">
                 <thead>
                   <tr>
@@ -282,7 +283,7 @@
                 <div class="muted">Principales clientes por venta neta dentro del período y los filtros seleccionados.</div>
               </div>
             </div>
-            <div class="coach-table-wrap">
+            <div class="coach-table-wrap" tabindex="0" role="region" aria-label="Tabla con desplazamiento horizontal">
               <table class="coach-mix-table">
                 <thead>
                   <tr>
@@ -318,7 +319,7 @@
           <details class="coach-team-details">
             <summary>Ver resumen y ranking del equipo filtrado</summary>
             <div id="sellerBriefTeamKpis" class="coach-kpi-grid compact"></div>
-            <div class="coach-table-wrap">
+            <div class="coach-table-wrap" tabindex="0" role="region" aria-label="Tabla con desplazamiento horizontal">
               <table class="coach-mix-table">
                 <thead>
                   <tr><th>#</th><th>Vendedor</th><th>$ actual</th><th>$&nbsp;anterior</th><th>Var. $</th><th>Bultos<br>actuales</th><th>Bultos<br>anteriores</th><th>Var.<br>bultos</th><th>Participación</th></tr>
@@ -376,7 +377,7 @@
                 <div class="muted">Venta, proporción, cantidades, comparación y ranking interno.</div>
               </div>
             </div>
-            <div class="coach-table-wrap">
+            <div class="coach-table-wrap" tabindex="0" role="region" aria-label="Tabla con desplazamiento horizontal">
               <table class="coach-mix-table">
                 <thead>
                   <tr>
@@ -404,7 +405,7 @@
                 <div class="muted">Principales compradores por venta neta dentro del período y los filtros seleccionados.</div>
               </div>
             </div>
-            <div class="coach-table-wrap">
+            <div class="coach-table-wrap" tabindex="0" role="region" aria-label="Tabla con desplazamiento horizontal">
               <table class="coach-mix-table">
                 <thead>
                   <tr><th>#</th><th>Cliente</th><th>$ actual</th><th>$&nbsp;anterior</th><th>Var. $</th><th>Participación</th><th>Bultos</th></tr>
@@ -419,7 +420,7 @@
                 <div class="muted">Quién empuja esta apertura y cómo evoluciona contra la comparación.</div>
               </div>
             </div>
-            <div class="coach-table-wrap">
+            <div class="coach-table-wrap" tabindex="0" role="region" aria-label="Tabla con desplazamiento horizontal">
               <table class="coach-mix-table">
                 <thead>
                   <tr><th>#</th><th>Vendedor</th><th>$ actual</th><th>$&nbsp;anterior</th><th>Var. $</th><th>Participación</th><th>Bultos</th><th>Var.<br>bultos</th><th>Clientes<br>actuales</th><th>Clientes<br>anteriores</th><th>Var.<br>clientes</th></tr>
@@ -432,7 +433,7 @@
           <details class="coach-team-details">
             <summary id="productBriefRankingSummary">Ver ranking completo</summary>
             <div id="productBriefTeamKpis" class="coach-kpi-grid compact"></div>
-            <div class="coach-table-wrap">
+            <div class="coach-table-wrap" tabindex="0" role="region" aria-label="Tabla con desplazamiento horizontal">
               <table class="coach-mix-table">
                 <thead>
                   <tr><th>#</th><th id="productBriefRankingColumn">Familia</th><th>$ actual</th><th>$&nbsp;anterior</th><th>Var. $</th><th>Bultos<br>actuales</th><th>Bultos<br>anteriores</th><th>Var.<br>bultos</th><th>Participación</th><th>Clientes<br>actuales</th><th>Clientes<br>anteriores</th><th>Var.<br>clientes</th></tr>
@@ -689,11 +690,11 @@
             <div class="two-col dashboard-notes">
               <div class="panel inner-panel">
                 <h3>Portfolio por unidad de negocio</h3>
-                <div id="pdvUnits" class="pdv-table-wrap"></div>
+                <div id="pdvUnits" class="pdv-table-wrap" tabindex="0" role="region" aria-label="Tabla con desplazamiento horizontal"></div>
               </div>
               <div class="panel inner-panel">
                 <h3>Cómo le llegamos</h3>
-                <div id="pdvCoverage" class="pdv-table-wrap"></div>
+                <div id="pdvCoverage" class="pdv-table-wrap" tabindex="0" role="region" aria-label="Tabla con desplazamiento horizontal"></div>
               </div>
             </div>
             <div class="panel inner-panel chart-panel">
@@ -709,7 +710,7 @@
                   <button type="button" class="dashboard-view-chip" data-pdv-sku="new">Nuevos</button>
                 </div>
               </div>
-              <div id="pdvSkus" class="pdv-table-wrap"></div>
+              <div id="pdvSkus" class="pdv-table-wrap" tabindex="0" role="region" aria-label="Tabla con desplazamiento horizontal"></div>
             </div>
           </div>
           </div>

@@ -577,6 +577,7 @@ const WORKSPACE_CHROME = {
 };
 
 function applyWorkspaceChrome() {
+  if (!isBiSurface) return;
   const chrome = WORKSPACE_CHROME[workspace];
   document.body.dataset.workspace = workspace;
   document.title = chrome.title;
@@ -1329,11 +1330,15 @@ function renderAccessConfiguration() {
             : `<button type="button" data-start-reset-password="${escapeHtml(item.id)}">Restablecer contraseña</button>`}
         </div>
         ${isResetting ? `
-          <div class="password-field reset-password-inline">
-            <input id="resetPasswordInput" type="password" placeholder="Nueva contraseña" autocomplete="new-password">
-            <button type="button" class="password-toggle" data-toggle-password="resetPasswordInput" aria-label="Mostrar contraseña">👁</button>
-            <button type="button" class="primary" data-confirm-reset-password="${escapeHtml(item.id)}">Guardar</button>
-            <button type="button" data-cancel-reset-password="true">Cancelar</button>
+          <div class="reset-password-inline">
+            <div class="password-field">
+              <input id="resetPasswordInput" type="password" placeholder="Nueva contraseña" autocomplete="new-password">
+              <button type="button" class="password-toggle" data-toggle-password="resetPasswordInput" aria-label="Mostrar contraseña">👁</button>
+            </div>
+            <div class="button-row">
+              <button type="button" class="primary" data-confirm-reset-password="${escapeHtml(item.id)}">Guardar</button>
+              <button type="button" data-cancel-reset-password="true">Cancelar</button>
+            </div>
           </div>
         ` : ""}
       </div>`;
@@ -4662,6 +4667,63 @@ function renderDashboardFallback() {
   });
 }
 
+// Keep the full option so rotating a phone also restores the desktop layout.
+const chartLayouts = new Map();
+const chartResizeObserver = typeof ResizeObserver === "function" ? new ResizeObserver((entries) => {
+  entries.forEach(({ target }) => {
+    const chart = dashboardState.charts[target.id];
+    const layout = chartLayouts.get(target.id);
+    if (!chart || !layout || !target.clientWidth || !target.clientHeight) return;
+    const compact = target.clientWidth < 600;
+    if (layout.compact !== compact) {
+      chart.setOption(responsiveChartOption(layout.option, compact), true);
+      layout.compact = compact;
+    }
+    chart.resize();
+  });
+}) : null;
+
+function responsiveChartOption(option, compact) {
+  if (!compact) return option;
+  const mapOptions = (value, transform) => Array.isArray(value) ? value.map(transform) : transform(value);
+  const result = {
+    ...option,
+    tooltip: { ...option.tooltip, confine: true },
+  };
+  if (option.grid) result.grid = mapOptions(option.grid, (grid) => ({
+    ...grid, left: 8, right: 12, containLabel: true,
+  }));
+  for (const axis of ["xAxis", "yAxis"]) {
+    if (!option[axis]) continue;
+    result[axis] = mapOptions(option[axis], (config) => ({
+      ...config,
+      axisLabel: {
+        ...config.axisLabel, fontSize: 10, hideOverlap: true,
+        ...(config.type === "category" ? {
+          width: axis === "yAxis" ? 80 : 64, overflow: "truncate",
+          ...(axis === "xAxis" ? { interval: "auto", rotate: 25 } : {}),
+        } : {}),
+      },
+    }));
+  }
+  if (option.legend) result.legend = mapOptions(option.legend, (legend) => ({
+    ...legend, type: "scroll", orient: "horizontal", left: 0, right: 0,
+    ...(option.series?.some((series) => series.type === "pie") ? { top: "auto", bottom: 0 } : {}),
+    textStyle: { ...legend.textStyle, fontSize: 11, width: 120, overflow: "truncate" },
+  }));
+  result.series = (option.series || []).map((series) => {
+    if (series.type === "pie") return {
+      ...series, center: ["50%", "44%"], radius: ["35%", "65%"],
+      label: { ...series.label, show: false }, labelLine: { show: false },
+    };
+    return { ...series, label: { ...series.label, show: false } };
+  });
+  if (option.graphic) result.graphic = mapOptions(option.graphic, (graphic) => ({
+    ...graphic, style: { ...graphic.style, width: 200, overflow: "truncate", fontSize: 10 },
+  }));
+  return result;
+}
+
 function mountDashboardChart(id, option) {
   const node = document.getElementById(id);
   if (!node) {
@@ -4671,8 +4733,11 @@ function mountDashboardChart(id, option) {
   if (!chart) {
     chart = echarts.init(node, null, { renderer: "canvas" });
     dashboardState.charts[id] = chart;
+    chartResizeObserver?.observe(node);
   }
-  chart.setOption(option, true);
+  const compact = node.clientWidth > 0 && node.clientWidth < 600;
+  chartLayouts.set(id, { option, compact });
+  chart.setOption(responsiveChartOption(option, compact), true);
   chart.resize();
 }
 
@@ -7615,6 +7680,40 @@ function initializeVisualPreferences() {
   }
 }
 
+function initializeResponsiveNavigation() {
+  const navigation = document.querySelector(".surface-switch");
+  const toggle = document.getElementById("navigationToggle");
+  if (!navigation || !toggle) return;
+  const mobile = window.matchMedia("(max-width: 1100px)");
+  function closeMenu(restoreFocus = false) {
+    navigation.classList.remove("menu-open");
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.textContent = "Menú";
+    if (restoreFocus) toggle.focus();
+  }
+  navigation.classList.add("navigation-ready");
+  toggle.addEventListener("click", () => {
+    const opening = !navigation.classList.contains("menu-open");
+    navigation.classList.toggle("menu-open", opening);
+    toggle.setAttribute("aria-expanded", String(opening));
+    toggle.textContent = opening ? "Cerrar menú" : "Menú";
+  });
+  navigation.querySelectorAll("a").forEach((link) => link.addEventListener("click", () => closeMenu()));
+  document.addEventListener("click", (event) => {
+    if (!navigation.contains(event.target)) closeMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && navigation.classList.contains("menu-open")) closeMenu(true);
+  });
+  navigation.addEventListener("focusout", () => {
+    requestAnimationFrame(() => {
+      if (!navigation.contains(document.activeElement)) closeMenu();
+    });
+  });
+  mobile.addEventListener("change", () => closeMenu());
+}
+
+initializeResponsiveNavigation();
 initializeVisualPreferences();
 bindClick("uploadBtn", () => uploadFiles().catch(showError));
 bindClick("clearUploadsBtn", () => clearUploads().catch(showError));

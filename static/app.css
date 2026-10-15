@@ -297,7 +297,7 @@ table,
 
 .guide-grid,
 .request-flow {
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
 }
 
 .guide-card,
@@ -568,7 +568,7 @@ table,
 
 .coach-kpi-grid > .metric-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr));
   gap: 12px;
 }
 
@@ -983,11 +983,11 @@ table,
 }
 
 .executive-kpis .metric-grid {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
 }
 
 .compact-kpis .metric-grid {
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
   gap: 12px;
 }
 
@@ -1003,7 +1003,7 @@ table,
 
 .planning-form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
   gap: 14px;
 }
 
@@ -1480,7 +1480,7 @@ button.primary {
 }
 
 .source-grid {
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   margin-top: 18px;
 }
 
@@ -1490,12 +1490,12 @@ button.primary {
 }
 
 .mapping-grid {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
   margin-top: 12px;
 }
 
 .mapping-grid.compact {
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
 }
 
 .preview {
@@ -1877,17 +1877,17 @@ th {
 }
 
 .two-col {
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
   margin-top: 22px;
 }
 
 .three-col {
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   margin-top: 22px;
 }
 
 .chart-grid {
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
   margin-top: 22px;
 }
 
@@ -1961,6 +1961,9 @@ th {
 }
 
 .reset-password-inline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
   margin-top: 8px;
 }
 
@@ -2003,7 +2006,7 @@ th {
 
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
   gap: 14px;
 }
 
@@ -2701,7 +2704,7 @@ h3 {
 .metric-grid,
 .executive-kpis .metric-grid,
 .dyn-kpi-grid {
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
   gap: 12px;
 }
 
@@ -3267,7 +3270,7 @@ textarea {
 
 .pdv-company-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
   gap: 12px;
 }
 
@@ -3677,4 +3680,152 @@ body[data-workspace="bi"] [data-workspace-only="coach"] {
 
 [data-theme="dark"] input[type="date"] {
   color-scheme: dark;
+}
+
+/* Shared responsive shell. Table contents scroll inside their own region. */
+.mobile-menu-toggle { display: none; }
+.layout, .layout :where(section, article, form, .row, .subpanel, .two-col, .three-col,
+  .chart-grid, .executive-grid, .coach-hero-actions, .coach-seller-picker, .filter-grid,
+  .metric-grid, .cards, .table-panel, .tabulator-host, .echart-host) { min-width: 0; }
+.echart-host { width: 100%; }
+:where(.table-wrap, .coach-table-wrap, .pdv-table-wrap, .tabulator-host) {
+  min-width: 0;
+  max-width: 100%;
+  overscroll-behavior-x: contain;
+}
+button, a, input, select, textarea { touch-action: manipulation; }
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid var(--brand);
+  outline-offset: 3px;
+}
+body[data-surface="intelligence-admin"] .layout > .panel { margin-bottom: 18px; padding: 20px; }
+.deposit-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.deposit-form label { min-width: 0; }
+.deposit-form textarea { min-height: 100px; resize: vertical; font: inherit; }
+.deposit-form .full-width, .deposit-form .check-inline { grid-column: 1 / -1; }
+.deposit-catalog-item { display: flex; gap: 16px; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.deposit-catalog-item span { overflow-wrap: anywhere; }
+.deposit-catalog-item button { flex-shrink: 0; }
+#output { max-width: 100%; overflow: auto; }
+
+@media screen and (max-width: 1100px) {
+  .layout { padding: 84px 16px 40px; }
+  .surface-switch {
+    min-height: 68px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto;
+    gap: 8px 12px;
+    padding: 10px 16px;
+    max-height: 85vh;
+    max-height: 85dvh;
+    overflow-y: auto;
+  }
+  .brand-lockup > span:last-child { display: grid; }
+  .navigation-ready .mobile-menu-toggle { display: block; grid-column: 2; grid-row: 1; }
+  .surface-switch .surface-links {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+  .surface-switch .surface-links a { min-height: 44px; padding: 10px; }
+  .surface-switch .surface-actions {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    justify-self: stretch;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 8px 0;
+  }
+  .surface-switch.navigation-ready:not(.menu-open) :is(.surface-links, .surface-actions) { display: none; }
+  .surface-switch .current-user {
+    display: block;
+    flex: 1;
+    max-width: none;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+  .header-period { display: none; }
+  .surface-switch button { min-height: 44px; }
+  .sticky-controls { top: 78px; }
+  .coach-brief-hero { flex-direction: column; align-items: stretch; }
+  .coach-comparison-bar { flex-wrap: wrap; }
+  .coach-print-actions { flex-wrap: wrap; }
+  .coach-hero-actions, .coach-seller-picker { min-width: 0; }
+}
+
+@media screen and (max-width: 700px) {
+  html { scroll-padding-top: 84px; }
+  .layout { padding: 80px 12px calc(80px + env(safe-area-inset-bottom, 0px)); }
+  .surface-switch { padding: 10px 12px; }
+  .hero { padding: 16px; }
+  .hero h1 { font-size: 26px; overflow-wrap: anywhere; }
+  .hero .lead { display: block; font-size: 14px; }
+  .sticky-controls { position: static; padding: 12px; }
+  .sticky-controls .row { display: flex; align-items: stretch; gap: 8px; }
+  .sticky-controls .row > * { flex: 1 1 180px; min-width: 0; }
+  .sticky-controls .row > .metric-view-header { flex-basis: 100%; }
+  .controls-bi:not(.parameters-collapsed) { max-height: none; overflow: visible; }
+  .controls-bi.parameters-collapsed { visibility: hidden; }
+  .panel, .subpanel, .source-card, .source-item, .erp-panel { padding: 14px; }
+  .coach-brief, .admin-ops { padding: 0; }
+  .two-col, .three-col, .chart-grid, .executive-grid, .controls,
+  .source-grid, .mapping-grid, .mapping-grid.compact, .access-inline-add,
+  .coach-two-col, .coach-kpi-grid.compact > .metric-grid { grid-template-columns: minmax(0, 1fr); }
+  .row, .subpanel-header, .access-check-header, .metric-view-header { flex-wrap: wrap; }
+  .row > label, .meeting-actions > label { flex: 1 1 100%; }
+  label, label.wide, .meeting-actions label, .dyn-combo-row select { min-width: 0; max-width: 100%; }
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+    width: 100%; min-width: 0; max-width: 100%; min-height: 44px; font-size: 16px;
+  }
+  input[type="file"] { padding: 10px 4px; }
+  button { min-height: 44px; height: auto; white-space: normal; padding: 10px 12px; }
+  .button-row > button { flex: 1 1 140px; }
+  .segmented { flex-wrap: wrap; }
+  .segmented button { flex: 1 1 auto; }
+  .filter-fields-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .filter-box { min-width: 0; max-width: none; width: 100%; }
+  .filter-box-toggle { min-height: 44px; }
+  .filter-box-option, .access-check-option { min-height: 44px; }
+  .access-check-option { grid-template-columns: auto minmax(0, 1fr); }
+  .access-check-option span { overflow-wrap: anywhere; }
+  .access-check-option small { grid-column: 2; overflow-wrap: anywhere; }
+  .insight-item, .pill, .status { overflow-wrap: anywhere; }
+  .dashboard-view-selector { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .dashboard-view-selector button { width: 100%; min-width: 0; }
+  .coach-brief-hero, .coach-comparison-bar { padding: 16px; }
+  .coach-message { margin: 16px; padding: 12px; }
+  .coach-kpi-grid, .coach-section-heading, .coach-table-wrap, .coach-two-col,
+  .coach-week-plan, .coach-team-details { margin-left: 16px; margin-right: 16px; }
+  .coach-kpi-grid.compact { margin-left: 0; margin-right: 0; }
+  .coach-print-actions > * { flex: 1 1 100%; }
+  .coach-print-actions .print-orientation { width: 100%; }
+  .coach-callout, .coach-week-plan { padding: 14px; }
+  .chart-panel { min-height: 0; }
+  .echart-host, .echart-host.xl-chart { height: 340px; min-height: 340px; }
+  .table-wrap, .coach-table-wrap, .pdv-table-wrap, .tabulator-host { overflow-x: auto; }
+  :is(.coach-table-wrap, .pdv-table-wrap):has(table)::before {
+    content: "Deslizá la tabla para ver todas las columnas";
+    display: block;
+    margin-bottom: 8px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .tabulator .tabulator-footer .tabulator-footer-contents { flex-wrap: wrap; gap: 8px; }
+  .tabulator .tabulator-footer .tabulator-paginator { white-space: normal; }
+  .pdv-search { flex-basis: 100%; }
+  .pdv-pen-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .pdv-pen-label { grid-column: 1 / -1; white-space: normal; }
+  .progress-modal { padding: 12px; }
+  .progress-card { padding: 20px; gap: 12px; max-height: 85dvh; overflow-y: auto; flex-direction: column; align-items: stretch; }
+  .progress-card > * { min-width: 0; overflow-wrap: anywhere; }
+  .floating-nav { right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); flex-direction: row; gap: 6px; }
+  .floating-nav button { width: 44px; height: 44px; }
+  .auth-layout { min-height: 100svh; padding: 20px 12px; }
+  .auth-card { width: 100%; min-width: 0; padding: 24px 18px; }
+  .deposit-form { grid-template-columns: minmax(0, 1fr); }
+  .deposit-catalog-item { flex-direction: column; align-items: stretch; }
+  body[data-surface="intelligence-admin"] .panel > button { width: 100%; margin-top: 8px; }
 }

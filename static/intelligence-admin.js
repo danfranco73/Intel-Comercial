@@ -26,8 +26,13 @@
     const container = byId("catalog"); container.replaceChildren();
     for (const row of config.deposits) {
       const line = document.createElement("p"), label = document.createElement("span"), button = document.createElement("button");
+      line.className = "deposit-catalog-item";
       label.textContent = `${row.deposit_id} · ${row.deposit_name} | Descubierto: ${row.discovered ? "sí" : "no"} | Configurado: ${row.configured ? "sí" : "no"} | Activo: ${row.active === null ? "sin validar" : row.active ? "sí" : "no"} | En análisis: ${row.include_in_stock_analysis ? "sí" : "no"} `;
-      button.textContent = "Editar"; button.type = "button"; button.onclick = () => edit(row);
+      button.textContent = "Editar"; button.type = "button"; button.onclick = () => {
+        edit(row);
+        form.scrollIntoView({ block: "start" });
+        form.elements.deposit_name.focus({ preventScroll: true });
+      };
       line.append(label, button); container.append(line);
     }
   }
