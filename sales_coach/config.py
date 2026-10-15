@@ -36,11 +36,19 @@ def load_app_config() -> AppConfig:
         upload_dir=base_dir / "uploads",
         log_dir=log_dir,
         error_log=log_dir / "app_errors.log",
-        host=(os.getenv("APP_HOST") or "127.0.0.1").strip(),
-        port=int_env("APP_PORT", 8765, minimum=1),
+        host=app_host(),
+        port=int_env("APP_PORT", int_env("PORT", 8765, minimum=1), minimum=1),
         max_scan_depth=int_env("APP_MAX_SCAN_DEPTH", 2, minimum=0),
         allowed_extensions=frozenset({".xlsx", ".xlsm"}),
     )
+
+
+def app_host() -> str:
+    # Render (y hosts similares) inyectan PORT y exigen escuchar en todas las interfaces.
+    explicit = (os.getenv("APP_HOST") or "").strip()
+    if explicit:
+        return explicit
+    return "0.0.0.0" if os.getenv("RENDER") or os.getenv("PORT") else "127.0.0.1"
 
 
 def int_env(name: str, default: int, minimum: int | None = None) -> int:
