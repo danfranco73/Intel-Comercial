@@ -477,6 +477,7 @@ def normalize_erp_sale_row(row):
     amount_final = _pick_number(row.get("subtotalFinal"), row.get("totalFinal"), row.get("importeFinal"))
     amount_net = _pick_number(row.get("subtotalNeto"), row.get("totalNeto"), row.get("importeNeto"))
     internal_taxes = _pick_number(
+        row.get("internos"),
         row.get("subtotalImpuestosInternos"),
         row.get("impuestosInternos"),
         row.get("impuestoInterno"),

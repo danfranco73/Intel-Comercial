@@ -219,12 +219,17 @@ def enrich_sales_records(sales_records, loaded):
         # La venta de referencia del análisis es el NETO sin IVA (subtotalNeto del
         # ERP), que es la base de la columna "Importe Neto" del pivot del ERP.
         # `amount` pasa a ser ese neto en todo el pipeline de análisis;
-        # `amount_gross` conserva el valor con impuestos (subtotalFinal) por si
-        # algún tablero necesita el "importe final".
-        amount_gross = row.get("amount")
+        # Contrato canónico: amount_final = subtotalFinal explícito de Chess.
+        # amount_gross es únicamente un alias de compatibilidad obsoleto;
+        # NO representa subtotalBruto. No sumar impuestos al final nuevamente.
+        amount_final = row.get("amount_final")
+        if amount_final is None:
+            amount_final = row.get("amount_gross")
+        if amount_final is None:
+            amount_final = row.get("amount")
         amount_net_value = row.get("amount_net")
         if amount_net_value is None:
-            amount_net_value = amount_gross
+            amount_net_value = row.get("amount")
         fact_key = "|".join([
             date_value.isoformat(),
             client_key or "-",
@@ -237,7 +242,8 @@ def enrich_sales_records(sales_records, loaded):
             {
                 **row,
                 "amount": amount_net_value,
-                "amount_gross": amount_gross,
+                "amount_final": amount_final,
+                "amount_gross": amount_final,
                 "client": row.get("client_name") or row.get("client_key"),
                 "client_canonical": _normalize_text(row.get("client_name") or row.get("client_key")),
                 "period": date_value.strftime("%Y-%m"),
