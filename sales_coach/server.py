@@ -143,6 +143,41 @@ def _build_tactical_month_window(fecha_desde, fecha_hasta):
     }
 
 
+def _build_tactical_month_detail_window(fecha_desde, fecha_hasta):
+    """Ventana con detalle completo para el tablero del mes: el análisis base más
+    el mes anterior completo. El resto del año anterior se procesa mes a mes
+    aparte (ver tactical_month_history_chunks)."""
+    base_window = _build_sales_analysis_window(fecha_desde, fecha_hasta)
+    selected_end = _parse_iso_date(base_window["selectedEnd"], "fechaHasta")
+    load_start = min(
+        _parse_iso_date(base_window["loadStart"], "loadStart"),
+        _shift_month_start(selected_end, -1),
+    )
+    return {
+        **base_window,
+        "loadStart": load_start.isoformat(),
+    }
+
+
+def tactical_month_history_chunks(fecha_desde, fecha_hasta, chunk_days=14):
+    """Tramos (inicio, fin) que la ventana táctica completa carga y la de detalle
+    no. Van de a dos semanas para acotar el pico de memoria de cada tramo."""
+    full_start = _parse_iso_date(_build_tactical_month_window(fecha_desde, fecha_hasta)["loadStart"], "loadStart")
+    detail_start = _parse_iso_date(_build_tactical_month_detail_window(fecha_desde, fecha_hasta)["loadStart"], "loadStart")
+    chunks = []
+    cursor = full_start
+    while cursor < detail_start:
+        chunk_end = min(cursor + timedelta(days=chunk_days - 1), detail_start - timedelta(days=1))
+        chunks.append((cursor.isoformat(), chunk_end.isoformat()))
+        cursor = chunk_end + timedelta(days=1)
+    return chunks
+
+
+def _shift_month_start(value, months):
+    index = value.year * 12 + value.month - 1 + months
+    return date(index // 12, index % 12 + 1, 1)
+
+
 def _attach_sales_analysis_window(dataset, window):
     attached = dict(dataset)
     attached["analysisRange"] = {
@@ -1093,6 +1128,8 @@ def _resolve_datasets(datasets):
             if fecha_desde and fecha_hasta and (use_auto or use_mongo or use_clickhouse or use_erp):
                 if load_strategy == "tactical_month":
                     analysis_window = _build_tactical_month_window(fecha_desde, fecha_hasta)
+                elif load_strategy == "tactical_month_detail":
+                    analysis_window = _build_tactical_month_detail_window(fecha_desde, fecha_hasta)
                 else:
                     analysis_window = _build_sales_analysis_window(
                         fecha_desde,

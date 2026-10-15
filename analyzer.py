@@ -277,19 +277,30 @@ def build_consistency_report(datasets, scope_filters=None, release_raw_sales=Fal
     }
 
 
-def build_tactical_month_report(datasets, filters=None, supplier_focus=None, planning=None, scope_filters=None, release_raw_sales=False):
+def build_tactical_month_report(datasets, filters=None, supplier_focus=None, planning=None, scope_filters=None, release_raw_sales=False, history_loader=None):
+    """``history_loader(masters, scope_filters, effective_filters)`` aporta las
+    ventas ya filtradas de los meses anteriores que no vienen en ``datasets``,
+    para no tener 13 meses de detalle en memoria a la vez."""
     context = load_bi_context(datasets, release_raw_sales=release_raw_sales)
     enriched_sales, selected_universe = apply_data_scope(context, scope_filters)
     sales_context = context["salesContext"]
+    masters = {key: value for key, value in context["loaded"].items() if key != "sales"}
+    load_history = (
+        (lambda active_filters: history_loader(masters, scope_filters, active_filters))
+        if history_loader else (lambda _active_filters: [])
+    )
     normalized_filters = remove_noop_filters(filters or {}, selected_universe, sales_context)
     tactical_filters = remove_filter_field(remove_filter_field(normalized_filters, "year"), "month")
     effective_filters = merge_supplier_focus_filter(tactical_filters, supplier_focus)
     applied_filters, filtered_sales = apply_filters(enriched_sales, effective_filters)
-    if not filtered_sales:
+    history_sales = load_history(effective_filters)
+    if not filtered_sales and not history_sales:
         effective_filters = relax_broad_filters(effective_filters, selected_universe, sales_context)
         applied_filters, filtered_sales = apply_filters(enriched_sales, effective_filters)
-        if not filtered_sales:
+        history_sales = load_history(effective_filters)
+        if not filtered_sales and not history_sales:
             raise ValueError("No quedaron ventas para construir el dashboard ejecutivo del mes.")
+    filtered_sales.extend(history_sales)
     filtered_sales.sort(key=lambda item: item["date"])
     tactical = build_tactical_month_dashboard(filtered_sales, sales_context["selectedEnd"], planning=planning)
     return {
@@ -530,6 +541,38 @@ def analyze_datasets(datasets, filters=None, supplier_focus=None, planning=None,
         "availableFilters": available_filters,
         "appliedFilters": applied_filters,
     }
+
+
+def tactical_history_rows(sales_records, masters, scope_filters, effective_filters):
+    """Enriquece y filtra un tramo de historia igual que el detalle del tablero y lo
+    reduce a una fila por cliente y día con ventas y unidades.
+
+    Es todo lo que el tablero lee de esa historia: clientes que compraron, ventas
+    históricas por cliente y sumas por tramo de fechas (mismo mes del año
+    anterior, acumulado diario y promedio móvil)."""
+    enriched = enrich_sales_records(sales_records, masters)
+    sales_records.clear()
+    if scope_filters:
+        _, enriched = apply_filters(enriched, scope_filters)
+    _, enriched = apply_filters(enriched, effective_filters)
+    by_client_day = {}
+    for record in enriched:
+        client_id = record.get("client_canonical") or record.get("client_key") or record.get("client")
+        key = (client_id, record["date"])
+        summary = by_client_day.get(key)
+        if summary is None:
+            by_client_day[key] = {
+                "date": record["date"],
+                "client_canonical": record.get("client_canonical"),
+                "client_key": record.get("client_key"),
+                "client": record.get("client"),
+                "amount": record.get("amount", 0) or 0,
+                "quantity": record.get("quantity", 0) or 0,
+            }
+            continue
+        summary["amount"] += record.get("amount", 0) or 0
+        summary["quantity"] += record.get("quantity", 0) or 0
+    return list(by_client_day.values())
 
 
 def apply_data_scope(context, scope_filters):

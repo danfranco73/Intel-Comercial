@@ -13,6 +13,7 @@ from analyzer import (
     load_dataset,
     load_sales_dataset,
     normalize_text,
+    tactical_history_rows,
 )
 from analysis_engine import AnalysisEngine
 from insight_writer import insights_summary, write_insights
@@ -124,6 +125,7 @@ class AnalysisService:
     def tactical(self, payload: Any, scope_filters):
         request = AnalysisRequest.parse(payload)
         tactical_datasets = json.loads(json.dumps(request.datasets))
+        history_loader = None
         if "sales" in tactical_datasets and isinstance(tactical_datasets["sales"], dict):
             sales_config = tactical_datasets["sales"]
             sales_config["loadStrategy"] = "tactical_month"
@@ -139,6 +141,15 @@ class AnalysisService:
                     sales_config["source"] = "mongo"
                     if isinstance(sales_config.get("erp"), dict):
                         sales_config["erp"]["enabled"] = False
+                else:
+                    # Sin Mongo completo para el período, la ventana de 13 meses
+                    # tampoco lo está y la carga automática caía en ClickHouse; se
+                    # fija para que el detalle y los meses de historia salgan de
+                    # la misma fuente.
+                    sales_config["source"] = "clickhouse"
+            if sales_start and sales_end and _uses_date_window(sales_config):
+                sales_config["loadStrategy"] = "tactical_month_detail"
+                history_loader = self._tactical_history_loader(sales_config, sales_start, sales_end)
         return build_tactical_month_report(
             self.dataset_resolver(tactical_datasets),
             filters=request.filters,
@@ -146,4 +157,38 @@ class AnalysisService:
             planning=request.planning,
             scope_filters=scope_filters,
             release_raw_sales=True,
+            history_loader=history_loader,
         )
+
+    def _tactical_history_loader(self, sales_config, sales_start, sales_end):
+        from sales_coach.server import tactical_month_history_chunks
+
+        chunks = tactical_month_history_chunks(sales_start, sales_end)
+
+        def load(masters, scope_filters, effective_filters):
+            rows = []
+            for chunk_start, chunk_end in chunks:
+                chunk_config = {
+                    key: value
+                    for key, value in sales_config.items()
+                    if key not in ("loadStrategy", "comparisonDesde", "comparisonHasta")
+                }
+                chunk_config.update(fechaDesde=chunk_start, fechaHasta=chunk_end, exactRangeOnly=True)
+                try:
+                    chunk_sales = self.dataset_resolver({"sales": chunk_config})["sales"]
+                except ValueError:
+                    # Tramo sin ventas: en la carga de 13 meses simplemente no aportaba filas.
+                    continue
+                rows.extend(
+                    tactical_history_rows(
+                        chunk_sales["records"], masters, scope_filters, effective_filters
+                    )
+                )
+            return rows
+
+        return load
+
+
+def _uses_date_window(sales_config):
+    erp_config = sales_config.get("erp") if isinstance(sales_config.get("erp"), dict) else {}
+    return sales_config.get("source") in ("auto", "mongo", "clickhouse", "erp") or bool(erp_config.get("enabled"))
