@@ -516,6 +516,21 @@ def enforce_erp_sales_retention(origin: str = "auto_retention") -> dict | None:
     return prune_erp_sales_history(cutoff_date, rebuild=False, origin=origin)
 
 
+def erp_sales_range_available(fecha_desde: str, fecha_hasta: str) -> bool:
+    """Mismo criterio que load_erp_sales_dataset(require_coverage=True), sin cargar las ventas."""
+    db = get_db()
+    if db is None:
+        return False
+    _ensure_erp_indexes(db)
+    covered, _, _ = _sales_range_covered(db, fecha_desde, fecha_hasta)
+    if not covered:
+        return False
+    return db[ERP_SALES_COLLECTION].find_one(
+        {"date": {"$gte": fecha_desde, "$lte": fecha_hasta}},
+        {"_id": 1},
+    ) is not None
+
+
 def load_erp_sales_dataset(fecha_desde: str, fecha_hasta: str, require_coverage: bool = True) -> dict:
     db = get_db()
     if db is None:

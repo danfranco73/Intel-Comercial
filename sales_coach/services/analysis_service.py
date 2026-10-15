@@ -20,7 +20,7 @@ from kpi_generator import generate_kpis
 from rule_engine import resolve_tasks
 from schema_detector import detect_schema
 from viz_selector import build_viz
-from mongo_client import load_erp_sales_dataset
+from mongo_client import erp_sales_range_available
 from sales_coach.schemas import AnalysisRequest
 
 
@@ -132,12 +132,13 @@ class AnalysisService:
             sales_end = sales_config.get("fechaHasta") or (sales_config.get("erp") or {}).get("fechaHasta")
             if sales_config.get("source") == "auto" and sales_start and sales_end:
                 try:
-                    load_erp_sales_dataset(sales_start, sales_end, require_coverage=True)
+                    mongo_available = erp_sales_range_available(sales_start, sales_end)
+                except Exception:
+                    mongo_available = False
+                if mongo_available:
                     sales_config["source"] = "mongo"
                     if isinstance(sales_config.get("erp"), dict):
                         sales_config["erp"]["enabled"] = False
-                except Exception:
-                    pass
         return build_tactical_month_report(
             self.dataset_resolver(tactical_datasets),
             filters=request.filters,
