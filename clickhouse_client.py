@@ -411,6 +411,10 @@ def load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta, *, initialize_sc
         """
     )
     records = []
+    # Los textos se repiten en cientos de miles de filas; compartir una sola
+    # instancia por valor ahorra ~200 MB por cada 300k filas.
+    shared = {}
+    share = lambda value: shared.setdefault(value, value) if isinstance(value, str) else value
     for row in result.result_rows:
         sale_date = row[0]
         if isinstance(sale_date, datetime):
@@ -420,18 +424,18 @@ def load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta, *, initialize_sc
                 "date": sale_date,
                 "year": int(row[1]),
                 "month": int(row[2]),
-                "client_key": row[3],
-                "client_name": row[4],
-                "route_description": row[5],
-                "seller_key": row[6],
-                "seller_name": row[7],
-                "sales_scheme_key": row[8],
-                "sales_scheme_name": row[9],
-                "sales_force": row[10],
-                "product_key": row[11],
-                "invoice": row[12],
-                "channel": row[13],
-                **dict(zip(DIMENSION_FIELDS, row[14:20])),
+                "client_key": share(row[3]),
+                "client_name": share(row[4]),
+                "route_description": share(row[5]),
+                "seller_key": share(row[6]),
+                "seller_name": share(row[7]),
+                "sales_scheme_key": share(row[8]),
+                "sales_scheme_name": share(row[9]),
+                "sales_force": share(row[10]),
+                "product_key": share(row[11]),
+                "invoice": share(row[12]),
+                "channel": share(row[13]),
+                **{field: share(value) for field, value in zip(DIMENSION_FIELDS, row[14:20])},
                 "amount": float(row[20]),
                 "amount_net": float(row[21]),
                 "amount_final": float(row[22]),
