@@ -1,3 +1,4 @@
+from sales_coach.intelligence_budget import ReadDatabase, bounded_calculation, current_budget, MAX_ROWS, IntelligenceCapacityExceeded
 from bi.facts import enrich_sales_records
 from bi.tactical_month import _month_range
 from sales_coach.domain.intelligence import fingerprint
@@ -9,15 +10,19 @@ from sales_coach.services.sales_coverage_service import SalesCoverageService
 
 class IntelligenceContextService:
     def __init__(self, db, loader=None, coverage_service=None):
-        self.db = db
+        self.db = ReadDatabase(db)
         self.loader = loader or SalesRepository().load_intelligence
-        self.coverage_service = coverage_service or SalesCoverageService(db)
+        self.coverage_service = coverage_service or SalesCoverageService(self.db)
 
+    @bounded_calculation
     def build(self, request, user):
         end = request["as_of"]
         windows = _month_range(end)
         start = min(windows["yoyStart"], windows["previousStart"])
         rows, source, errors = self.loader(self.db, start.isoformat(), end.isoformat())
+        if len(rows) > MAX_ROWS:
+            raise IntelligenceCapacityExceeded("rows")
+        current_budget().check()
         loaded = {key: {"records": list(self.db[col].find({}, {"_id": 0}))} for key, col in (
             ("articles", "erp_articles"), ("sellers", "erp_sellers"), ("routes", "erp_routes"))}
         facts = enrich_sales_records(rows, loaded)

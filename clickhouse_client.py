@@ -103,7 +103,10 @@ def clickhouse_configured():
 def get_clickhouse_client():
     if not clickhouse_configured():
         return None
-    client = getattr(_client_state, "client", None)
+    from sales_coach.intelligence_budget import current_budget
+    bounded = current_budget() is not None
+    cache_key = "intelligence_client" if bounded else "client"
+    client = getattr(_client_state, cache_key, None)
     if client is None:
         cfg = _config()
         client = clickhouse_connect.get_client(
@@ -113,10 +116,11 @@ def get_clickhouse_client():
             password=cfg["password"],
             database=cfg["bootstrap_database"] or CLICKHOUSE_BOOTSTRAP_DATABASE,
             secure=cfg["secure"],
-            connect_timeout=cfg["timeout"],
-            send_receive_timeout=cfg["timeout"],
+            connect_timeout=2 if bounded else cfg["timeout"],
+            send_receive_timeout=2 if bounded else cfg["timeout"],
+            **({"query_retries": 0} if bounded else {}),
         )
-        _client_state.client = client
+        setattr(_client_state, cache_key, client)
     return client
 
 
@@ -370,9 +374,25 @@ def sync_erp_sales_clickhouse(records, fecha_desde, fecha_hasta, origin="manual"
 def _stream_rows(client, query):
     # Lee por bloques para no tener el resultado crudo completo en memoria al
     # mismo tiempo que las filas ya convertidas.
+    from sales_coach.intelligence_budget import current_budget, clickhouse_settings, MAX_ROWS, IntelligenceCapacityExceeded
+    budget = current_budget()
+    if budget is not None:
+        # SQL SETTINGS cannot be silently discarded by a driver's setting filter.
+        settings = clickhouse_settings()
+        literals = [f"{key}='{value}'" if isinstance(value, str) else f"{key}={value}"
+                    for key, value in settings.items()]
+        query = query.rstrip().rstrip(';') + " SETTINGS " + ", ".join(literals)
+        budget.check()
+    count = 0
     with client.query_row_block_stream(query) as stream:
         for block in stream:
-            yield from block
+            for row in block:
+                if budget is not None:
+                    count += 1
+                    if count > MAX_ROWS:
+                        raise IntelligenceCapacityExceeded("rows")
+                    budget.consume(row)
+                yield row
 
 
 def load_erp_sales_dataset_clickhouse(fecha_desde, fecha_hasta, *, initialize_schema=True, allow_empty=False):

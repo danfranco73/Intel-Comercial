@@ -15,7 +15,8 @@ class SalesRepository:
                 data = load_erp_sales_dataset_clickhouse(start, end, initialize_schema=False, allow_empty=True)
                 return data["records"], "clickhouse", errors
             except Exception:
-                errors.append("CLICKHOUSE_UNAVAILABLE")
+                # Do not repeat a failed/over-budget historical read in Mongo.
+                raise
         rows = list(db["erp_sales"].find({"date": {"$gte": start, "$lte": end}}, {"_id": 0}))
         for row in rows:
             if isinstance(row.get("date"), str):

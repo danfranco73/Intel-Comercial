@@ -34,8 +34,13 @@ def calendar_days(start, end):
 def observed_daily(db, source):
     if source == "clickhouse":
         from clickhouse_client import get_clickhouse_client, _qualified_table
-        rows = get_clickhouse_client().query(
-            f"SELECT date, count() FROM {_qualified_table()} GROUP BY date ORDER BY date").result_rows
+        from sales_coach.intelligence_budget import current_budget
+        query = f"SELECT date, count() FROM {_qualified_table()} GROUP BY date ORDER BY date"
+        if current_budget() is not None:
+            from clickhouse_client import _stream_rows
+            rows = _stream_rows(get_clickhouse_client(), query)
+        else:
+            rows = get_clickhouse_client().query(query).result_rows
         return {day(d): int(n) for d, n in rows}
     if source != "mongo":
         raise ValueError("Fuente de cobertura desconocida")

@@ -14,8 +14,8 @@ class RouteDefinition:
 
 
 GET_ROUTES = {
-    "/api/intelligence/sales/daily-brief": RouteDefinition("handle_intelligence_sales", pass_parsed_url=True, heavy=True),
-    "/api/intelligence/sales/drilldown": RouteDefinition("handle_intelligence_drilldown", pass_parsed_url=True, heavy=True),
+    "/api/intelligence/sales/daily-brief": RouteDefinition("handle_intelligence_sales", pass_parsed_url=True),
+    "/api/intelligence/sales/drilldown": RouteDefinition("handle_intelligence_drilldown", pass_parsed_url=True),
     "/api/intelligence/stock/daily-brief": RouteDefinition("handle_intelligence_stock", permission="admin", pass_parsed_url=True),
     "/api/intelligence/stock/items": RouteDefinition("handle_intelligence_stock_items", permission="admin", pass_parsed_url=True),
     "/api/intelligence/deposits": RouteDefinition("handle_intelligence_deposits", permission="admin"),

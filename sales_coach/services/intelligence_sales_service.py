@@ -1,3 +1,4 @@
+from sales_coach.intelligence_budget import ReadDatabase, bounded_calculation
 from collections import defaultdict
 from calendar import monthrange
 from decimal import Decimal
@@ -12,7 +13,7 @@ from sales_coach.services.objective_service import ObjectiveService
 
 class IntelligenceSalesService:
     def __init__(self, db, context_service=None):
-        self.db = db
+        self.db = ReadDatabase(db)
         self.context_service = context_service or IntelligenceContextService(db)
 
     @staticmethod
@@ -28,6 +29,7 @@ class IntelligenceSalesService:
                 "delta_pct": _pct_change(current, previous) if previous else None,
                 "status": "comparable" if previous else "zero_baseline"}
 
+    @bounded_calculation
     def brief(self, query, user):
         request = sales_request(query)
         context = self.context_service.build(request, user)
@@ -114,6 +116,7 @@ class IntelligenceSalesService:
         result["status"] = "unavailable" if not complete else "partial" if issues else "ok"
         return result
 
+    @bounded_calculation
     def drilldown(self, query, user):
         request = sales_request(query)
         context = self.context_service.build(request, user)

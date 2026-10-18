@@ -34,13 +34,13 @@ def _local_host(host):
 
 
 def _test_connect(sock, address):
-    if sock.family != socket.AF_UNIX and not _local_host(address[0]):
+    if sock.family != getattr(socket, "AF_UNIX", -1) and not _local_host(address[0]):
         raise RuntimeError("Tests prohibit external connections")
     return _socket_connect(sock, address)
 
 
 def _test_connect_ex(sock, address):
-    if sock.family != socket.AF_UNIX and not _local_host(address[0]):
+    if sock.family != getattr(socket, "AF_UNIX", -1) and not _local_host(address[0]):
         raise RuntimeError("Tests prohibit external connections")
     return _socket_connect_ex(sock, address)
 
@@ -52,7 +52,7 @@ def _test_getaddrinfo(host, *args, **kwargs):
 
 
 def _test_sendto(sock, data, *args):
-    if sock.family != socket.AF_UNIX and not _local_host(args[-1][0]):
+    if sock.family != getattr(socket, "AF_UNIX", -1) and not _local_host(args[-1][0]):
         raise RuntimeError("Tests prohibit external datagrams")
     return _socket_sendto(sock, data, *args)
 

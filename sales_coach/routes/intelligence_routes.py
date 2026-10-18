@@ -1,3 +1,4 @@
+from sales_coach.intelligence_budget import IntelligenceCapacityExceeded
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from urllib.parse import parse_qs
@@ -11,6 +12,9 @@ class IntelligenceRoutesMixin:
     def _intelligence_call(self, operation):
         try:
             result = operation()
+        except IntelligenceCapacityExceeded:
+            self.send_json({"error": "La consulta excede el presupuesto seguro; no se generó un informe parcial.",
+                            "code": "INTELLIGENCE_CAPACITY_EXCEEDED"}, status=503)
         except PermissionError as exc:
             self.send_json({"error": str(exc)}, status=403)
         except LookupError as exc:
