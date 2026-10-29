@@ -162,7 +162,13 @@ def build_master_maps(loaded):
     }
 
 
-def enrich_sales_records(sales_records, loaded):
+def enrich_sales_records(sales_records, loaded, *, consume=False):
+    """Enrich rows; consume=True transfers ownership of a mutable input list.
+
+    Release each input reference after copying it, avoiding a peak with two
+    complete sets of dictionaries. Individual input dictionaries are unchanged.
+    The input list must not be reused, including after an enrichment error.
+    """
     master_maps = build_master_maps(loaded)
     article_map = master_maps["article_map"]
     route_by_seller = master_maps["route_by_seller"]
@@ -177,7 +183,7 @@ def enrich_sales_records(sales_records, loaded):
     # calculan una vez por valor y todas las filas comparten el mismo objeto.
     canonical_by_client = {}
     labels_by_date = {}
-    for row in sales_records:
+    for index, row in enumerate(sales_records):
         product_key = row.get("product_key")
         seller_key = row.get("seller_key")
         original_seller_key = seller_key
@@ -291,6 +297,10 @@ def enrich_sales_records(sales_records, loaded):
                 "fact_key": fact_key,
             }
         )
+        if consume:
+            sales_records[index] = None
+    if consume:
+        sales_records.clear()
     return enriched
 
 

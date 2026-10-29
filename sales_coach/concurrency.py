@@ -13,7 +13,7 @@ class AnalysisCapacityExceeded(RuntimeError):
 # Cada análisis carga cientos de miles de filas (~1 GB por mes analizado), así que
 # se limita cuántos corren a la vez para que varios usuarios simultáneos no agoten
 # la memoria de la instancia; los demás esperan su turno.
-MAX_CONCURRENT_ANALYSES = int_env("APP_MAX_CONCURRENT_ANALYSES", 2, minimum=1)
+MAX_CONCURRENT_ANALYSES = int_env("APP_MAX_CONCURRENT_ANALYSES", 1, minimum=1)
 ANALYSIS_QUEUE_TIMEOUT_SECONDS = int_env("APP_ANALYSIS_QUEUE_TIMEOUT_SECONDS", 120, minimum=1)
 
 _analysis_slots = BoundedSemaphore(MAX_CONCURRENT_ANALYSES)

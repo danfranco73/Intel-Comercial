@@ -235,11 +235,7 @@ def load_bi_context(datasets, release_raw_sales=False):
         loaded[dataset_type] = load_dataset(dataset_type, source)
 
     sales_records = loaded["sales"]["records"]
-    enriched_sales = enrich_sales_records(sales_records, loaded)
-    if release_raw_sales:
-        # Las filas enriquecidas ya copian todo lo necesario; vaciar la lista
-        # original (compartida con quien llamó) evita tener dos copias en memoria.
-        sales_records.clear()
+    enriched_sales = enrich_sales_records(sales_records, loaded, consume=release_raw_sales)
     if not enriched_sales:
         raise ValueError("No quedaron ventas válidas para analizar")
 
