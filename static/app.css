@@ -938,6 +938,96 @@ table,
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
+  /* Informes de Comercial (series e histórico): ver printCommercialReport(). */
+  body.report-print .print-target > .subpanel-header,
+  body.report-print .interactive-slicers,
+  body.report-print .interactive-report-controls,
+  body.report-print .echart-host,
+  body.report-print .tabulator-host {
+    display: none !important;
+  }
+
+  /* La animación de entrada (premiumReveal) arranca en opacidad 0: los nodos
+     que se agregan justo antes de imprimir saldrían invisibles. */
+  body.report-print .print-target > * {
+    animation: none !important;
+  }
+
+  body.report-print .print-target {
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+  }
+
+  body.report-print .print-report-header {
+    margin-bottom: 4mm;
+    padding-bottom: 3mm;
+    border-bottom: 1px solid #cbd5e1;
+    font-size: 9pt;
+  }
+
+  body.report-print .print-report-header h2 {
+    margin: 0 0 1.5mm;
+    font-size: 18pt;
+  }
+
+  body.report-print .interactive-report-layout,
+  body.report-print .executive-grid,
+  body.report-print .two-col {
+    display: block;
+    margin-top: 3mm;
+  }
+
+  body.report-print .inner-panel {
+    margin-bottom: 4mm;
+    padding: 3mm;
+    box-shadow: none;
+  }
+
+  body.report-print .chart-panel {
+    break-inside: avoid;
+  }
+
+  body.report-print .print-chart-image {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 120mm;
+    object-fit: contain;
+  }
+
+  body.report-print .print-report-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 7.5pt;
+  }
+
+  body.report-print.print-portrait .print-report-table {
+    font-size: 6.5pt;
+  }
+
+  body.report-print .print-report-table thead {
+    display: table-header-group;
+  }
+
+  body.report-print .print-report-table tr {
+    break-inside: avoid;
+  }
+
+  body.report-print .print-report-table th,
+  body.report-print .print-report-table td {
+    padding: 1.2mm 1mm;
+    border-bottom: 1px solid #e2e8f0;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  body.report-print .print-report-table th:first-child,
+  body.report-print .print-report-table td:first-child {
+    text-align: left;
+    white-space: normal;
+  }
+
   .surface-switch,
   .sticky-controls,
   .controls-bi,
@@ -3839,4 +3929,11 @@ body[data-surface="intelligence-admin"] .layout > .panel { margin-bottom: 18px; 
   .deposit-form { grid-template-columns: minmax(0, 1fr); }
   .deposit-catalog-item { flex-direction: column; align-items: stretch; }
   body[data-surface="intelligence-admin"] .panel > button { width: 100%; margin-top: 8px; }
+}
+
+/* Nodos que arma printCommercialReport() solo para el PDF. */
+@media screen {
+  .print-only {
+    display: none !important;
+  }
 }
