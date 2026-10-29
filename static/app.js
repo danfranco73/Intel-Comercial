@@ -3172,6 +3172,8 @@ function renderInteractiveReport(data) {
   const series = dimension.key === "total"
     ? interactiveTotalSeries(report, metric)
     : report.byDimension?.[dimension.key]?.[metric.key] || [];
+  // La versión imprimible agrega estos mismos valores como tabla.
+  state.interactiveReport.printable = { labels: report.labels || [], series, metric, dimension };
   const chartTypeLabel = chartTypeSelect.options[chartTypeSelect.selectedIndex]?.textContent || "gráfico";
   const byLabel = dimension.key === "total" ? "" : ` por ${dimension.label.toLowerCase()}`;
   summaryNode.textContent = `${metric.label}${byLabel} para ${data.summary?.periodLabel || "el período seleccionado"}.`;
@@ -4734,6 +4736,112 @@ function printProductSheet(kind) {
     document.title = previousTitle;
     if (title) title.textContent = previousHeading;
     if (details) details.open = detailsWasOpen;
+  };
+  window.addEventListener("afterprint", cleanup, { once: true });
+  window.requestAnimationFrame(() => window.print());
+}
+
+// Informes de Comercial (series e histórico): se imprime el panel visible con un
+// encabezado de período y filtros. Los gráficos pasan a imagen y las tablas
+// paginadas a HTML completo para que en el PDF salgan enteras.
+function appliedFiltersText(data) {
+  const parts = Object.entries(data?.appliedFilters || {}).flatMap(([field, values]) => {
+    const list = Array.isArray(values) ? values : [values];
+    const config = state.filters.available[field] || {};
+    if (!list.length || (config.options?.length && list.length >= config.options.length)) return [];
+    const names = list.map((value) => config.options?.find((option) => isSameFilterValue(field, option.value, value))?.label ?? value);
+    const shown = names.length > 8 ? `${names.slice(0, 8).join(", ")} y ${names.length - 8} más` : names.join(", ");
+    return [`${config.label || field}: ${shown}`];
+  });
+  return parts.length ? parts.join(" · ") : "Sin filtros: todo el universo del período.";
+}
+
+function printableSeriesTable() {
+  const { labels = [], series = [], metric, dimension } = state.interactiveReport.printable || {};
+  if (!metric || !series.length) return "";
+  const formatter = metric.format === "money" ? money : metric.format === "count" ? intNumber : decimalNumber;
+  const rows = series.map((item) => {
+    const total = item.total ?? (item.data || []).reduce((sum, value) => sum + (Number(value) || 0), 0);
+    return `<tr><td>${escapeHtml(item.name)}</td>${labels.map((_, index) => `<td>${formatter(item.data?.[index] || 0)}</td>`).join("")}<td><strong>${formatter(total)}</strong></td></tr>`;
+  }).join("");
+  const note = metric.key === "buyers" ? "<div class='muted'>Un cliente cuenta una vez por mes; el total del período no es la suma de los meses.</div>" : "";
+  return `
+    <h3>${escapeHtml(dimension?.key === "total" ? metric.label : `${metric.label} por ${dimension?.label || ""}`)}</h3>
+    ${note}
+    <table class="print-report-table">
+      <thead><tr><th>${escapeHtml(dimension?.label || "")}</th>${labels.map((label) => `<th>${escapeHtml(formatMonthAxisLabel(label))}</th>`).join("")}<th>Total</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function chartsToImages(panel) {
+  const images = [];
+  panel.querySelectorAll(".echart-host").forEach((host) => {
+    const chart = dashboardState.charts[host.id];
+    if (!chart || !host.clientWidth) return;
+    const image = document.createElement("img");
+    image.className = "print-chart-image print-only";
+    image.alt = "";
+    image.src = chart.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#ffffff" });
+    host.after(image);
+    images.push(image);
+  });
+  return images;
+}
+
+function tablesToHtml(panel) {
+  const copies = [];
+  panel.querySelectorAll(".tabulator-host").forEach((host) => {
+    const table = window.Tabulator?.findTable?.(host)?.[0];
+    if (!table || !host.clientWidth) return;
+    const copy = document.createElement("div");
+    copy.className = "print-table-copy print-only";
+    copy.innerHTML = table.getHtml("all", false);
+    copy.querySelector("table")?.classList.add("print-report-table");
+    host.after(copy);
+    copies.push(copy);
+  });
+  return copies;
+}
+
+function printCommercialReport(panelName) {
+  const data = currentReportData();
+  const panel = document.querySelector(`[data-dashboard-panel="${panelName}"]`);
+  if (!data || !panel || panel.classList.contains("hidden")) {
+    setStatus("Primero actualizá el informe para imprimirlo.");
+    return;
+  }
+  const title = panel.querySelector(".subpanel-header h2")?.textContent?.trim() || "Informe comercial";
+  const subtitle = panel.querySelector(".subpanel-header .muted")?.textContent?.trim() || "";
+  const header = document.createElement("div");
+  header.className = "print-report-header print-only";
+  header.innerHTML = `
+    <p class="eyebrow">Codenoa Comercial</p>
+    <h2>${escapeHtml(title)}</h2>
+    <div>${escapeHtml(subtitle)}</div>
+    <div class="muted">Período: ${escapeHtml(data.summary?.periodLabel || `${data.meta?.periodStart || ""} a ${data.meta?.periodEnd || ""}`)}</div>
+    <div class="muted">Filtros: ${escapeHtml(appliedFiltersText(data))}</div>
+    <div class="muted">Generado el ${escapeHtml(new Date().toLocaleString("es-AR"))}</div>`;
+  panel.prepend(header);
+  const added = [header, ...chartsToImages(panel), ...tablesToHtml(panel)];
+  if (panelName === "interactive") {
+    const table = document.createElement("div");
+    table.className = "print-only";
+    table.innerHTML = printableSeriesTable();
+    panel.append(table);
+    added.push(table);
+  }
+  const previousTitle = document.title;
+  document.title = `Codenoa_${title.replace(/[^a-z0-9]+/gi, "_")}`;
+  panel.classList.add("print-target");
+  const cleanupOrientation = preparePrintOrientation(panel);
+  document.body.classList.add("coach-print", "report-print");
+  const cleanup = () => {
+    cleanupOrientation();
+    added.forEach((node) => node.remove());
+    panel.classList.remove("print-target");
+    document.body.classList.remove("coach-print", "report-print");
+    document.title = previousTitle;
   };
   window.addEventListener("afterprint", cleanup, { once: true });
   window.requestAnimationFrame(() => window.print());
@@ -8263,6 +8371,8 @@ bindClick("printTeamBrief", () => printSellerCoachSheet("team"));
 bindClick("printProductBrief", () => printProductSheet("sheet"));
 restorePrintOrientation();
 bindClick("printProductRanking", () => printProductSheet("ranking"));
+bindClick("printInteractiveReport", () => printCommercialReport("interactive"));
+bindClick("printHistoryReport", () => printCommercialReport("history"));
 bindClick("refreshAdminErrors", () => refreshAdminErrors().catch(showError));
 bindClick("logoutBtn", () => logout().catch(showError));
 bindClick("openSellerPortfolio", () => {
