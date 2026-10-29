@@ -334,7 +334,7 @@
           <div class="coach-brief-hero">
             <div>
               <p class="eyebrow">Codenoa Sales Coach</p>
-              <h2 id="productBriefTitle">Ficha por familia o línea de productos</h2>
+              <h2 id="productBriefTitle">Ficha por familia o categoría de productos</h2>
               <div class="muted" id="productBriefPeriod">Resultado filtrado y comparación contra el período anterior equivalente.</div>
             </div>
             <div class="coach-hero-actions">
@@ -342,7 +342,7 @@
                 <span>Apertura</span>
                 <select id="productBriefDimension">
                   <option value="families">Familia</option>
-                  <option value="lines">Línea</option>
+                  <option value="lines">Categoría</option>
                 </select>
               </label>
               <label class="coach-seller-picker">
@@ -494,7 +494,7 @@
         <section class="panel inner-panel dashboard-panel hidden" data-dashboard-panel="interactive">
           <div class="subpanel-header">
             <div>
-              <h2>Informe filtrable</h2>
+              <h2>Series</h2>
               <div class="muted" id="interactiveReportSummary">Evolución mensual con segmentadores y selector de métrica.</div>
             </div>
           </div>
@@ -716,7 +716,7 @@
           </div>
         </section>
 
-        <section id="salesCoachDetailPanel" class="panel inner-panel hidden coach-detail-panel">
+        <section id="salesCoachDetailPanel" class="panel inner-panel hidden coach-detail-panel" data-workspace-only="coach">
           <div class="subpanel-header">
             <div>
               <p class="eyebrow">Codenoa Sales Coach</p>
@@ -767,7 +767,7 @@
           </div>
           <div class="executive-grid budget-forecast-grid">
             <div class="panel inner-panel table-panel">
-              <h3>2. Presupuesto por línea</h3>
+              <h3>2. Presupuesto por categoría</h3>
               <div class="muted">Promedio de bultos de los últimos 3 meses × ajuste; valorizado al precio medio del último mes.</div>
               <div id="historyBudgetLineForecastTable" class="tabulator-host"></div>
             </div>
@@ -937,7 +937,7 @@
           </div>
         </div>
 
-        <div class="three-col" data-workspace-only="bi">
+        <div class="two-col" data-workspace-only="coach">
           <div class="panel inner-panel">
             <h2>Clientes</h2>
             <div id="clientsRankings"></div>
@@ -946,10 +946,11 @@
             <h2>Comercial</h2>
             <div id="commercialRankings"></div>
           </div>
-          <div class="panel inner-panel">
-            <h2>Mix y canal</h2>
-            <div id="mixRankings"></div>
-          </div>
+        </div>
+
+        <div class="panel inner-panel" data-workspace-only="bi">
+          <h2>Mix y canal</h2>
+          <div id="mixRankings"></div>
         </div>
 
       </section>

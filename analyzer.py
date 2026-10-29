@@ -136,11 +136,12 @@ FILTER_DEFINITIONS = {
     "year": {"label": "Año", "kind": "number"},
     "month": {"label": "Mes", "kind": "month"},
     "family": {"label": "Familia", "kind": "text"},
-    "line": {"label": "Línea", "kind": "text"},
+    "line": {"label": "Categoría", "kind": "text"},
     "brand": {"label": "Marca", "kind": "text"},
     "business_unit": {"label": "Unidad de negocio", "kind": "text"},
     "supplier": {"label": "Proveedor", "kind": "text"},
     "product_name": {"label": "Producto", "kind": "text"},
+    "caliber": {"label": "Calibre", "kind": "text"},
     "sales_scheme_name": {"label": "Esquema de ventas", "kind": "text"},
     "sales_force": {"label": "Fuerza de ventas", "kind": "text"},
     "route_description": {"label": "Ruta", "kind": "text"},
@@ -1418,10 +1419,16 @@ INTERACTIVE_REPORT_METRICS = {
     "amount_net_internal": {"label": "Neto + impuestos internos", "format": "money"},
 }
 
+# Métrica de conteo: clientes distintos con compra. No es sumable entre meses,
+# por eso se calcula aparte de metric_value.
+INTERACTIVE_REPORT_BUYERS_METRIC = {"key": "buyers", "label": "Clientes compradores", "format": "count"}
+
 INTERACTIVE_REPORT_DIMENSIONS = [
     "family",
     "line",
+    "product_name",
     "brand",
+    "caliber",
     "business_unit",
     "supplier",
     "sales_scheme_name",
@@ -1440,6 +1447,7 @@ def build_interactive_filter_report(records, period_context):
             metrics.append({"key": metric, **config})
     if not metrics:
         metrics = [{"key": "amount_final", **INTERACTIVE_REPORT_METRICS["amount_final"]}]
+    metrics.append(dict(INTERACTIVE_REPORT_BUYERS_METRIC))
 
     dimensions = []
     for field in INTERACTIVE_REPORT_DIMENSIONS:
@@ -1448,45 +1456,88 @@ def build_interactive_filter_report(records, period_context):
         if values:
             dimensions.append({"key": field, "label": FILTER_DEFINITIONS.get(field, {}).get("label", field)})
 
+    sum_metrics = [metric["key"] for metric in metrics if metric["key"] != "buyers"]
+    total_values = defaultdict(lambda: defaultdict(float))
+    monthly_buyers = defaultdict(set)
+    period_buyers = set()
+    for item in records:
+        label = item["period"]
+        for metric_key in sum_metrics:
+            total_values[metric_key][label] += metric_value(item, metric_key)
+        client = interactive_client_id(item)
+        if client:
+            monthly_buyers[label].add(client)
+            period_buyers.add(client)
+
+    totals = [
+        {
+            "metric": metric_key,
+            "total": round(sum(total_values[metric_key].get(label, 0) for label in labels), 2),
+            "series": [{"label": label, "value": round(total_values[metric_key].get(label, 0), 2)} for label in labels],
+        }
+        for metric_key in sum_metrics
+    ]
+    totals.append(
+        {
+            "metric": "buyers",
+            "total": len(period_buyers),
+            "series": [{"label": label, "value": len(monthly_buyers.get(label, ()))} for label in labels],
+        }
+    )
+
     return {
         "labels": labels,
         "metrics": metrics,
         "dimensions": dimensions,
-        "totals": [
-            {
-                "metric": metric["key"],
-                "series": [{"label": label, "value": round(sum(metric_value(item, metric["key"]) for item in records if item["period"] == label), 2)} for label in labels],
-            }
-            for metric in metrics
-        ],
+        "totals": totals,
         "byDimension": {
-            field: build_interactive_dimension_series(records, field, labels, metrics)
+            field: build_interactive_dimension_series(records, field, labels, sum_metrics)
             for field in [item["key"] for item in dimensions]
         },
     }
 
 
-def build_interactive_dimension_series(records, field, labels, metrics):
-    result = {}
-    for metric in metrics:
-        metric_key = metric["key"]
-        totals = defaultdict(float)
-        monthly = defaultdict(lambda: defaultdict(float))
-        for item in records:
-            label = item["period"]
-            dimension = dimension_value(item, field)
+def interactive_client_id(item):
+    return item.get("client_canonical") or item.get("client_key") or item.get("client")
+
+
+def build_interactive_dimension_series(records, field, labels, sum_metrics, limit=12):
+    totals = {metric_key: defaultdict(float) for metric_key in sum_metrics}
+    monthly = {metric_key: defaultdict(lambda: defaultdict(float)) for metric_key in sum_metrics}
+    buyers_period = defaultdict(set)
+    buyers_monthly = defaultdict(lambda: defaultdict(set))
+    for item in records:
+        label = item["period"]
+        dimension = dimension_value(item, field)
+        for metric_key in sum_metrics:
             value = metric_value(item, metric_key)
-            totals[dimension] += value
-            monthly[dimension][label] += value
-        top_dimensions = [item[0] for item in sorted(totals.items(), key=lambda pair: pair[1], reverse=True)[:12]]
+            totals[metric_key][dimension] += value
+            monthly[metric_key][dimension][label] += value
+        client = interactive_client_id(item)
+        if client:
+            buyers_period[dimension].add(client)
+            buyers_monthly[dimension][label].add(client)
+
+    result = {}
+    for metric_key in sum_metrics:
+        top_dimensions = [pair[0] for pair in sorted(totals[metric_key].items(), key=lambda pair: pair[1], reverse=True)[:limit]]
         result[metric_key] = [
             {
                 "name": dimension,
-                "total": round(totals[dimension], 2),
-                "data": [round(monthly[dimension].get(label, 0), 2) for label in labels],
+                "total": round(totals[metric_key][dimension], 2),
+                "data": [round(monthly[metric_key][dimension].get(label, 0), 2) for label in labels],
             }
             for dimension in top_dimensions
         ]
+    top_buyers = sorted(buyers_period.items(), key=lambda pair: len(pair[1]), reverse=True)[:limit]
+    result["buyers"] = [
+        {
+            "name": dimension,
+            "total": len(clients),
+            "data": [len(buyers_monthly[dimension].get(label, ())) for label in labels],
+        }
+        for dimension, clients in top_buyers
+    ]
     return result
 
 

@@ -38,7 +38,7 @@ def test_heavy_route_answers_503_when_queue_times_out(one_slot, monkeypatch):
     handler.send_json = lambda payload, status=200: sent.append((status, payload))
     calls = []
     with concurrency.heavy_analysis_slot(timeout=0.01):
-        handler._dispatch(POST_ROUTES["/api/analyze"], lambda: calls.append("ran"))
+        handler._dispatch(POST_ROUTES["/api/analyze-dynamic"], lambda: calls.append("ran"))
     assert calls == []
     assert sent and sent[0][0] == 503
 

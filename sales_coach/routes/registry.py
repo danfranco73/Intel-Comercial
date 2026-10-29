@@ -69,9 +69,10 @@ POST_ROUTES = {
     "/api/access/companies": RouteDefinition("handle_save_access_company", permission="admin", csrf=True),
     "/api/upload": RouteDefinition("handle_upload", permission="admin", csrf=True),
     "/api/clear-uploads": RouteDefinition("handle_clear_uploads", permission="admin", csrf=True),
-    "/api/analyze": RouteDefinition("handle_analyze", csrf=True, heavy=True),
+    "/api/analyze": RouteDefinition("handle_analyze", csrf=True),  # toma el turno solo si no está en caché
     "/api/bi/consistency": RouteDefinition("handle_bi_consistency", csrf=True, heavy=True),
-    "/api/bi/tactical-month": RouteDefinition("handle_bi_tactical_month", csrf=True, heavy=True),
+    "/api/bi/series": RouteDefinition("handle_bi_series", csrf=True),
+    "/api/bi/tactical-month": RouteDefinition("handle_bi_tactical_month", csrf=True),  # toma el turno solo si no está en caché
     "/api/analyze-dynamic": RouteDefinition("handle_analyze_dynamic", csrf=True, heavy=True),
     "/api/session": RouteDefinition("handle_save_session", csrf=True),
     "/api/erp/sync": RouteDefinition("handle_erp_sync", permission="admin", csrf=True),

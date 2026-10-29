@@ -1,0 +1,2 @@
+# Optional, isolated tool environment on PC-Techstation. Not a web dependency.
+pyodbc>=5.2,<6

@@ -6,6 +6,7 @@ from urllib.parse import parse_qs
 from clickhouse_client import get_clickhouse_storage_status
 from erp_client import get_erp_status
 from mongo_client import get_erp_storage_status
+from sales_coach.cache import cached_status
 from sales_coach.repositories.sync_repository import (
     SYNC_CHECKPOINTS_COLLECTION,
     SyncRepository,
@@ -41,8 +42,8 @@ class OperationsRoutesMixin:
         self.send_json(result)
 
     def handle_data_freshness(self):
-        mongo = get_erp_storage_status()
-        clickhouse = get_clickhouse_storage_status()
+        mongo = cached_status("mongo_storage", get_erp_storage_status)
+        clickhouse = cached_status("clickhouse_storage", get_clickhouse_storage_status)
         candidates = [
             value
             for value in (mongo.get("lastSyncAt"), clickhouse.get("lastSyncAt"))

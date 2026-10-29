@@ -2,6 +2,11 @@
 
 Cierre de etapa: 29/09/2026. Implementación local documentada; commit/push pendientes de aprobación explícita del resumen previo. Este cierre no acredita un deploy ni una verificación actual de producción.
 
+Continuación del 15/10/2026: la [auditoría ODBC](../ODBC_INTEGRATION_AUDIT.md)
+incorpora el antecedente de conectividad Windows ya probado y la herramienta local
+de inspección de catálogo. El texto siguiente conserva el estado histórico de
+esta etapa; la continuación no promueve V2 ni modifica V1 productivo.
+
 ## Qué está implementado
 
 Intelligence Core Fase 1 expone una API independiente de la UI: Sales Daily Brief, drill-down comercial (estructura/fuerza → canal → vendedor → proveedor → familia/línea → producto → cliente), Stock Daily Brief y consulta de observaciones. Reutiliza las métricas comerciales y aplica permisos, alcance del usuario y controles de cobertura.

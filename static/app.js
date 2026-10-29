@@ -1,14 +1,50 @@
-// Comercial (/bi) = análisis del negocio: productos, proveedores, clientes y PDV.
-// Sales Coach (/sales-coach) = gestión de personas: vendedores, alertas con
-// responsable y fichas para imprimir. Ambas usan la misma página y el mismo
-// informe; cambia qué dashboards se ofrecen.
-const workspace = window.location.pathname.startsWith("/sales-coach") ? "coach" : "bi";
+// Comercial (/bi) = análisis del negocio: series de producto (familia, categoría,
+// producto, marca, calibre), evolución de proveedores y canales, y clientes
+// compradores. Sales Coach (/sales-coach, /pdv) = todo lo que tiene que ver con
+// fuerzas de ventas, vendedores y clientes: fichas, cartera, PDV 360, plan por
+// responsable, alertas y reuniones. Ambas usan la misma página y el mismo
+// informe; cambia qué dashboards y filtros se ofrecen.
+function workspaceForPath(pathname) {
+  return pathname.startsWith("/sales-coach") || pathname === "/pdv" ? "coach" : "bi";
+}
+// Cambia sin recargar la página al pasar de Comercial a Sales Coach (ver switchWorkspace).
+let workspace = workspaceForPath(window.location.pathname);
 const WORKSPACE_DASHBOARD_VIEWS = {
-  bi: ["executive", "direction", "interactive", "products", "clients", "pdv", "history", "opportunities"],
-  coach: ["coach", "sellers", "alerts", "meetings"],
+  bi: ["series", "evolution", "buyers", "products", "history"],
+  coach: ["coach", "sellers", "executive", "direction", "clients", "pdv", "opportunities", "interactive", "alerts", "meetings"],
 };
-const DASHBOARD_VIEWS = WORKSPACE_DASHBOARD_VIEWS[workspace];
-const DASHBOARD_VIEW_STORAGE_KEY = `reportDashboardView:${workspace}`;
+// Vistas que se dibujan sobre el panel "interactive" (serie mensual con
+// aperturas y segmentadores), cada una con su propio recorte de aperturas.
+const PRODUCT_SLICER_FIELDS = ["family", "line", "product_name", "brand", "caliber", "supplier", "channel", "year", "month"];
+const SERIES_VIEW_CONFIG = {
+  series: {
+    title: "Series de producto",
+    summary: "Evolución mensual por familia, categoría, producto, marca y calibre.",
+    dimensions: ["family", "line", "product_name", "brand", "caliber"],
+    slicers: PRODUCT_SLICER_FIELDS,
+  },
+  evolution: {
+    title: "Proveedores y canales",
+    summary: "Evolución mensual de cada proveedor y canal de venta.",
+    dimensions: ["supplier", "channel"],
+    slicers: PRODUCT_SLICER_FIELDS,
+  },
+  buyers: {
+    title: "Clientes compradores",
+    summary: "Clientes distintos con compra por mes, en total o abiertos por producto, proveedor y canal.",
+    dimensions: ["total", "family", "line", "product_name", "brand", "caliber", "supplier", "channel"],
+    metrics: ["buyers"],
+    slicers: PRODUCT_SLICER_FIELDS,
+  },
+  interactive: {
+    title: "Informe filtrable",
+    summary: "Evolución mensual por vendedor, fuerza de ventas, ruta, esquema y canal.",
+    dimensions: ["seller_name", "sales_force", "route_description", "sales_scheme_name", "channel"],
+    slicers: ["seller_name", "sales_force", "route_description", "sales_scheme_name", "channel", "family", "brand", "year", "month"],
+  },
+};
+let DASHBOARD_VIEWS = WORKSPACE_DASHBOARD_VIEWS[workspace];
+let DASHBOARD_VIEW_STORAGE_KEY = `reportDashboardView:${workspace}`;
 
 const state = {
   files: [],
@@ -29,8 +65,12 @@ const state = {
   adminErrors: [],
   biConsistency: { pending: false, report: null, error: "", checkedAt: "" },
   auth: { user: null, csrfToken: "" },
+  // lastData = informe completo de la superficie actual (cada una guarda el suyo
+  // al cambiar); series = informe por totales de Comercial (/api/bi/series).
   reportView: { metricMode: readStoredMetricMode(), dashboardView: readStoredDashboardView(), lastData: null },
-  interactiveReport: { metric: "quantity", dimension: "family", chartType: "line" },
+  series: { data: null, key: "", compare: false },
+  workspaceState: {},
+  interactiveReport: { chartType: "line", byView: {} },
   planning: null,
   planningDirty: false,
   objectives: [],
@@ -51,8 +91,14 @@ const UI_CACHE_DB = "codenoa_sales_coach_ui";
 const UI_CACHE_STORE = "reports";
 
 function uiCacheKey() {
-  // Un informe guardado por superficie: los filtros de Comercial no deben
-  // condicionar a Sales Coach ni al revés.
+  // Un solo informe guardado para Comercial y Sales Coach: el backend calcula lo
+  // mismo para ambas y cada una elige qué dashboards mostrar. Si el informe trae
+  // filtros propios de la otra superficie, switchWorkspace lo recalcula.
+  const user = state.auth.user || {};
+  return `${String(user.id || user.email || "anonymous")}:report`;
+}
+
+function legacyUiCacheKey() {
   const user = state.auth.user || {};
   return `${String(user.id || user.email || "anonymous")}:${workspace}`;
 }
@@ -79,8 +125,17 @@ async function readCachedWorkspace() {
   const db = await openUiCache();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(UI_CACHE_STORE, "readonly");
-    const request = transaction.objectStore(UI_CACHE_STORE).get(uiCacheKey());
-    request.onsuccess = () => resolve(request.result || null);
+    const store = transaction.objectStore(UI_CACHE_STORE);
+    const request = store.get(uiCacheKey());
+    request.onsuccess = () => {
+      if (request.result) {
+        resolve(request.result);
+        return;
+      }
+      const legacy = store.get(legacyUiCacheKey());
+      legacy.onsuccess = () => resolve(legacy.result || null);
+      legacy.onerror = () => resolve(null);
+    };
     request.onerror = () => reject(request.error);
     transaction.oncomplete = () => db.close();
   });
@@ -128,16 +183,21 @@ const isUsersSurface = appSurface === "users";
 const REPORT_METRIC_MODES = ["mixed", "units", "sales"];
 const dashboardState = { charts: {}, tables: { direction: null, executive: null, executiveSensitivity: null, planningTargets: null, ownerTracking: null, history: null, historyBudgetMonthly: null, historyBudgetDimension: null, historyBudgetLineForecast: null, historyBudgetSellerForecast: null, sellers: null, clients: null, opportunities: null, alerts: null, meetings: null } };
 
-const filterGroups = [
+// Comercial no filtra por vendedor, fuerza, ruta ni esquema: eso es Sales Coach.
+const ALL_FILTER_GROUPS = [
   { id: "tiempo",     label: "Período",       fields: ["year", "month"] },
-  { id: "producto",   label: "Producto",      fields: ["family", "line", "brand", "business_unit", "supplier", "product_name"] },
-  { id: "comercial",  label: "Comercial",     fields: ["sales_scheme_name", "sales_force", "route_description", "seller_name"] },
+  { id: "producto",   label: "Producto",      fields: ["family", "line", "product_name", "brand", "caliber", "business_unit"] },
+  { id: "proveedor",  label: "Proveedor",     fields: ["supplier"] },
+  { id: "comercial",  label: "Comercial",     fields: ["sales_scheme_name", "sales_force", "route_description", "seller_name"], workspace: "coach" },
   { id: "canal",      label: "Canal",         fields: ["channel"] },
 ];
-const prefilterGroups = [
+const ALL_PREFILTER_GROUPS = [
   { id: "producto", label: "Producto", fields: ["family", "line", "brand", "business_unit"] },
-  { id: "comercial", label: "Comercial", fields: ["sales_scheme_name", "sales_force", "route_description", "seller_name"] },
+  { id: "comercial", label: "Comercial", fields: ["sales_scheme_name", "sales_force", "route_description", "seller_name"], workspace: "coach" },
 ];
+function workspaceGroups(groups) {
+  return groups.filter((group) => !group.workspace || group.workspace === workspace);
+}
 
 const ANALYSIS_PLAYBOOK = {
   temporal_trend: {
@@ -232,38 +292,72 @@ const ANALYSIS_PLAYBOOK = {
   },
 };
 
-const COMMERCIAL_REQUEST_RECIPES = [
-  {
-    title: "Resumen general",
-    action: "Usá Actualizar informe",
-    detail: "Te devuelve KPIs, rankings y dashboards especializados del período elegido.",
-    examples: [
-      "Cómo vendimos este mes",
-      "Quiénes fueron los mejores vendedores",
-      "Qué marcas, canales y rutas explican la venta",
-    ],
-  },
-  {
-    title: "Foco en un punto de venta",
-    action: "Usá PDV 360",
-    detail: "Qué compra, qué le falta frente a sus pares y cómo llegarle.",
-    examples: [
-      "Qué le falta a este almacén",
-      "Por qué no compra Cámara",
-      "Qué fuerza y vendedor lo atienden",
-    ],
-  },
-  {
-    title: "Recorte comercial",
-    action: "Definí Enfoque del informe",
-    detail: "Primero recortá por vendedor, ruta, fuerza, marca o proveedor; después actualizá.",
-    examples: [
-      "Solo vendedor GOLDEN",
-      "Solo fuerza de ventas AMBA",
-      "Solo línea o marca específica",
-    ],
-  },
-];
+const COMMERCIAL_REQUEST_RECIPES = {
+  bi: [
+    {
+      title: "Series de producto",
+      action: "Usá Actualizar informe",
+      detail: "Evolución mensual por familia, categoría, producto, marca y calibre.",
+      examples: [
+        "Cómo evolucionó cada familia",
+        "Qué calibres crecen",
+        "Qué productos caen frente al mes anterior",
+      ],
+    },
+    {
+      title: "Proveedores y canales",
+      action: "Usá Proveedores y canales",
+      detail: "Cómo se mueve cada proveedor y cada canal mes a mes.",
+      examples: [
+        "Qué proveedor perdió volumen",
+        "Cómo viene el autoservicio",
+        "Peso de cada canal en el período",
+      ],
+    },
+    {
+      title: "Clientes compradores",
+      action: "Usá Clientes compradores",
+      detail: "Cuántos clientes distintos compran cada familia, marca, proveedor o canal.",
+      examples: [
+        "Cuántos clientes compran la marca",
+        "Cobertura por categoría",
+        "Solo un proveedor o calibre",
+      ],
+    },
+  ],
+  coach: [
+    {
+      title: "Resumen del equipo",
+      action: "Usá Actualizar informe",
+      detail: "Resultado del período por vendedor y fuerza de ventas contra el equipo.",
+      examples: [
+        "Quiénes fueron los mejores vendedores",
+        "Qué rutas explican la venta",
+        "Cómo viene el plan por responsable",
+      ],
+    },
+    {
+      title: "Foco en un punto de venta",
+      action: "Usá PDV 360",
+      detail: "Qué compra, qué le falta frente a sus pares y cómo llegarle.",
+      examples: [
+        "Qué le falta a este almacén",
+        "Por qué no compra Cámara",
+        "Qué fuerza y vendedor lo atienden",
+      ],
+    },
+    {
+      title: "Recorte comercial",
+      action: "Definí Enfoque del informe",
+      detail: "Primero recortá por vendedor, ruta, fuerza, marca o proveedor; después actualizá.",
+      examples: [
+        "Solo vendedor GOLDEN",
+        "Solo fuerza de ventas AMBA",
+        "Solo categoría o marca específica",
+      ],
+    },
+  ],
+};
 
 let activeFilterTab = "tiempo";
 let activePrefilterTab = "producto";
@@ -566,13 +660,15 @@ const WORKSPACE_CHROME = {
     title: "Comercial · Codenoa",
     eyebrow: "Comercial",
     heading: "Análisis del negocio",
-    lead: "Productos, proveedores, clientes y puntos de venta: dónde está la venta, qué le falta a cada PDV frente a sus pares y cómo llegarle.",
+    lead: "Series de familias, categorías, productos, marcas y calibres; evolución de proveedores y canales; y cuántos clientes compran cada cosa.",
+    controlsNote: "Comercial muestra los últimos 12 meses completos y el mes en curso, totalizados en la base comercial. La comparación con el año anterior se pide aparte.",
   },
   coach: {
     title: "Sales Coach · Codenoa",
     eyebrow: "Sales Coach",
     heading: "Gestión del equipo comercial",
-    lead: "El resultado de cada vendedor contra el equipo, alertas con responsable y fichas para imprimir y conversar en la reunión.",
+    lead: "Fuerzas de ventas, vendedores y clientes: resultado contra el equipo, cartera y PDV 360, plan por responsable, alertas y fichas para la reunión.",
+    controlsNote: "La vista comercial consulta automáticamente la base correcta según el período elegido y compara cada informe contra el período anterior equivalente.",
   },
 };
 
@@ -587,9 +683,295 @@ function applyWorkspaceChrome() {
     hero.querySelector("h1").textContent = chrome.heading;
     hero.querySelector(".lead").textContent = chrome.lead;
   }
+  const controlsNote = document.querySelector(".controls-bi .subpanel-header .muted");
+  if (controlsNote) controlsNote.textContent = chrome.controlsNote;
   const activeHref = workspace === "coach" ? "/sales-coach" : "/bi";
   document.querySelectorAll(".surface-links a").forEach((link) => {
     link.classList.toggle("active", link.getAttribute("href") === activeHref);
+  });
+}
+
+// Cada superficie conserva su período, filtros e informe completo: Comercial
+// arranca en los últimos 12 meses + el mes en curso y Sales Coach en su período
+// habitual, sin heredar uno del otro.
+function captureWorkspaceState() {
+  return {
+    period: { fechaDesde: state.datasets.sales.erp.fechaDesde, fechaHasta: state.datasets.sales.erp.fechaHasta },
+    filters: { available: state.filters.available, selected: { ...state.filters.selected } },
+    prefilters: { ...state.prefilters.selected },
+    supplierFocus: state.supplierFocus,
+    lastData: state.reportView.lastData,
+  };
+}
+
+function restoreWorkspaceState(saved, target) {
+  const period = saved?.period || (target === "bi" ? rollingBiWindow() : null);
+  if (period) {
+    state.datasets.sales.erp.fechaDesde = period.fechaDesde;
+    state.datasets.sales.erp.fechaHasta = period.fechaHasta;
+  }
+  state.filters = saved?.filters ? { available: saved.filters.available, selected: { ...saved.filters.selected } } : { available: {}, selected: {} };
+  state.prefilters.selected = normalizeSelectedFilters(saved?.prefilters || {}, state.prefilters.available);
+  state.supplierFocus = saved?.supplierFocus || "";
+  state.reportView.lastData = saved?.lastData || null;
+}
+
+function localIsoDate(value) {
+  const pad = (number) => String(number).padStart(2, "0");
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+}
+
+// Ventana por defecto de Comercial: los 12 meses completos anteriores y el mes en curso.
+function rollingBiWindow() {
+  const today = new Date();
+  let fechaHasta = localIsoDate(today);
+  const storage = getCommercialStorageWindow();
+  if (storage.periodEnd && storage.periodEnd < fechaHasta) {
+    fechaHasta = storage.periodEnd;
+  }
+  const end = new Date(`${fechaHasta}T00:00:00`);
+  return { fechaDesde: localIsoDate(new Date(end.getFullYear(), end.getMonth() - 12, 1)), fechaHasta };
+}
+
+async function switchWorkspace(target, { pushUrl = true, url = "" } = {}) {
+  if (target === workspace) {
+    if (pushUrl && url && url !== window.location.pathname + window.location.search) {
+      window.history.pushState({}, "", url);
+    }
+    return;
+  }
+  if (pushUrl) {
+    window.history.pushState({}, "", url || (target === "coach" ? "/sales-coach" : "/bi"));
+  }
+  state.workspaceState[workspace] = captureWorkspaceState();
+  workspace = target;
+  DASHBOARD_VIEWS = WORKSPACE_DASHBOARD_VIEWS[workspace];
+  DASHBOARD_VIEW_STORAGE_KEY = `reportDashboardView:${workspace}`;
+  state.reportView.dashboardView = readStoredDashboardView();
+  activeFilterTab = "tiempo";
+  restoreWorkspaceState(state.workspaceState[target], target);
+  normalizeSupplierFocusSelection();
+  applyWorkspaceChrome();
+  renderDatasetConfigs();
+  renderCommercialGuide();
+
+  if (workspace === "bi") {
+    if (state.series.data && state.series.key === seriesRequestKey()) {
+      renderBiResults();
+      setStatus(`Informe listo: ${state.series.data.summary?.periodLabel || ""}.`);
+    } else {
+      await analyze();
+    }
+    return;
+  }
+  if (state.reportView.lastData) {
+    renderResults(state.reportView.lastData);
+    const meta = state.reportView.lastData.meta || {};
+    setStatus(`Informe del período ${meta.periodStart || ""} a ${meta.periodEnd || ""}. Usá “Actualizar informe” para recalcular.`);
+  } else {
+    document.getElementById("results")?.classList.add("hidden");
+    setStatus("Elegí el período y tocá “Actualizar informe”.");
+  }
+}
+
+// --- Comercial: informe por totales ------------------------------------------
+
+// El informe completo carga cada fila en memoria; en Comercial solo se usa
+// para Ficha producto e Histórico y con períodos cortos.
+const BI_FULL_REPORT_MAX_DAYS = 92;
+
+function seriesRequestPayload() {
+  return {
+    fechaDesde: state.datasets.sales.erp.fechaDesde,
+    fechaHasta: state.datasets.sales.erp.fechaHasta,
+    filters: serializeFilters(),
+    supplierFocus: normalizeSupplierFocusSelection(),
+    compare: Boolean(state.series.compare),
+  };
+}
+
+function seriesRequestKey() {
+  return JSON.stringify(seriesRequestPayload());
+}
+
+function currentReportData() {
+  if (workspace !== "bi") return state.reportView.lastData;
+  return state.reportView.lastData || state.series.data;
+}
+
+function rerenderCurrentReport() {
+  if (workspace === "bi") {
+    renderBiReportData();
+    return;
+  }
+  if (state.reportView.lastData) {
+    renderReportData(state.reportView.lastData);
+  }
+}
+
+async function analyzeSeries() {
+  const payload = seriesRequestPayload();
+  if (!payload.fechaDesde || !payload.fechaHasta) {
+    setStatus("Elegí fecha desde y fecha hasta para consultar la base comercial.");
+    return null;
+  }
+  const key = JSON.stringify(payload);
+  setStatus("Consultando los totales de la base comercial...");
+  let data;
+  try {
+    data = await withProgress("Consultando los totales de la base comercial...", () => api("/api/bi/series", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }), { operationType: "series", fechaDesde: payload.fechaDesde, fechaHasta: payload.fechaHasta, sourceMode: "clickhouse" });
+  } catch (error) {
+    if (error?.payload?.fallback !== "legacy") throw error;
+    return analyzeSeriesWithFullReport(key);
+  }
+  state.series = { ...state.series, data, key };
+  if (state.reportView.lastData && state.reportView.lastData._seriesKey !== key) {
+    state.reportView.lastData = null;
+  }
+  renderBiResults();
+  setStatus(`Informe listo: ${data.summary?.periodLabel || ""}${data.meta?.comparison ? ` comparado contra ${data.meta.comparison.comparisonLabel}` : ""}.`);
+  return data;
+}
+
+// Usuarios con alcance restringido o filtros que solo resuelve el informe completo.
+async function analyzeSeriesWithFullReport(key) {
+  const { fechaDesde, fechaHasta } = state.datasets.sales.erp;
+  if (rangeDays(fechaDesde, fechaHasta) > BI_FULL_REPORT_MAX_DAYS) {
+    state.series = { ...state.series, data: null, key: "" };
+    document.getElementById("results")?.classList.add("hidden");
+    setStatus("Para tu usuario este informe se calcula completo y admite hasta 3 meses: elegí un período más corto.");
+    return null;
+  }
+  const data = await analyzeLegacy({ target: "bi", seriesKey: key });
+  if (data) {
+    state.series = { ...state.series, data, key };
+    renderBiResults();
+  }
+  return data;
+}
+
+function renderBiResults() {
+  const data = state.series.data;
+  if (!data) return;
+  document.getElementById("results").classList.remove("hidden");
+  state.filters.available = data.availableFilters || {};
+  state.filters.selected = normalizeSelectedFilters(data.appliedFilters || {}, state.filters.available);
+  renderFilterPanel(data.meta);
+  renderMetricViewBar(data);
+  renderBiReportData();
+}
+
+function renderBiReportData() {
+  const series = state.series.data;
+  if (!series) return;
+  const full = state.reportView.lastData;
+  const data = full || series;
+  const mode = resolveMetricMode(data.summary);
+  if (series.kind === "series") {
+    renderSeriesSummaryCards(series);
+  } else {
+    renderSummaryCards(series.summary, series.meta, mode, null);
+  }
+  renderDashboardViewSelector(data);
+  renderDashboardPanels();
+  renderInteractiveReport(data);
+  renderBiFullReportNotice();
+  if (full) {
+    renderProductBrief(full);
+    renderHistoryDashboard(full, mode);
+    renderSupplierFocusChart(full.supplierFocus);
+    renderRankings(full.rankings, mode);
+  }
+  document.querySelectorAll('[data-workspace-only="bi"]').forEach((node) => node.classList.toggle("hidden", !full));
+  if (!full && ["products", "history"].includes(state.reportView.dashboardView)) {
+    loadBiFullReport().catch(showError);
+  }
+}
+
+function renderBiFullReportNotice() {
+  document.querySelectorAll("[data-bi-full-notice]").forEach((node) => node.remove());
+  const view = state.reportView.dashboardView;
+  if (state.reportView.lastData || !["products", "history"].includes(view)) return;
+  const panel = document.querySelector(`[data-dashboard-panel="${view}"]`);
+  if (!panel) return;
+  const { fechaDesde, fechaHasta } = state.datasets.sales.erp;
+  const tooLong = rangeDays(fechaDesde, fechaHasta) > BI_FULL_REPORT_MAX_DAYS;
+  const notice = document.createElement("div");
+  notice.className = "guide-callout";
+  notice.dataset.biFullNotice = "1";
+  notice.innerHTML = tooLong
+    ? `<strong>Esta vista todavía usa el cálculo completo</strong>
+       <div class="muted">Admite períodos de hasta 3 meses. Elegí un período más corto en Parámetros del informe o usá el mes en curso.</div>
+       <div class="button-row"><button type="button" class="primary" data-bi-current-month>Usar el mes en curso</button></div>`
+    : `<strong>Calculando el informe completo del período...</strong>`;
+  panel.prepend(notice);
+  notice.querySelector("[data-bi-current-month]")?.addEventListener("click", () => {
+    // Mes de la última fecha con datos (hoy, salvo que la base venga atrasada).
+    const { fechaHasta } = rollingBiWindow();
+    state.datasets.sales.erp.fechaDesde = `${fechaHasta.slice(0, 7)}-01`;
+    state.datasets.sales.erp.fechaHasta = fechaHasta;
+    renderDatasetConfigs();
+    analyze().catch(showError);
+  });
+}
+
+let biFullReportPending = false;
+async function loadBiFullReport() {
+  const { fechaDesde, fechaHasta } = state.datasets.sales.erp;
+  if (biFullReportPending || rangeDays(fechaDesde, fechaHasta) > BI_FULL_REPORT_MAX_DAYS) return;
+  biFullReportPending = true;
+  try {
+    await analyzeLegacy({ target: "bi", seriesKey: state.series.key });
+  } finally {
+    biFullReportPending = false;
+  }
+}
+
+function renderSeriesSummaryCards(data) {
+  const summary = data.summary || {};
+  const comparison = data.meta?.comparison;
+  const growth = (value) => (value === null || value === undefined ? "sin base el año anterior" : `${pctNumber(value)} vs año anterior`);
+  const cards = [
+    ["Actualización del dato", state.dataFreshness.updatedAt || "No informada", `${state.dataFreshness.source || "base comercial"} · cobertura hasta ${state.dataFreshness.periodEnd || data.meta?.periodEnd || "-"}`],
+    ["Período", summary.periodLabel || "-", `${intNumber(summary.monthsCovered || 0)} meses${comparison ? ` · vs ${comparison.comparisonLabel}` : ""}`],
+    ["Venta neta", money(summary.salesCurrent || 0), comparison ? growth(summary.salesGrowthPct) : "neto sin IVA"],
+    ["Bultos", decimalNumber(summary.unitsCurrent || 0), comparison ? growth(summary.unitsGrowthPct) : `${decimalNumber(summary.avgUnitsPerOrder || 0)} por pedido`],
+    ["Pedidos", intNumber(summary.ordersCurrent || 0), `${money(summary.avgOrderValue || 0)} por pedido`],
+    ["Clientes compradores", intNumber(summary.activeClients || 0), comparison ? growth(summary.activeClientsGrowthPct) : "clientes distintos con compra"],
+    ["Precio promedio / bulto", money(summary.avgUnitPrice || 0), "venta neta / bultos"],
+    ["Mix", `${intNumber(summary.familyCount || 0)} familias`, `${intNumber(summary.brandCount || 0)} marcas · ${intNumber(summary.supplierCount || 0)} proveedores · ${intNumber(summary.channelCount || 0)} canales`],
+  ];
+  document.getElementById("summaryCards").innerHTML = cards.map(([label, value, sub]) => `
+    <article class="card summary-card">
+      <div class="label">${escapeHtml(label)}</div>
+      <div class="value ${summaryValueClass(value)}">${escapeHtml(value)}</div>
+      <div class="sub">${escapeHtml(sub)}</div>
+    </article>
+  `).join("");
+}
+
+function bindWorkspaceLinks() {
+  const targets = { "/bi": "bi", "/sales-coach": "coach" };
+  document.querySelectorAll(".surface-switch a[href]").forEach((link) => {
+    const target = targets[link.getAttribute("href")];
+    if (!target) return;
+    link.addEventListener("click", (event) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+        return;
+      }
+      event.preventDefault();
+      switchWorkspace(target, { url: link.getAttribute("href") }).catch(showError);
+    });
+  });
+  window.addEventListener("popstate", () => {
+    const target = workspaceForPath(window.location.pathname);
+    if (target !== workspace) {
+      switchWorkspace(target, { pushUrl: false }).catch(showError);
+    }
   });
 }
 
@@ -617,7 +999,10 @@ async function boot() {
     api(`/api/files?scope=${encodeURIComponent(state.scope)}`),
     api("/api/datasets"),
     api("/api/session").catch(() => ({ datasets: null })),
-    api("/api/erp/status").catch(() => ({ configured: false, reachable: false, message: "ChessERP no disponible." })),
+    // Consultar el estado inicia sesión en ChessERP: solo Admin lo necesita.
+    isAdminSurface
+      ? api("/api/erp/status").catch(() => ({ configured: false, reachable: false, message: "ChessERP no disponible." }))
+      : Promise.resolve({ configured: false, reachable: false, message: "" }),
     api("/api/erp/storage-status").catch(() => ({ connected: false, available: false, message: "MongoDB ERP no disponible." })),
     api("/api/clickhouse/storage-status").catch(() => ({ connected: false, available: false, configured: false, message: "ClickHouse no disponible." })),
     api("/api/data/freshness").catch(() => ({ available: false, updatedAt: null })),
@@ -685,13 +1070,21 @@ async function boot() {
       fechaHasta: cachedWorkspace.ui.coachComparison?.fechaHasta || "",
     };
   }
+  if (isBiSurface && workspace === "bi") {
+    // Sales Coach conserva su período y su informe guardado para cuando se cambie.
+    state.workspaceState.coach = {
+      period: { fechaDesde: state.datasets.sales.erp.fechaDesde, fechaHasta: state.datasets.sales.erp.fechaHasta },
+      lastData: cachedWorkspace?.report || null,
+    };
+    Object.assign(state.datasets.sales.erp, rollingBiWindow());
+  }
   renderFileLibrary();
   renderDatasetConfigs();
   renderCommercialGuide();
   renderPreview();
   renderAdminDiagnostics();
   renderAccessConfiguration();
-  if (cachedWorkspace?.report) {
+  if (cachedWorkspace?.report && workspace !== "bi") {
     renderResults(cachedWorkspace.report);
     const savedAt = cachedWorkspace.savedAt
       ? new Date(cachedWorkspace.savedAt).toLocaleString("es-AR")
@@ -699,6 +1092,9 @@ async function boot() {
     setStatus(`Informe restaurado localmente (${savedAt}). Usá “Actualizar informe” cuando quieras consultar datos nuevos.`);
   }
   startErpKeepalive();
+  if (isBiSurface && workspace === "bi") {
+    analyze().catch(showError);
+  }
 }
 
 function startErpKeepalive() {
@@ -796,7 +1192,13 @@ function restoreBiDefaults(saved, planning) {
   const savedErp = savedSales.erp || {};
   const requestedFrom = savedSales.fechaDesde || savedErp.fechaDesde || "";
   const requestedTo = savedSales.fechaHasta || savedErp.fechaHasta || "";
-  const { from, to } = resolveCommercialRange(requestedFrom, requestedTo);
+  let { from, to } = resolveCommercialRange(requestedFrom, requestedTo);
+  // El informe completo carga cada fila en memoria: sin fechas guardadas (o con
+  // un rango largo) se arranca en el mes de la última fecha con datos, no en
+  // toda la ventana disponible.
+  if (to && (!requestedFrom || !requestedTo || rangeDays(from, to) > BI_FULL_REPORT_MAX_DAYS)) {
+    from = `${to.slice(0, 7)}-01`;
+  }
   if (from) {
     state.datasets.sales.erp.fechaDesde = from;
   }
@@ -901,7 +1303,7 @@ function renderCommercialGuide() {
       <div class="muted">La app resuelve automáticamente la base correcta según el rango que pedís. Cobertura disponible: ${escapeHtml(period)}.</div>
     </div>
     <div class="guide-grid">
-      ${COMMERCIAL_REQUEST_RECIPES.map((recipe) => `
+      ${COMMERCIAL_REQUEST_RECIPES[workspace].map((recipe) => `
         <article class="guide-card">
           <div class="guide-card-title">${escapeHtml(recipe.title)}</div>
           <div class="guide-card-action">${escapeHtml(recipe.action)}</div>
@@ -990,6 +1392,13 @@ function renderBiSalesPanel(erp) {
           <input data-erp-to="1" type="date" value="${escapeHtml(erp.fechaHasta || "")}">
         </label>
       </div>
+      ${workspace === "bi" ? `
+        <div class="muted">Por defecto, los últimos 12 meses completos y el mes en curso. Para ver períodos anteriores cambiá las fechas y actualizá.</div>
+        <label class="bi-compare-toggle">
+          <input data-bi-compare="1" type="checkbox" ${state.series.compare ? "checked" : ""}>
+          Comparar con el mismo período del año anterior
+        </label>
+      ` : ""}
       ${renderSupplierFocusControl()}
       ${renderPrefilterPanel("Enfoque del informe")}
       <div class="request-flow">
@@ -1135,7 +1544,7 @@ function renderSupplierFocusControl() {
 }
 
 function renderPrefilterPanel(title) {
-  const availableGroups = prefilterGroups.filter((group) =>
+  const availableGroups = workspaceGroups(ALL_PREFILTER_GROUPS).filter((group) =>
     group.fields.some((field) => state.prefilters.available[field]?.options?.length)
   );
   if (!availableGroups.length) {
@@ -2036,6 +2445,12 @@ function bindDatasetEvents(container) {
     });
   });
 
+  container.querySelectorAll("[data-bi-compare]").forEach((input) => {
+    input.addEventListener("change", () => {
+      state.series.compare = input.checked;
+    });
+  });
+
   container.querySelectorAll("[data-erp-from]").forEach((input) => {
     input.addEventListener("change", () => {
       state.datasets.sales.erp.fechaDesde = input.value;
@@ -2419,7 +2834,16 @@ async function clearUploads() {
   setStatus(`Se eliminaron ${response.removed} archivo(s) subidos. Ya podés empezar de nuevo.`);
 }
 
+// "Actualizar informe": Comercial pide totales (rápido); Sales Coach y las
+// vistas de Comercial que lo necesitan usan el informe completo.
 async function analyze() {
+  if (workspace === "bi") {
+    return analyzeSeries();
+  }
+  return analyzeLegacy();
+}
+
+async function analyzeLegacy(options = {}) {
   const payload = {
     datasets: {},
     filters: serializeFilters(),
@@ -2512,12 +2936,20 @@ async function analyze() {
     fechaHasta: state.datasets.sales.erp?.fechaHasta,
     sourceMode: state.datasets.sales.sourceMode,
   });
+  state.planningDirty = false;
+  if (options.target === "bi") {
+    // Ficha producto / Histórico de Comercial: no pisa filtros ni el informe por totales.
+    data._seriesKey = options.seriesKey || "";
+    state.reportView.lastData = data;
+    renderBiReportData();
+    setStatus(`Informe completo listo: ${data.meta.rowsAnalyzed} registros del período ${data.meta.periodStart} a ${data.meta.periodEnd}.`);
+    return data;
+  }
   renderResults(data);
   saveCachedWorkspace(data).catch(() => {
     // El informe sigue siendo utilizable aunque el navegador bloquee el almacenamiento local.
   });
   openRequestedSalesCoachDetail().catch(showError);
-  state.planningDirty = false;
   const comparisonLabel = data.meta?.comparison?.comparisonLabel;
   setStatus(
     comparisonLabel
@@ -2620,9 +3052,10 @@ function renderMetricViewBar(data) {
     container.querySelectorAll("[data-metric-mode]").forEach((button) => {
       button.addEventListener("click", () => {
         storeMetricMode(button.dataset.metricMode);
-        if (state.reportView.lastData) {
-          renderMetricViewBar(state.reportView.lastData);
-          renderReportData(state.reportView.lastData);
+        const current = currentReportData();
+        if (current) {
+          renderMetricViewBar(current);
+          rerenderCurrentReport();
         }
       });
     });
@@ -2643,7 +3076,9 @@ function renderExecutiveDashboard(data, mode = "mixed") {
 }
 
 function renderInteractiveReport(data) {
-  if (state.reportView.dashboardView !== "interactive") {
+  const view = state.reportView.dashboardView;
+  const config = SERIES_VIEW_CONFIG[view];
+  if (!config) {
     return;
   }
   const report = data.interactiveReport || {};
@@ -2655,31 +3090,38 @@ function renderInteractiveReport(data) {
   if (!metricSelect || !dimensionSelect || !chartTypeSelect || !summaryNode || !slicersNode) {
     return;
   }
-  const metrics = report.metrics || [];
-  const dimensions = report.dimensions || [];
+  const panelTitle = document.querySelector('[data-dashboard-panel="interactive"] h2');
+  if (panelTitle) panelTitle.textContent = config.title;
+  const metrics = (report.metrics || []).filter((item) => !config.metrics || config.metrics.includes(item.key));
+  const available = new Map((report.dimensions || []).map((item) => [item.key, item]));
+  const dimensions = config.dimensions
+    .map((key) => (key === "total" ? { key: "total", label: "Total" } : available.get(key)))
+    .filter(Boolean);
   if (!metrics.length || !dimensions.length) {
-    summaryNode.textContent = "No hay datos suficientes para armar el informe filtrable.";
+    summaryNode.textContent = "No hay datos suficientes para armar esta serie.";
     slicersNode.innerHTML = "<div class='muted'>Actualizá el informe con un período que tenga ventas y dimensiones disponibles.</div>";
     return;
   }
-  if (!metrics.some((item) => item.key === state.interactiveReport.metric)) {
-    state.interactiveReport.metric = metrics[0].key;
+  const viewState = state.interactiveReport.byView[view] || (state.interactiveReport.byView[view] = {});
+  if (!metrics.some((item) => item.key === viewState.metric)) {
+    viewState.metric = (metrics.find((item) => item.key === "quantity") || metrics[0]).key;
   }
-  if (!dimensions.some((item) => item.key === state.interactiveReport.dimension)) {
-    state.interactiveReport.dimension = dimensions[0].key;
+  if (!dimensions.some((item) => item.key === viewState.dimension)) {
+    viewState.dimension = dimensions[0].key;
   }
   if (!["line", "bar", "pie"].includes(state.interactiveReport.chartType)) {
     state.interactiveReport.chartType = "line";
   }
-  metricSelect.innerHTML = metrics.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === state.interactiveReport.metric ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
-  dimensionSelect.innerHTML = dimensions.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === state.interactiveReport.dimension ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+  metricSelect.innerHTML = metrics.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === viewState.metric ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+  metricSelect.disabled = metrics.length < 2;
+  dimensionSelect.innerHTML = dimensions.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === viewState.dimension ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
   chartTypeSelect.value = state.interactiveReport.chartType;
   metricSelect.onchange = () => {
-    state.interactiveReport.metric = metricSelect.value;
+    viewState.metric = metricSelect.value;
     renderInteractiveReport(data);
   };
   dimensionSelect.onchange = () => {
-    state.interactiveReport.dimension = dimensionSelect.value;
+    viewState.dimension = dimensionSelect.value;
     renderInteractiveReport(data);
   };
   chartTypeSelect.onchange = () => {
@@ -2687,17 +3129,20 @@ function renderInteractiveReport(data) {
     renderInteractiveReport(data);
   };
 
-  const metric = metrics.find((item) => item.key === state.interactiveReport.metric) || metrics[0];
-  const dimension = dimensions.find((item) => item.key === state.interactiveReport.dimension) || dimensions[0];
-  const series = report.byDimension?.[dimension.key]?.[metric.key] || [];
+  const metric = metrics.find((item) => item.key === viewState.metric) || metrics[0];
+  const dimension = dimensions.find((item) => item.key === viewState.dimension) || dimensions[0];
+  const series = dimension.key === "total"
+    ? interactiveTotalSeries(report, metric)
+    : report.byDimension?.[dimension.key]?.[metric.key] || [];
   const chartTypeLabel = chartTypeSelect.options[chartTypeSelect.selectedIndex]?.textContent || "gráfico";
-  summaryNode.textContent = `${metric.label} por ${dimension.label.toLowerCase()} para ${data.summary?.periodLabel || "el período seleccionado"}.`;
-  document.getElementById("interactiveReportTitle").textContent = `${metric.label} por ${dimension.label}`;
-  document.getElementById("interactiveReportSubtitle").textContent = `${series.length} serie(s) principales visibles como ${chartTypeLabel.toLowerCase()} según los filtros aplicados.`;
+  const byLabel = dimension.key === "total" ? "" : ` por ${dimension.label.toLowerCase()}`;
+  summaryNode.textContent = `${metric.label}${byLabel} para ${data.summary?.periodLabel || "el período seleccionado"}.`;
+  document.getElementById("interactiveReportTitle").textContent = dimension.key === "total" ? metric.label : `${metric.label} por ${dimension.label}`;
+  const buyersNote = metric.key === "buyers" ? " Un cliente cuenta una vez por mes; el total del período no es la suma de los meses." : "";
+  document.getElementById("interactiveReportSubtitle").textContent = `${series.length} serie(s) principales visibles como ${chartTypeLabel.toLowerCase()} según los filtros aplicados.${buyersNote}`;
 
-  const slicerFields = ["family", "brand", "sales_scheme_name", "seller_name", "sales_force", "channel", "supplier", "year", "month"];
   slicersNode.innerHTML = `<div class="filter-fields-row interactive-filter-fields">${
-    slicerFields
+    config.slicers
       .filter((field) => state.filters.available[field]?.options?.length)
       .map((field) => renderSelectableField("filter", field, state.filters.available[field], state.filters.selected[field] || []))
       .join("")
@@ -2722,8 +3167,8 @@ function bindInteractiveSlicerEvents(meta) {
   document.querySelectorAll("#interactiveSlicers [data-selectable-kind='filter'][data-selectable-role='action']").forEach((button) => {
     button.addEventListener("click", () => {
       applySelectableAction("filter", button.dataset.selectableField, button.dataset.selectableAction);
-      if (state.reportView.lastData) {
-        renderInteractiveReport(state.reportView.lastData);
+      if (currentReportData()) {
+        renderInteractiveReport(currentReportData());
         renderFilterPanel(meta);
       }
     });
@@ -2734,8 +3179,8 @@ function bindInteractiveSlicerEvents(meta) {
       const field = input.dataset.selectableField;
       const caret = input.selectionStart;
       state.filterSearch[buildSelectableKey(kind, field)] = input.value || "";
-      if (state.reportView.lastData) {
-        renderInteractiveReport(state.reportView.lastData);
+      if (currentReportData()) {
+        renderInteractiveReport(currentReportData());
         restoreSelectableSearchFocus(kind, field, caret);
       }
     });
@@ -2746,8 +3191,14 @@ function bindInteractiveSlicerEvents(meta) {
   }
 }
 
+function interactiveTotalSeries(report, metric) {
+  const total = (report.totals || []).find((item) => item.metric === metric.key);
+  if (!total) return [];
+  return [{ name: "Total", total: total.total, data: (total.series || []).map((point) => point.value) }];
+}
+
 function buildInteractiveReportOption(labels, items, metric, chartType = "line") {
-  const formatter = metric.format === "money" ? money : decimalNumber;
+  const formatter = metric.format === "money" ? money : metric.format === "count" ? intNumber : decimalNumber;
   const axisFormatter = metric.format === "money" ? compactMoney : compactNumber;
   const colors = ["#0f766e", "#ea580c", "#2563eb", "#9333ea", "#16a34a", "#be123c", "#0891b2", "#ca8a04", "#4f46e5", "#64748b", "#db2777", "#059669"];
   const visibleItems = (items || []).filter((item) => item?.name);
@@ -2755,7 +3206,9 @@ function buildInteractiveReportOption(labels, items, metric, chartType = "line")
     const pieData = visibleItems
       .map((item) => ({
         name: item.name,
-        value: (item.data || []).reduce((total, value) => total + (Number(value) || 0), 0),
+        // Para conteos (clientes compradores) la suma mensual repite clientes:
+        // se usa el total del período que manda el backend.
+        value: item.total ?? (item.data || []).reduce((total, value) => total + (Number(value) || 0), 0),
       }))
       .filter((item) => item.value > 0)
       .sort((a, b) => b.value - a.value)
@@ -3500,10 +3953,13 @@ function renderDashboardViewSelector(data) {
   }
   const dashboardSummaries = {
     coach: "Ficha clara para conversar con el vendedor: resultado, comparación, mix y tres acciones.",
-    products: "Ficha por familia (con sus líneas) o por línea (con sus marcas), con mejores clientes y vendedores.",
+    products: "Ficha por familia (con sus categorías) o por categoría (con sus marcas), con mejores clientes y vendedores.",
     direction: "Vista de comité: cierre automático, alertas priorizadas y agenda de decisión comercial.",
     executive: "Resumen táctico del período, con ritmo, proyección y principales focos de gestión.",
-    interactive: "Gráfico mensual con segmentadores al estilo Excel y selector de pesos o volumen.",
+    interactive: "Gráfico mensual por vendedor, fuerza, ruta y esquema con segmentadores y selector de métrica.",
+    series: SERIES_VIEW_CONFIG.series.summary,
+    evolution: SERIES_VIEW_CONFIG.evolution.summary,
+    buyers: SERIES_VIEW_CONFIG.buyers.summary,
     sellers: "Productividad, concentración, cartera atendida y alertas por vendedor.",
     clients: "Cartera activa, cuentas en riesgo, recuperación y concentración de clientes.",
     pdv: "El PDV como foco: qué compra por empresa y unidad de negocio, qué le falta frente a sus pares y cómo le llegamos.",
@@ -3518,6 +3974,9 @@ function renderDashboardViewSelector(data) {
     direction: "Dirección",
     executive: "Resumen",
     interactive: "Informe filtrable",
+    series: "Series de producto",
+    evolution: "Proveedores y canales",
+    buyers: "Clientes compradores",
     sellers: "Vendedores",
     clients: "Clientes",
     pdv: "PDV 360",
@@ -3526,18 +3985,21 @@ function renderDashboardViewSelector(data) {
     alerts: "Alertas",
     meetings: "Reuniones",
   };
-  const counts = {
-    coach: data.dashboards?.sellers?.summary?.sellerCount || 0,
-    products: data.dashboards?.families?.summary?.count || 0,
-    direction: buildDirectionBoard(data).alerts.length,
-    interactive: data.interactiveReport?.dimensions?.length || 0,
-    sellers: data.dashboards?.sellers?.summary?.sellerCount || 0,
-    clients: data.dashboards?.clients?.summary?.activeCount || 0,
-    history: data.dashboards?.history?.summary?.monthsCovered || 0,
-    opportunities: data.dashboards?.opportunities?.summary?.opportunityCount || 0,
-    alerts: state.alerts.rows.filter((item) => !["resolved", "dismissed"].includes(item.status)).length,
-    meetings: state.meetings.rows.length,
+  // Se calculan solo para las vistas de la superficie: el informe por totales
+  // de Comercial no trae los dashboards del informe completo.
+  const countFor = {
+    coach: () => data.dashboards?.sellers?.summary?.sellerCount || 0,
+    products: () => data.dashboards?.families?.summary?.count || 0,
+    direction: () => (data.dashboards ? buildDirectionBoard(data).alerts.length : 0),
+    buyers: () => data.interactiveReport?.totals?.find((item) => item.metric === "buyers")?.total || 0,
+    sellers: () => data.dashboards?.sellers?.summary?.sellerCount || 0,
+    clients: () => data.dashboards?.clients?.summary?.activeCount || 0,
+    history: () => data.dashboards?.history?.summary?.monthsCovered || 0,
+    opportunities: () => data.dashboards?.opportunities?.summary?.opportunityCount || 0,
+    alerts: () => state.alerts.rows.filter((item) => !["resolved", "dismissed"].includes(item.status)).length,
+    meetings: () => state.meetings.rows.length,
   };
+  const counts = Object.fromEntries(DASHBOARD_VIEWS.map((view) => [view, countFor[view]?.() || 0]));
   summary.textContent = dashboardSummaries[state.reportView.dashboardView] || dashboardSummaries.executive;
   selector.innerHTML = DASHBOARD_VIEWS.map((view) => {
     const badge = counts[view] ? `<span class="dashboard-view-badge">${intNumber(counts[view])}</span>` : "";
@@ -3546,16 +4008,19 @@ function renderDashboardViewSelector(data) {
   selector.querySelectorAll("[data-dashboard-view]").forEach((button) => {
     button.addEventListener("click", () => {
       storeDashboardView(button.dataset.dashboardView);
-      if (state.reportView.lastData) {
-        renderReportData(state.reportView.lastData);
-      }
+      rerenderCurrentReport();
     });
   });
 }
 
+function dashboardPanelForView(view) {
+  return SERIES_VIEW_CONFIG[view] ? "interactive" : view;
+}
+
 function renderDashboardPanels() {
+  const activePanel = dashboardPanelForView(state.reportView.dashboardView);
   document.querySelectorAll("[data-dashboard-panel]").forEach((panel) => {
-    panel.classList.toggle("hidden", panel.dataset.dashboardPanel !== state.reportView.dashboardView);
+    panel.classList.toggle("hidden", panel.dataset.dashboardPanel !== activePanel);
   });
   if (state.reportView.dashboardView === "pdv") {
     loadPdvPortfolioOptions().catch(showError);
@@ -3966,8 +4431,8 @@ function printSellerCoachSheet(kind) {
 }
 
 const PRODUCT_BRIEF_LABELS = {
-  families: { singular: "Familia", plural: "familias", child: "Línea", childPlural: "Líneas", of: "de la familia" },
-  lines: { singular: "Línea", plural: "líneas", child: "Marca", childPlural: "Marcas", of: "de la línea" },
+  families: { singular: "Familia", plural: "familias", child: "Categoría", childPlural: "Categorías", of: "de la familia" },
+  lines: { singular: "Categoría", plural: "categorías", child: "Marca", childPlural: "Marcas", of: "de la categoría" },
 };
 
 function readProductBriefDimension() {
@@ -5681,8 +6146,8 @@ function showPdvPanel() {
 async function openPdv360(clientKey, updateUrl = true) {
   if (!clientKey) return;
   if (!DASHBOARD_VIEWS.includes("pdv")) {
-    window.location.assign(`/pdv?clientKey=${encodeURIComponent(clientKey)}`);
-    return;
+    await switchWorkspace("coach", { url: `/pdv?clientKey=${encodeURIComponent(clientKey)}` });
+    updateUrl = false;
   }
   state.pdv.clientKey = clientKey;
   showPdvPanel();
@@ -6282,11 +6747,11 @@ function renderHistoryBudgetPanel(dashboard) {
       </div>
       <div class="planning-field">
         <label>&nbsp;</label>
-        <button id="applyBudgetBtn" class="primary" type="button">Calcular total, líneas y vendedores</button>
+        <button id="applyBudgetBtn" class="primary" type="button">Calcular total, categorías y vendedores</button>
       </div>
     </div>
     <div class="planning-hint">
-      ${state.planningDirty ? "Hay cambios pendientes. Calculá nuevamente para actualizar el objetivo." : "El porcentaje ajusta los bultos; los importes usan el valor por bulto del último mes de cada línea."}
+      ${state.planningDirty ? "Hay cambios pendientes. Calculá nuevamente para actualizar el objetivo." : "El porcentaje ajusta los bultos; los importes usan el valor por bulto del último mes de cada categoría."}
     </div>
   `;
   bindHistoryBudgetControls(dashboard);
@@ -6390,9 +6855,9 @@ function renderHistoryBudgetForecastTables(forecast) {
   if (!lineHost || !sellerHost || !window.Tabulator) return;
   if (dashboardState.tables.historyBudgetLineForecast) dashboardState.tables.historyBudgetLineForecast.destroy();
   dashboardState.tables.historyBudgetLineForecast = new Tabulator(lineHost, {
-    data: forecast.lines || [], layout: "fitColumns", height: "320px", placeholder: "Sin líneas para proyectar",
+    data: forecast.lines || [], layout: "fitColumns", height: "320px", placeholder: "Sin categorías para proyectar",
     columns: [
-      { title: "Línea", field: "label", minWidth: 160 },
+      { title: "Categoría", field: "label", minWidth: 160 },
       { title: "Prom. 3M", field: "average3Quantity", width: 95, hozAlign: "right", formatter: (cell) => decimalNumber(cell.getValue()) },
       { title: "Obj. bultos", field: "targetQuantity", width: 105, hozAlign: "right", formatter: (cell) => decimalNumber(cell.getValue()) },
       { title: "$ / bulto", field: "lastUnitValue", width: 105, hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
@@ -6608,7 +7073,7 @@ function renderFilterPanel(meta) {
     : `Sin filtros aplicados. ${meta.rowsAnalyzed} registros del período disponibles.${comparisonLabel ? ` Comparando contra ${comparisonLabel}.` : ""}`;
 
   // Calcular qué grupos tienen opciones disponibles
-  const availableGroups = filterGroups.filter((g) =>
+  const availableGroups = workspaceGroups(ALL_FILTER_GROUPS).filter((g) =>
     g.fields.some((f) => state.filters.available[f]?.options?.length)
   );
 
@@ -6753,8 +7218,8 @@ function restoreSelectableSearchFocus(kind, field, caret) {
 
 function rerenderSelectableOwner(el) {
   if (el.closest("#interactiveSlicers")) {
-    if (state.reportView.lastData) {
-      renderInteractiveReport(state.reportView.lastData);
+    if (currentReportData()) {
+      renderInteractiveReport(currentReportData());
     }
     return;
   }
@@ -6770,7 +7235,7 @@ function rerenderSelectableOwner(el) {
 
 function renderSummaryCards(summary, meta = {}, mode = "mixed", coachSummary = null) {
   const comparisonLabel = meta?.comparison?.comparisonLabel || summary.comparisonLabel || "período anterior equivalente";
-  const cards = mode === "mixed" && coachSummary ? [
+  let cards = mode === "mixed" && coachSummary ? [
     ["Venta neta", money(coachSummary.netSales || 0), `crecimiento ${pctNumber(coachSummary.growthPct || 0)}`],
     ["Cantidad", decimalNumber(coachSummary.quantity || 0), "cantidad comercial normalizada"],
     ["Clientes activos", intNumber(coachSummary.activeClients || 0), "clientes únicos con compra"],
@@ -6809,6 +7274,13 @@ function renderSummaryCards(summary, meta = {}, mode = "mixed", coachSummary = n
     ["Mix activo", `${summary.brandCount} marcas`, `${summary.businessUnitCount} unidades negocio · ${summary.channelCount} canales`],
     ["Cobertura BI", `${summary.articleCoveragePct}%`, `${summary.routeCoveragePct}% rutas · ${summary.sellerCoveragePct}% vendedores`],
   ];
+  // En Comercial no se muestran métricas por vendedor ni de cobertura de rutas.
+  if (workspace === "bi") {
+    const sellerCards = new Set(["Productividad comercial", "Bultos por vendedor", "Productividad vendedor"]);
+    cards = cards
+      .filter(([label]) => !sellerCards.has(label))
+      .map(([label, value, sub]) => [label === "Clientes activos" ? "Clientes compradores" : label, value, sub]);
+  }
   cards.unshift([
     "Actualización del dato",
     state.dataFreshness.updatedAt || "No informada",
@@ -7715,6 +8187,7 @@ function initializeResponsiveNavigation() {
 
 initializeResponsiveNavigation();
 initializeVisualPreferences();
+if (isBiSurface) bindWorkspaceLinks();
 bindClick("uploadBtn", () => uploadFiles().catch(showError));
 bindClick("clearUploadsBtn", () => clearUploads().catch(showError));
 bindClick("refreshFiles", () => boot().catch(showError));

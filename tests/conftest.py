@@ -15,7 +15,7 @@ import pytest
 # Individual tests may still set synthetic configuration with monkeypatch.
 dotenv.load_dotenv = lambda *args, **kwargs: False
 for _key in list(os.environ):
-    if _key.startswith(("MONGO", "CLICKHOUSE", "CHESS_ERP", "BOOTSTRAP_", "TEMANDO", "TMA_")):
+    if _key.startswith(("MONGO", "CLICKHOUSE", "CHESS_ERP", "CHESS_ODBC", "BOOTSTRAP_", "TEMANDO", "TMA_")):
         os.environ.pop(_key)
 
 _socket_connect = socket.socket.connect
@@ -112,3 +112,12 @@ def datasets(sales_records):
             "records": load_fixture("routes.json"),
         },
     }
+
+
+@pytest.fixture(autouse=True)
+def _fresh_status_cache():
+    from sales_coach.cache import invalidate_status_cache
+
+    invalidate_status_cache()
+    yield
+    invalidate_status_cache()

@@ -26,6 +26,11 @@ en `docs/SALES_COACH_METRICS.md`.
 El catálogo determinista y versionado de FASE 6 se describe en
 `docs/COACH_COMMENT_RULES.md`.
 
+La auditoría para aprovechar la conexión ODBC existente en PC-Techstation está
+en [ODBC_INTEGRATION_AUDIT.md](docs/ODBC_INTEGRATION_AUDIT.md). Incluye el diseño
+incremental y un [inspector de catálogo opcional](docs/ODBC_INSPECTION.md), sin
+habilitar cargas productivas ni cambiar el proveedor actual.
+
 Versión local para analizar ventas históricas de una distribuidora relacionando cuatro datasets:
 
 1. Venta por cliente

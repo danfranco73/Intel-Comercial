@@ -719,7 +719,7 @@ def get_erp_prefilter_options(seller_names: list[str] | None = None) -> dict:
 
     labels = {
         "family": "Familia",
-        "line": "Línea",
+        "line": "Categoría",
         "brand": "Marca",
         "business_unit": "Unidad de negocio",
         "supplier": "Proveedor",
