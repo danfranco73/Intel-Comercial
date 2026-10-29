@@ -57,11 +57,14 @@ def _group_by_period(records):
     return dict(sorted(grouped.items()))
 
 
-def _dimension_share(records, field):
+def _amount_by(records, label_fn):
     grouped = defaultdict(float)
-    total = _sum_amount(records)
     for record in records:
-        grouped[record.get(field) or "Sin dato"] += record.get("amount", 0) or 0
+        grouped[label_fn(record)] += record.get("amount", 0) or 0
+    return grouped
+
+
+def _shares_from_sums(grouped, total):
     return sorted(
         [
             {
@@ -76,17 +79,27 @@ def _dimension_share(records, field):
     )
 
 
+def _dimension_share(records, field):
+    return _shares_from_sums(_amount_by(records, lambda record: record.get(field) or "Sin dato"), _sum_amount(records))
+
+
+def _hhi_from_shares(shares):
+    return round(sum((item["sharePct"] / 100) ** 2 for item in shares) * 10000, 0)
+
+
 def _hhi(records, field):
-    shares = [item["sharePct"] / 100 for item in _dimension_share(records, field)]
-    return round(sum(share * share for share in shares) * 10000, 0)
+    return _hhi_from_shares(_dimension_share(records, field))
+
+
+def _pareto_label(record):
+    return record.get("client") or record.get("client_name") or record.get("client_key") or "Sin cliente"
 
 
 def _pareto_clients(records):
-    grouped = defaultdict(float)
-    total = _sum_amount(records)
-    for record in records:
-        client = record.get("client") or record.get("client_name") or record.get("client_key") or "Sin cliente"
-        grouped[client] += record.get("amount", 0) or 0
+    return _pareto_from_sums(_amount_by(records, _pareto_label), _sum_amount(records))
+
+
+def _pareto_from_sums(grouped, total):
     rows = []
     cumulative = 0.0
     for index, (client, sales) in enumerate(sorted(grouped.items(), key=lambda item: item[1], reverse=True), start=1):
@@ -105,12 +118,20 @@ def _pareto_clients(records):
 
 
 def _cohort_rows(records_by_period):
-    periods = list(records_by_period.keys())
+    return _cohort_rows_from_sets(
+        {
+            period: {_client_id(record) for record in records if _client_id(record)}
+            for period, records in records_by_period.items()
+        }
+    )
+
+
+def _cohort_rows_from_sets(clients_by_period):
+    """Cohortes mensuales a partir de los clientes con compra de cada mes (en orden)."""
     seen_before = set()
     previous_period_clients = set()
     rows = []
-    for period in periods:
-        current_clients = {_client_id(record) for record in records_by_period[period] if _client_id(record)}
+    for period, current_clients in clients_by_period.items():
         new_clients = current_clients - seen_before
         recovered = (current_clients - previous_period_clients) & seen_before
         active = current_clients & previous_period_clients
@@ -394,17 +415,46 @@ def build_structural_dashboards(records, current_period, previous_period, client
 
 def build_history_dashboard(records, current_period, period_context, planning=None):
     records_by_period = _group_by_period(records)
-    monthly_rows = []
-    for period, month_records in records_by_period.items():
-        monthly_rows.append(
-            {
-                "label": period,
-                "sales": _sum_amount(month_records),
-                "quantity": _sum_quantity(month_records),
-                "clients": len({_client_id(item) for item in month_records if _client_id(item)}),
-                "orders": len({item.get("invoice") for item in month_records if item.get("invoice")}),
-            }
-        )
+    return build_history_from_parts(history_parts_from_records(records_by_period, current_period), planning=planning)
+
+
+# Campos cuya concentración (HHI) se muestra; los valores salen de sumar la venta.
+HHI_FIELDS = [("Clientes", "client"), ("Proveedores", "supplier"), ("Vendedores", "seller_name"), ("Canales", "channel")]
+
+
+def history_parts_from_records(records_by_period, current_period):
+    """Insumos del histórico calculados desde filas de venta enriquecidas.
+
+    bi/series_clickhouse arma los mismos insumos con totales de ClickHouse.
+    """
+    monthly_rows = [
+        {
+            "label": period,
+            "sales": _sum_amount(month_records),
+            "quantity": _sum_quantity(month_records),
+            "clients": len({_client_id(item) for item in month_records if _client_id(item)}),
+            "orders": len({item.get("invoice") for item in month_records if item.get("invoice")}),
+        }
+        for period, month_records in records_by_period.items()
+    ]
+    return {
+        "monthly_rows": monthly_rows,
+        "clients_by_period": {
+            period: {_client_id(record) for record in month_records if _client_id(record)}
+            for period, month_records in records_by_period.items()
+        },
+        "current_total": _sum_amount(current_period),
+        "pareto_sums": _amount_by(current_period, _pareto_label),
+        "dimension_sums": {
+            field: _amount_by(current_period, lambda record, field=field: record.get(field) or "Sin dato")
+            for field in ("client", "supplier", "seller_name", "channel", "family")
+        },
+        "budget_records_by_period": records_by_period,
+    }
+
+
+def build_history_from_parts(parts, planning=None):
+    monthly_rows = [dict(row) for row in parts["monthly_rows"]]
     sales_values = [row["sales"] for row in monthly_rows]
     quantity_values = [row["quantity"] for row in monthly_rows]
     rolling3 = _rolling_average(sales_values, 3)
@@ -425,21 +475,19 @@ def build_history_dashboard(records, current_period, period_context, planning=No
     yoy = next((row for row in monthly_rows if yoy_label and row["label"] == yoy_label), None)
     yoy_sales = (yoy or {}).get("sales", 0)
     yoy_units = (yoy or {}).get("quantity", 0)
-    cohorts = _cohort_rows(records_by_period)
-    pareto = _pareto_clients(current_period)
+    cohorts = _cohort_rows_from_sets(parts["clients_by_period"])
+    current_total = parts["current_total"]
+    pareto = _pareto_from_sums(parts["pareto_sums"], current_total)
+    shares = {field: _shares_from_sums(sums, current_total) for field, sums in parts["dimension_sums"].items()}
 
-    current_channel_mix = _dimension_share(current_period, "channel")[:4]
-    current_supplier_mix = _dimension_share(current_period, "supplier")[:4]
-    current_family_mix = _dimension_share(current_period, "family")[:4]
+    current_channel_mix = shares["channel"][:4]
+    current_supplier_mix = shares["supplier"][:4]
+    current_family_mix = shares["family"][:4]
 
-    hhi_rows = [
-        {"label": "Clientes", "value": _hhi(current_period, "client")},
-        {"label": "Proveedores", "value": _hhi(current_period, "supplier")},
-        {"label": "Vendedores", "value": _hhi(current_period, "seller_name")},
-        {"label": "Canales", "value": _hhi(current_period, "channel")},
-    ]
-    top_clients_share = _safe_pct(sum(item["sales"] for item in pareto[:10]), _sum_amount(current_period))
-    top_suppliers_share = _safe_pct(sum(item["sales"] for item in _dimension_share(current_period, "supplier")[:5]), _sum_amount(current_period))
+    # Sin datos de vendedor (Comercial por totales) no se informa su concentración.
+    hhi_rows = [{"label": label, "value": _hhi_from_shares(shares[field])} for label, field in HHI_FIELDS if field in shares]
+    top_clients_share = _safe_pct(sum(item["sales"] for item in pareto[:10]), current_total)
+    top_suppliers_share = _safe_pct(sum(item["sales"] for item in shares["supplier"][:5]), current_total)
     insights = [
         f"El histórico cubre {len(monthly_rows)} meses con último cierre en {latest['label']}.",
         f"La venta del último mes varía {_pct_change(latest['sales'], previous.get('sales', 0))}% vs el mes anterior y {_pct_change(latest['sales'], yoy_sales)}% interanual.",
@@ -453,7 +501,7 @@ def build_history_dashboard(records, current_period, period_context, planning=No
         alerts.append({"severity": "warn", "text": f"El negocio depende {top_clients_share}% de solo 10 clientes."})
     if hhi_rows[0]["value"] >= 900:
         alerts.append({"severity": "warn", "text": f"El HHI de clientes ({int(hhi_rows[0]['value'])}) sugiere concentración alta."})
-    budget = _build_budget_block(monthly_rows, records_by_period, planning)
+    budget = _build_budget_block(monthly_rows, parts["budget_records_by_period"], planning)
 
     return {
         "summary": {

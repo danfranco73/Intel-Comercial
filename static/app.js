@@ -68,7 +68,7 @@ const state = {
   // lastData = informe completo de la superficie actual (cada una guarda el suyo
   // al cambiar); series = informe por totales de Comercial (/api/bi/series).
   reportView: { metricMode: readStoredMetricMode(), dashboardView: readStoredDashboardView(), lastData: null },
-  series: { data: null, key: "", compare: false },
+  series: { data: null, key: "", compare: false, views: {} },
   workspaceState: {},
   interactiveReport: { chartType: "line", byView: {} },
   planning: null,
@@ -865,13 +865,34 @@ function renderBiResults() {
   renderBiReportData();
 }
 
+// Ficha producto e Histórico de Comercial: se piden con totales al abrir la vista.
+function seriesDashboardPayload(view) {
+  return {
+    ...seriesRequestPayload(),
+    view,
+    planning: view === "history" ? normalizePlanningConfig(state.planning) : null,
+  };
+}
+
+function biDashboards() {
+  const dashboards = {};
+  ["products", "history"].forEach((view) => {
+    const entry = state.series.views[view];
+    if (entry && entry.key === JSON.stringify(seriesDashboardPayload(view))) {
+      Object.assign(dashboards, entry.data.dashboards || {});
+    }
+  });
+  return dashboards;
+}
+
 function renderBiReportData() {
   const series = state.series.data;
   if (!series) return;
-  const full = state.reportView.lastData;
-  const data = full || series;
+  // kind "series": totales de ClickHouse; si no, es el informe completo (usuarios con alcance).
+  const totalsMode = series.kind === "series";
+  const data = totalsMode ? { ...series, dashboards: biDashboards() } : series;
   const mode = resolveMetricMode(data.summary);
-  if (series.kind === "series") {
+  if (totalsMode) {
     renderSeriesSummaryCards(series);
   } else {
     renderSummaryCards(series.summary, series.meta, mode, null);
@@ -879,55 +900,51 @@ function renderBiReportData() {
   renderDashboardViewSelector(data);
   renderDashboardPanels();
   renderInteractiveReport(data);
-  renderBiFullReportNotice();
-  if (full) {
-    renderProductBrief(full);
-    renderHistoryDashboard(full, mode);
-    renderSupplierFocusChart(full.supplierFocus);
-    renderRankings(full.rankings, mode);
+  renderProductBrief(data);
+  renderHistoryDashboard(data, mode);
+  if (!totalsMode) {
+    renderSupplierFocusChart(series.supplierFocus);
+    renderRankings(series.rankings, mode);
   }
-  document.querySelectorAll('[data-workspace-only="bi"]').forEach((node) => node.classList.toggle("hidden", !full));
-  if (!full && ["products", "history"].includes(state.reportView.dashboardView)) {
-    loadBiFullReport().catch(showError);
-  }
-}
-
-function renderBiFullReportNotice() {
-  document.querySelectorAll("[data-bi-full-notice]").forEach((node) => node.remove());
+  // Cobertura por proveedor foco y rankings de mix salen del informe completo.
+  document.querySelectorAll('[data-workspace-only="bi"]').forEach((node) => node.classList.toggle("hidden", totalsMode));
   const view = state.reportView.dashboardView;
-  if (state.reportView.lastData || !["products", "history"].includes(view)) return;
-  const panel = document.querySelector(`[data-dashboard-panel="${view}"]`);
-  if (!panel) return;
-  const { fechaDesde, fechaHasta } = state.datasets.sales.erp;
-  const tooLong = rangeDays(fechaDesde, fechaHasta) > BI_FULL_REPORT_MAX_DAYS;
-  const notice = document.createElement("div");
-  notice.className = "guide-callout";
-  notice.dataset.biFullNotice = "1";
-  notice.innerHTML = tooLong
-    ? `<strong>Esta vista todavía usa el cálculo completo</strong>
-       <div class="muted">Admite períodos de hasta 3 meses. Elegí un período más corto en Parámetros del informe o usá el mes en curso.</div>
-       <div class="button-row"><button type="button" class="primary" data-bi-current-month>Usar el mes en curso</button></div>`
-    : `<strong>Calculando el informe completo del período...</strong>`;
-  panel.prepend(notice);
-  notice.querySelector("[data-bi-current-month]")?.addEventListener("click", () => {
-    // Mes de la última fecha con datos (hoy, salvo que la base venga atrasada).
-    const { fechaHasta } = rollingBiWindow();
-    state.datasets.sales.erp.fechaDesde = `${fechaHasta.slice(0, 7)}-01`;
-    state.datasets.sales.erp.fechaHasta = fechaHasta;
-    renderDatasetConfigs();
-    analyze().catch(showError);
-  });
+  const loaded = { products: data.dashboards?.families, history: data.dashboards?.history };
+  if (totalsMode && view in loaded && !loaded[view]) {
+    loadBiDashboard(view).catch(showError);
+  }
 }
 
-let biFullReportPending = false;
-async function loadBiFullReport() {
-  const { fechaDesde, fechaHasta } = state.datasets.sales.erp;
-  if (biFullReportPending || rangeDays(fechaDesde, fechaHasta) > BI_FULL_REPORT_MAX_DAYS) return;
-  biFullReportPending = true;
+// Histórico en pantalla (Comercial por totales o informe completo), para redibujar
+// el presupuesto mientras se edita antes de recalcular.
+function currentHistoryDashboard() {
+  if (workspace === "bi" && state.series.data?.kind === "series") {
+    return state.series.views.history?.data?.dashboards?.history;
+  }
+  return state.reportView.lastData?.dashboards?.history;
+}
+
+const pendingBiDashboards = new Set();
+async function loadBiDashboard(view) {
+  const payload = seriesDashboardPayload(view);
+  const key = JSON.stringify(payload);
+  if (pendingBiDashboards.has(key)) return;
+  pendingBiDashboards.add(key);
+  setStatus(view === "products" ? "Armando la ficha de producto..." : "Armando el histórico...");
   try {
-    await analyzeLegacy({ target: "bi", seriesKey: state.series.key });
+    const data = await api("/api/bi/series-dashboard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    state.series.views[view] = { key, data };
+    renderBiReportData();
+    setStatus(`${view === "products" ? "Ficha de producto" : "Histórico"} listo: ${state.series.data?.summary?.periodLabel || ""}.`);
+  } catch (error) {
+    if (error?.payload?.fallback !== "legacy") throw error;
+    setStatus("Esta vista usa el informe completo para tu usuario: elegí un período de hasta 3 meses y actualizá.");
   } finally {
-    biFullReportPending = false;
+    pendingBiDashboards.delete(key);
   }
 }
 
@@ -3953,7 +3970,7 @@ function renderDashboardViewSelector(data) {
   }
   const dashboardSummaries = {
     coach: "Ficha clara para conversar con el vendedor: resultado, comparación, mix y tres acciones.",
-    products: "Ficha por familia (con sus categorías) o por categoría (con sus marcas), con mejores clientes y vendedores.",
+    products: "Ficha por familia (con sus categorías) o por categoría (con sus marcas), con sus mejores clientes.",
     direction: "Vista de comité: cierre automático, alertas priorizadas y agenda de decisión comercial.",
     executive: "Resumen táctico del período, con ritmo, proyección y principales focos de gestión.",
     interactive: "Gráfico mensual por vendedor, fuerza, ruta y esquema con segmentadores y selector de métrica.",
@@ -4445,12 +4462,22 @@ function readProductBriefDimension() {
 }
 
 function growthCell(value) {
+  // null = no se pidió período de comparación (Comercial por totales).
+  if (value === null) return `<td class="muted">–</td>`;
   return `<td class="${(value || 0) < 0 ? "coach-negative" : "coach-positive"}">${pctNumber(value || 0)}</td>`;
+}
+
+function moneyOrDash(value) {
+  return value === null || value === undefined ? "–" : money(value);
+}
+
+function decimalOrDash(value) {
+  return value === null || value === undefined ? "–" : decimalNumber(value);
 }
 
 function clientComparisonCells(item) {
   // Informes guardados antes de sumar la comparación de clientes no traen el dato.
-  if (item.previousClients === undefined) {
+  if (item.previousClients === undefined || item.previousClients === null) {
     return `<td>${intNumber(item.clients || 0)}</td><td class="muted">–</td><td class="muted">–</td>`;
   }
   return `<td>${intNumber(item.clients || 0)}</td><td>${intNumber(item.previousClients || 0)}</td>${growthCell(item.clientsGrowthPct)}`;
@@ -4543,11 +4570,14 @@ function renderProductBrief(data) {
 
 function renderProductBriefRanking(rows, dashboard, labels) {
   const summary = dashboard.summary || {};
+  const compared = dashboard.comparison !== false;
+  const versus = (value) => (compared ? `${pctNumber(value || 0)} vs. comparación` : "sin comparación pedida");
+  const tone = (value) => (!compared ? "neutral" : (value || 0) >= 0 ? "good" : "warn");
   renderMetricTiles("productBriefTeamKpis", [
-    { label: "$ neto total", value: money(summary.sales || 0), sub: `${pctNumber(summary.growthPct || 0)} vs. comparación`, tone: (summary.growthPct || 0) >= 0 ? "good" : "warn" },
-    { label: "Bultos", value: decimalNumber(summary.quantity || 0), sub: `${pctNumber(summary.quantityGrowthPct || 0)} vs. comparación`, tone: (summary.quantityGrowthPct || 0) >= 0 ? "good" : "warn" },
+    { label: "$ neto total", value: money(summary.sales || 0), sub: versus(summary.growthPct), tone: tone(summary.growthPct) },
+    { label: "Bultos", value: decimalNumber(summary.quantity || 0), sub: versus(summary.quantityGrowthPct), tone: tone(summary.quantityGrowthPct) },
     { label: "$ / cantidad", value: money(summary.valuePerQuantity || 0), sub: "importe neto / cantidad", tone: "neutral" },
-    { label: "Clientes compradores", value: intNumber(summary.clients || 0), sub: `vs ${intNumber(summary.previousClients || 0)} (${pctNumber(summary.clientsGrowthPct || 0)})`, tone: (summary.clientsGrowthPct || 0) >= 0 ? "good" : "warn" },
+    { label: "Clientes compradores", value: intNumber(summary.clients || 0), sub: compared ? `vs ${intNumber(summary.previousClients || 0)} (${pctNumber(summary.clientsGrowthPct || 0)})` : "clientes distintos con compra", tone: tone(summary.clientsGrowthPct) },
     { label: `Top 3 ${labels.plural}`, value: pctNumber(summary.top3SharePct || 0), sub: `${intNumber(summary.count || 0)} ${labels.plural} con venta`, tone: "neutral" },
   ]);
   const ranking = document.getElementById("productBriefRanking");
@@ -4556,10 +4586,10 @@ function renderProductBriefRanking(rows, dashboard, labels) {
       <td>${row.rankSales ? `#${intNumber(row.rankSales)}` : "s/v"}</td>
       <td><button type="button" class="coach-table-link">${escapeHtml(row.label)}</button></td>
       <td>${money(row.sales || 0)}</td>
-      <td>${money(row.previousSales || 0)}</td>
+      <td>${moneyOrDash(row.previousSales)}</td>
       ${growthCell(row.growthPct)}
       <td>${decimalNumber(row.quantity || 0)}</td>
-      <td>${decimalNumber(row.previousQuantity || 0)}</td>
+      <td>${decimalOrDash(row.previousQuantity)}</td>
       ${growthCell(row.quantityGrowthPct)}
       <td>${pctNumber(row.sharePct || 0)}</td>
       ${clientComparisonCells(row)}
@@ -4582,15 +4612,28 @@ function renderProductBriefSheet(row, dashboard, labels, meta) {
   document.getElementById("productBriefPeriod").textContent =
     `${period || "Período seleccionado"} · comparación: ${comparison} · todos los números respetan los filtros aplicados.`;
   document.getElementById("productBriefMixTitle").textContent = `${labels.childPlural} ${labels.of}`;
-  renderMetricTiles("productBriefKpis", [
+  const compared = dashboard.comparison !== false;
+  const ordersTile = { label: "Pedidos", value: intNumber(row.orders || 0), sub: `ticket medio ${money(row.avgTicket || 0)}`, tone: "neutral" };
+  if (!compared) {
+    document.getElementById("productBriefPeriod").textContent =
+      `${period || "Período seleccionado"} · sin comparación (marcá “Comparar con el año anterior” para verla) · todos los números respetan los filtros aplicados.`;
+  }
+  renderMetricTiles("productBriefKpis", !compared ? [
     { label: "$ neto", value: money(row.sales || 0), sub: `${pctNumber(row.sharePct || 0)} del total filtrado · rank #${intNumber(row.rankSales || 0)}`, tone: "neutral" },
-    { label: "Comparación en $", value: pctNumber(row.growthPct || 0), sub: `${money(row.sales || 0)} vs ${money(row.previousSales || 0)}`, tone: (row.growthPct || 0) >= 0 ? "good" : "warn" },
-    { label: "Comparación bultos", value: pctNumber(row.quantityGrowthPct || 0), sub: `${decimalNumber(row.quantity || 0)} vs ${decimalNumber(row.previousQuantity || 0)}`, tone: (row.quantityGrowthPct || 0) >= 0 ? "good" : "warn" },
+    { label: "Bultos", value: decimalNumber(row.quantity || 0), sub: "cantidad del período", tone: "neutral" },
+    { label: "$ / cantidad", value: money(row.valuePerQuantity || 0), sub: `total ${money(dashboard.summary?.valuePerQuantity || 0)}`, tone: "neutral" },
+    { label: "Clientes compradores", value: intNumber(row.clients || 0), sub: `${pctNumber(row.coveragePct || 0)} del total`, tone: "neutral" },
+    ordersTile,
+    { label: "Top 3 clientes", value: pctNumber(row.top3ClientsSharePct || 0), sub: "concentración de la venta", tone: (row.top3ClientsSharePct || 0) >= 50 ? "warn" : "neutral" },
+  ] : [
+    { label: "$ neto", value: money(row.sales || 0), sub: `${pctNumber(row.sharePct || 0)} del total filtrado · rank #${intNumber(row.rankSales || 0)}`, tone: "neutral" },
+    { label: "Comparación en $", value: pctNumber(row.growthPct || 0), sub: `${money(row.sales || 0)} vs ${moneyOrDash(row.previousSales)}`, tone: (row.growthPct || 0) >= 0 ? "good" : "warn" },
+    { label: "Comparación bultos", value: pctNumber(row.quantityGrowthPct || 0), sub: `${decimalNumber(row.quantity || 0)} vs ${decimalOrDash(row.previousQuantity)}`, tone: (row.quantityGrowthPct || 0) >= 0 ? "good" : "warn" },
     { label: "$ / cantidad", value: money(row.valuePerQuantity || 0), sub: `total ${money(dashboard.summary?.valuePerQuantity || 0)}`, tone: "neutral" },
     { label: "Clientes compradores", value: intNumber(row.clients || 0), sub: `vs ${intNumber(row.previousClients || 0)} (${pctNumber(row.clientsGrowthPct || 0)}) · ${pctNumber(row.coveragePct || 0)} del total`, tone: (row.clientDelta || 0) >= 0 ? "good" : "warn" },
     { label: "Clientes nuevos", value: intNumber(row.newClients || 0), sub: "con compra actual y sin compra comparativa", tone: "good" },
     { label: "Clientes sin compra", value: intNumber(row.clientsWithoutPurchase || 0), sub: "compraron en el período comparativo", tone: (row.clientsWithoutPurchase || 0) > 0 ? "warn" : "good" },
-    { label: "Vendedores", value: intNumber(row.sellers || 0), sub: `ticket medio ${money(row.avgTicket || 0)}`, tone: "neutral" },
+    workspace === "bi" ? ordersTile : { label: "Vendedores", value: intNumber(row.sellers || 0), sub: `ticket medio ${money(row.avgTicket || 0)}`, tone: "neutral" },
     { label: "Top 3 clientes", value: pctNumber(row.top3ClientsSharePct || 0), sub: "concentración de la venta", tone: (row.top3ClientsSharePct || 0) >= 50 ? "warn" : "neutral" },
   ]);
   const children = (row.children || []).filter((item) => (item.sales || 0) > 0 || (item.previousSales || 0) > 0);
@@ -4600,7 +4643,7 @@ function renderProductBriefSheet(row, dashboard, labels, meta) {
         <td>${item.rank ? `#${intNumber(item.rank)}` : "s/v"}</td>
         <td><strong>${escapeHtml(item.label)}</strong></td>
         <td>${money(item.sales || 0)}</td>
-        <td>${money(item.previousSales || 0)}</td>
+        <td>${moneyOrDash(item.previousSales)}</td>
         ${growthCell(item.growthPct)}
         <td><span class="coach-mix-value">${pctNumber(item.mixPct || 0)}</span><span class="coach-mix-bar"><i style="width:${Math.min(100, Math.max(0, item.mixPct || 0))}%"></i></span></td>
         <td>${decimalNumber(item.quantity || 0)}</td>
@@ -4616,7 +4659,7 @@ function renderProductBriefSheet(row, dashboard, labels, meta) {
         <td>#${index + 1}</td>
         <td><strong>${escapeHtml(client.label || client.key || "Sin cliente")}</strong></td>
         <td>${money(client.sales || 0)}</td>
-        <td>${money(client.previousSales || 0)}</td>
+        <td>${moneyOrDash(client.previousSales)}</td>
         ${growthCell(client.growthPct)}
         <td>${pctNumber(client.mixPct || 0)}</td>
         <td>${decimalNumber(client.quantity || 0)}</td>
@@ -4629,7 +4672,7 @@ function renderProductBriefSheet(row, dashboard, labels, meta) {
         <td>#${index + 1}</td>
         <td><strong>${escapeHtml(seller.label)}</strong></td>
         <td>${money(seller.sales || 0)}</td>
-        <td>${money(seller.previousSales || 0)}</td>
+        <td>${moneyOrDash(seller.previousSales)}</td>
         ${growthCell(seller.growthPct)}
         <td>${pctNumber(seller.mixPct || 0)}</td>
         <td>${decimalNumber(seller.quantity || 0)}</td>
@@ -6747,7 +6790,7 @@ function renderHistoryBudgetPanel(dashboard) {
       </div>
       <div class="planning-field">
         <label>&nbsp;</label>
-        <button id="applyBudgetBtn" class="primary" type="button">Calcular total, categorías y vendedores</button>
+        <button id="applyBudgetBtn" class="primary" type="button">${workspace === "bi" ? "Calcular total y categorías" : "Calcular total, categorías y vendedores"}</button>
       </div>
     </div>
     <div class="planning-hint">
@@ -6907,8 +6950,9 @@ function renderHistoryBudgetMonthlyTable(preview) {
     const row = cell.getRow().getData();
     state.planning.budget.monthlyTotals[row.label] = Number(cell.getValue() || 0);
     state.planningDirty = true;
-    if (state.reportView.lastData?.dashboards?.history) {
-      renderHistoryBudgetPanel(state.reportView.lastData.dashboards.history);
+    const history = currentHistoryDashboard();
+    if (history) {
+      renderHistoryBudgetPanel(history);
     }
   };
   if (dashboardState.tables.historyBudgetMonthly) {
@@ -6954,8 +6998,9 @@ function renderHistoryBudgetDimensionTable(preview) {
     }
     state.planning.budget.dimensionShares[dim][row.label] = Number(cell.getValue() || 0);
     state.planningDirty = true;
-    if (state.reportView.lastData?.dashboards?.history) {
-      renderHistoryBudgetPanel(state.reportView.lastData.dashboards.history);
+    const history = currentHistoryDashboard();
+    if (history) {
+      renderHistoryBudgetPanel(history);
     }
   };
   if (dashboardState.tables.historyBudgetDimension) {

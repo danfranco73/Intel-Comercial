@@ -171,6 +171,88 @@ class SeriesQuery:
         return counts
 
 
+    # --- Ficha producto e Histórico ------------------------------------------
+
+    def _window(self, start, end, previous, filters, fields):
+        """Ventas del período (is_cur) y de la comparación (is_prev) con una columna por campo."""
+        window_start = min(start, previous[0]) if previous else start
+        window_end = max(end, previous[1]) if previous else end
+        source, parameters = self._base(window_start, window_end, filters)
+        parameters.update({"cur_start": start, "cur_end": end})
+        previous_flag = "0"
+        if previous:
+            parameters.update({"prev_start": previous[0], "prev_end": previous[1]})
+            previous_flag = "(s.date >= {prev_start:Date} AND s.date <= {prev_end:Date})"
+        columns = "".join(f"{FIELD_EXPRESSIONS[field]} AS d_{field}, " for field in fields)
+        inner = (
+            f"SELECT {columns}formatDateTime(s.date, '%Y-%m') AS period, "
+            f"{CLIENT_EXPRESSION} AS client, if(s.client_name != '', s.client_name, s.client_key) AS client_label, "
+            "s.invoice AS invoice, s.amount_net AS net, s.quantity AS quantity, "
+            "(s.date >= {cur_start:Date} AND s.date <= {cur_end:Date}) AS is_cur, "
+            f"{previous_flag} AS is_prev {source}"
+        )
+        return f"FROM ({inner}) WHERE (is_cur OR is_prev)", parameters
+
+    PERIOD_SUMS = (
+        "sumIf(net, is_cur), sumIf(net, is_prev), sumIf(quantity, is_cur), sumIf(quantity, is_prev), "
+        "uniqExactIf(client, is_cur), uniqExactIf(client, is_prev)"
+    )
+
+    def product_groups(self, start, end, previous, filters, group):
+        source, parameters = self._window(start, end, previous, filters, [group])
+        sql = (
+            f"SELECT d_{group}, {self.PERIOD_SUMS}, uniqExactIf(invoice, is_cur AND invoice != '') "
+            f"{source} GROUP BY d_{group}"
+        )
+        return self._rows(sql, parameters)
+
+    def product_client_changes(self, start, end, previous, filters, group):
+        source, parameters = self._window(start, end, previous, filters, [group])
+        sql = (
+            f"SELECT d_{group}, countIf(bought_now AND NOT bought_before), countIf(bought_before AND NOT bought_now) "
+            f"FROM (SELECT d_{group}, client, max(is_cur) AS bought_now, max(is_prev) AS bought_before "
+            f"{source} GROUP BY d_{group}, client) GROUP BY d_{group}"
+        )
+        return self._rows(sql, parameters)
+
+    def product_children(self, start, end, previous, filters, group, child):
+        source, parameters = self._window(start, end, previous, filters, [group, child])
+        sql = f"SELECT d_{group}, d_{child}, {self.PERIOD_SUMS} {source} GROUP BY d_{group}, d_{child}"
+        return self._rows(sql, parameters)
+
+    def product_top_clients(self, start, end, previous, filters, group, limit=10):
+        source, parameters = self._window(start, end, previous, filters, [group])
+        sql = (
+            f"SELECT d_{group}, client, any(client_label), sumIf(net, is_cur) AS current_sales, "
+            "sumIf(net, is_prev) AS previous_sales, sumIf(quantity, is_cur), sumIf(quantity, is_prev), "
+            "uniqExactIf(client, is_cur), uniqExactIf(client, is_prev) "
+            f"{source} GROUP BY d_{group}, client HAVING current_sales > 0 "
+            f"ORDER BY d_{group}, current_sales DESC, previous_sales DESC LIMIT {int(limit)} BY d_{group}"
+        )
+        return self._rows(sql, parameters)
+
+    def window_totals(self, start, end, previous, filters):
+        source, parameters = self._window(start, end, previous, filters, [])
+        return self._rows(f"SELECT {self.PERIOD_SUMS} {source}", parameters)[0]
+
+    def clients_by_month(self, start, end, filters):
+        source, parameters = self._window(start, end, None, filters, [])
+        return self._rows(f"SELECT period, groupUniqArray(client) {source} GROUP BY period ORDER BY period", parameters)
+
+    def sales_by_client_label(self, start, end, filters):
+        source, parameters = self._window(start, end, None, filters, [])
+        return self._rows(f"SELECT client_label, sum(net) {source} GROUP BY client_label", parameters)
+
+    def budget_rows(self, start, end, filters, periods):
+        source, parameters = self._window(start, end, None, filters, ["line", "channel", "family"])
+        parameters["budget_periods"] = list(periods)
+        sql = (
+            "SELECT period, d_line, d_channel, d_family, sum(net), sum(quantity) "
+            f"{source} AND period IN {{budget_periods:Array(String)}} GROUP BY period, d_line, d_channel, d_family"
+        )
+        return self._rows(sql, parameters)
+
+
 def normalize_series_filters(raw_filters):
     applied = {}
     for field, values in (raw_filters or {}).items():
@@ -409,3 +491,140 @@ def ensure_article_dimension(client, database: str, version, load_articles):
         client.command(f"EXCHANGE TABLES {table} AND {staging}")
         client.command(f"TRUNCATE TABLE {staging}")
         _dim_loaded_version = version
+
+
+# --- Ficha producto e Histórico con totales -----------------------------------
+
+COMPARISON_FIELDS = (
+    "previousSales", "growthPct", "previousQuantity", "quantityGrowthPct", "previousClients",
+    "clientsGrowthPct", "clientDelta", "newClients", "clientsWithoutPurchase",
+)
+
+
+def _without_comparison(value):
+    """Sin período de comparación pedido, las variaciones no existen: quedan en None."""
+    if isinstance(value, list):
+        return [_without_comparison(item) for item in value]
+    if isinstance(value, dict):
+        return {key: None if key in COMPARISON_FIELDS else _without_comparison(item) for key, item in value.items()}
+    return value
+
+
+def _sums(row):
+    sales, previous_sales, quantity, previous_quantity, clients, previous_clients = row
+    return (
+        {"sales": float(sales or 0), "quantity": float(quantity or 0), "clients": int(clients or 0)},
+        {"sales": float(previous_sales or 0), "quantity": float(previous_quantity or 0), "clients": int(previous_clients or 0)},
+    )
+
+
+def product_parts_from_query(query: SeriesQuery, start, end, previous, filters, group, child):
+    groups = {}
+    for label, *metrics, orders in query.product_groups(start, end, previous, filters, group):
+        now, before = _sums(metrics)
+        groups[label] = {
+            "label": label,
+            "sales": round(now["sales"], 2),
+            "previousSales": round(before["sales"], 2),
+            "quantity": round(now["quantity"], 2),
+            "previousQuantity": round(before["quantity"], 2),
+            "clients": now["clients"],
+            "previousClients": before["clients"],
+            "newClients": 0,
+            "clientsWithoutPurchase": 0,
+            "orders": int(orders or 0),
+            "children": {"current": {}, "previous": {}, "names": {}},
+            "topClients": {"current": {}, "previous": {}, "names": {}},
+        }
+    for label, new_clients, lost_clients in query.product_client_changes(start, end, previous, filters, group):
+        if label in groups:
+            groups[label]["newClients"] = int(new_clients or 0)
+            groups[label]["clientsWithoutPurchase"] = int(lost_clients or 0)
+    for label, child_label, *metrics in query.product_children(start, end, previous, filters, group, child):
+        if label not in groups:
+            continue
+        now, before = _sums(metrics)
+        block = groups[label]["children"]
+        if now["sales"] or now["quantity"] or now["clients"]:
+            block["current"][child_label] = now
+        if before["sales"] or before["quantity"] or before["clients"]:
+            block["previous"][child_label] = before
+    for label, client, client_label, *metrics in query.product_top_clients(start, end, previous, filters, group):
+        if label not in groups:
+            continue
+        now, before = _sums(metrics)
+        block = groups[label]["topClients"]
+        block["current"][client] = now
+        if before["sales"] or before["quantity"] or before["clients"]:
+            block["previous"][client] = before
+        block["names"][client] = client_label or client
+    now, before = _sums(query.window_totals(start, end, previous, filters))
+    return {
+        "groups": list(groups.values()),
+        "sales": round(now["sales"], 2),
+        "quantity": round(now["quantity"], 2),
+        "clients": now["clients"],
+        "previousSales": round(before["sales"], 2),
+        "previousQuantity": round(before["quantity"], 2),
+        "previousClients": before["clients"],
+    }
+
+
+def build_product_dashboards(query: SeriesQuery, start, end, raw_filters, previous=None):
+    """Fichas por familia (con categorías) y por categoría (con marcas), sin vendedores:
+    en Comercial la asignación de vendedores no aplica y se ve en Sales Coach."""
+    from bi.focus_dashboards import build_product_dashboard_from_parts
+
+    filters = normalize_series_filters(raw_filters)
+    dashboards = {}
+    for key, group, child in (("families", "family", "line"), ("lines", "line", "brand")):
+        dashboard = build_product_dashboard_from_parts(
+            group, child, product_parts_from_query(query, start, end, previous, filters, group, child)
+        )
+        dashboard["comparison"] = bool(previous)
+        dashboards[key] = dashboard if previous else _without_comparison(dashboard)
+    return dashboards
+
+
+def history_parts_from_query(query: SeriesQuery, start, end, filters):
+    monthly_rows = [
+        {
+            "label": label,
+            "sales": round(float(net or 0), 2),
+            "quantity": round(float(quantity or 0), 2),
+            "clients": int(buyers or 0),
+            "orders": int(orders or 0),
+        }
+        for label, quantity, net, _final, _internal, buyers, orders, _count in query.totals_by_month(start, end, filters)
+    ]
+    period = query.period_totals(start, end, filters)
+    dimension_sums = {field: {} for field in ("supplier", "channel", "family")}
+    for field, value, _quantity, net, *_ in query.series_by_dimension(start, end, filters, with_period=False):
+        if field in dimension_sums:
+            dimension_sums[field][value] = float(net or 0)
+    client_sums = {label or "Sin cliente": float(net or 0) for label, net in query.sales_by_client_label(start, end, filters)}
+    dimension_sums["client"] = client_sums
+    budget_periods = [row["label"] for row in monthly_rows][-3:]
+    budget_records = {label: [] for label in budget_periods}
+    if budget_periods:
+        for label, line, channel, family, net, quantity in query.budget_rows(start, end, filters, budget_periods):
+            budget_records[label].append(
+                # Sin vendedor: el reparto del objetivo por vendedor es de Sales Coach.
+                {"line": line, "channel": channel, "family": family, "seller_name": "Sin vendedor",
+                 "amount": float(net or 0), "quantity": float(quantity or 0)}
+            )
+    return {
+        "monthly_rows": monthly_rows,
+        "clients_by_period": {label: set(clients) for label, clients in query.clients_by_month(start, end, filters)},
+        "current_total": round(float(period[1] or 0), 2),
+        "pareto_sums": client_sums,
+        "dimension_sums": dimension_sums,
+        "budget_records_by_period": budget_records,
+    }
+
+
+def build_history_dashboards(query: SeriesQuery, start, end, raw_filters, planning=None):
+    from bi.structural_dashboards import build_history_from_parts
+
+    filters = normalize_series_filters(raw_filters)
+    return {"history": build_history_from_parts(history_parts_from_query(query, start, end, filters), planning=planning)}
