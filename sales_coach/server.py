@@ -1025,6 +1025,22 @@ class AppHandler(
         self.end_headers()
         self.wfile.write(data)
 
+    def send_precompressed_json(self, body_gzip, status=200, headers=None):
+        """Envía un JSON ya comprimido (caché de informes) sin volver a serializarlo."""
+        if self._accepts_gzip():
+            self.send_response(status)
+            self._send_security_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body_gzip)))
+            self.send_header("Vary", "Accept-Encoding")
+            self.send_header("Content-Encoding", "gzip")
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(body_gzip)
+            return
+        self._send_body(gzip.decompress(body_gzip), "application/json; charset=utf-8", status=status, headers=headers)
+
     def serve_file(self, path, content_type):
         if not path.exists():
             self.send_error(404, "Archivo no encontrado")

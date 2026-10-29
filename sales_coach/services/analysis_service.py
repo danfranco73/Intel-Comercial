@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any, Callable
 import json
 
@@ -27,7 +28,17 @@ from sales_coach.schemas import AnalysisRequest
 
 class AnalysisService:
     def __init__(self, dataset_resolver: Callable[[dict[str, Any]], dict[str, Any]]):
-        self.dataset_resolver = dataset_resolver
+        # Tiempo acumulado leyendo ventas y maestros, para separar lectura de cálculo.
+        self.timings = {"load_ms": 0.0}
+
+        def timed_resolver(datasets):
+            started = perf_counter()
+            try:
+                return dataset_resolver(datasets)
+            finally:
+                self.timings["load_ms"] += (perf_counter() - started) * 1000
+
+        self.dataset_resolver = timed_resolver
 
     def analyze(self, payload: Any, scope_filters: dict[str, list[str]] | None):
         request = AnalysisRequest.parse(payload)
