@@ -4,7 +4,11 @@
 // fuerzas de ventas, vendedores y clientes: fichas, cartera, PDV 360, plan por
 // responsable, alertas y reuniones. Ambas usan la misma página y el mismo
 // informe; cambia qué dashboards y filtros se ofrecen.
-const workspace = window.location.pathname.startsWith("/sales-coach") || window.location.pathname === "/pdv" ? "coach" : "bi";
+function workspaceForPath(pathname) {
+  return pathname.startsWith("/sales-coach") || pathname === "/pdv" ? "coach" : "bi";
+}
+// Cambia sin recargar la página al pasar de Comercial a Sales Coach (ver switchWorkspace).
+let workspace = workspaceForPath(window.location.pathname);
 const WORKSPACE_DASHBOARD_VIEWS = {
   bi: ["series", "evolution", "buyers", "products", "history"],
   coach: ["coach", "sellers", "executive", "direction", "clients", "pdv", "opportunities", "interactive", "alerts", "meetings"],
@@ -39,8 +43,8 @@ const SERIES_VIEW_CONFIG = {
     slicers: ["seller_name", "sales_force", "route_description", "sales_scheme_name", "channel", "family", "brand", "year", "month"],
   },
 };
-const DASHBOARD_VIEWS = WORKSPACE_DASHBOARD_VIEWS[workspace];
-const DASHBOARD_VIEW_STORAGE_KEY = `reportDashboardView:${workspace}`;
+let DASHBOARD_VIEWS = WORKSPACE_DASHBOARD_VIEWS[workspace];
+let DASHBOARD_VIEW_STORAGE_KEY = `reportDashboardView:${workspace}`;
 
 const state = {
   files: [],
@@ -83,8 +87,14 @@ const UI_CACHE_DB = "codenoa_sales_coach_ui";
 const UI_CACHE_STORE = "reports";
 
 function uiCacheKey() {
-  // Un informe guardado por superficie: los filtros de Comercial no deben
-  // condicionar a Sales Coach ni al revés.
+  // Un solo informe guardado para Comercial y Sales Coach: el backend calcula lo
+  // mismo para ambas y cada una elige qué dashboards mostrar. Si el informe trae
+  // filtros propios de la otra superficie, switchWorkspace lo recalcula.
+  const user = state.auth.user || {};
+  return `${String(user.id || user.email || "anonymous")}:report`;
+}
+
+function legacyUiCacheKey() {
   const user = state.auth.user || {};
   return `${String(user.id || user.email || "anonymous")}:${workspace}`;
 }
@@ -111,8 +121,17 @@ async function readCachedWorkspace() {
   const db = await openUiCache();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(UI_CACHE_STORE, "readonly");
-    const request = transaction.objectStore(UI_CACHE_STORE).get(uiCacheKey());
-    request.onsuccess = () => resolve(request.result || null);
+    const store = transaction.objectStore(UI_CACHE_STORE);
+    const request = store.get(uiCacheKey());
+    request.onsuccess = () => {
+      if (request.result) {
+        resolve(request.result);
+        return;
+      }
+      const legacy = store.get(legacyUiCacheKey());
+      legacy.onsuccess = () => resolve(legacy.result || null);
+      legacy.onerror = () => resolve(null);
+    };
     request.onerror = () => reject(request.error);
     transaction.oncomplete = () => db.close();
   });
@@ -161,17 +180,21 @@ const REPORT_METRIC_MODES = ["mixed", "units", "sales"];
 const dashboardState = { charts: {}, tables: { direction: null, executive: null, executiveSensitivity: null, planningTargets: null, ownerTracking: null, history: null, historyBudgetMonthly: null, historyBudgetDimension: null, historyBudgetLineForecast: null, historyBudgetSellerForecast: null, sellers: null, clients: null, opportunities: null, alerts: null, meetings: null } };
 
 // Comercial no filtra por vendedor, fuerza, ruta ni esquema: eso es Sales Coach.
-const filterGroups = [
+const COACH_ONLY_FILTER_FIELDS = ["sales_scheme_name", "sales_force", "route_description", "seller_name"];
+const ALL_FILTER_GROUPS = [
   { id: "tiempo",     label: "Período",       fields: ["year", "month"] },
   { id: "producto",   label: "Producto",      fields: ["family", "line", "product_name", "brand", "caliber", "business_unit"] },
   { id: "proveedor",  label: "Proveedor",     fields: ["supplier"] },
   { id: "comercial",  label: "Comercial",     fields: ["sales_scheme_name", "sales_force", "route_description", "seller_name"], workspace: "coach" },
   { id: "canal",      label: "Canal",         fields: ["channel"] },
-].filter((group) => !group.workspace || group.workspace === workspace);
-const prefilterGroups = [
+];
+const ALL_PREFILTER_GROUPS = [
   { id: "producto", label: "Producto", fields: ["family", "line", "brand", "business_unit"] },
   { id: "comercial", label: "Comercial", fields: ["sales_scheme_name", "sales_force", "route_description", "seller_name"], workspace: "coach" },
-].filter((group) => !group.workspace || group.workspace === workspace);
+];
+function workspaceGroups(groups) {
+  return groups.filter((group) => !group.workspace || group.workspace === workspace);
+}
 
 const ANALYSIS_PLAYBOOK = {
   temporal_trend: {
@@ -266,38 +289,72 @@ const ANALYSIS_PLAYBOOK = {
   },
 };
 
-const COMMERCIAL_REQUEST_RECIPES = [
-  {
-    title: "Resumen general",
-    action: "Usá Actualizar informe",
-    detail: "Te devuelve KPIs, rankings y dashboards especializados del período elegido.",
-    examples: [
-      "Cómo vendimos este mes",
-      "Quiénes fueron los mejores vendedores",
-      "Qué marcas, canales y rutas explican la venta",
-    ],
-  },
-  {
-    title: "Foco en un punto de venta",
-    action: "Usá PDV 360",
-    detail: "Qué compra, qué le falta frente a sus pares y cómo llegarle.",
-    examples: [
-      "Qué le falta a este almacén",
-      "Por qué no compra Cámara",
-      "Qué fuerza y vendedor lo atienden",
-    ],
-  },
-  {
-    title: "Recorte comercial",
-    action: "Definí Enfoque del informe",
-    detail: "Primero recortá por vendedor, ruta, fuerza, marca o proveedor; después actualizá.",
-    examples: [
-      "Solo vendedor GOLDEN",
-      "Solo fuerza de ventas AMBA",
-      "Solo línea o marca específica",
-    ],
-  },
-];
+const COMMERCIAL_REQUEST_RECIPES = {
+  bi: [
+    {
+      title: "Series de producto",
+      action: "Usá Actualizar informe",
+      detail: "Evolución mensual por familia, categoría, producto, marca y calibre.",
+      examples: [
+        "Cómo evolucionó cada familia",
+        "Qué calibres crecen",
+        "Qué productos caen frente al mes anterior",
+      ],
+    },
+    {
+      title: "Proveedores y canales",
+      action: "Usá Proveedores y canales",
+      detail: "Cómo se mueve cada proveedor y cada canal mes a mes.",
+      examples: [
+        "Qué proveedor perdió volumen",
+        "Cómo viene el autoservicio",
+        "Peso de cada canal en el período",
+      ],
+    },
+    {
+      title: "Clientes compradores",
+      action: "Usá Clientes compradores",
+      detail: "Cuántos clientes distintos compran cada familia, marca, proveedor o canal.",
+      examples: [
+        "Cuántos clientes compran la marca",
+        "Cobertura por categoría",
+        "Solo un proveedor o calibre",
+      ],
+    },
+  ],
+  coach: [
+    {
+      title: "Resumen del equipo",
+      action: "Usá Actualizar informe",
+      detail: "Resultado del período por vendedor y fuerza de ventas contra el equipo.",
+      examples: [
+        "Quiénes fueron los mejores vendedores",
+        "Qué rutas explican la venta",
+        "Cómo viene el plan por responsable",
+      ],
+    },
+    {
+      title: "Foco en un punto de venta",
+      action: "Usá PDV 360",
+      detail: "Qué compra, qué le falta frente a sus pares y cómo llegarle.",
+      examples: [
+        "Qué le falta a este almacén",
+        "Por qué no compra Cámara",
+        "Qué fuerza y vendedor lo atienden",
+      ],
+    },
+    {
+      title: "Recorte comercial",
+      action: "Definí Enfoque del informe",
+      detail: "Primero recortá por vendedor, ruta, fuerza, marca o proveedor; después actualizá.",
+      examples: [
+        "Solo vendedor GOLDEN",
+        "Solo fuerza de ventas AMBA",
+        "Solo categoría o marca específica",
+      ],
+    },
+  ],
+};
 
 let activeFilterTab = "tiempo";
 let activePrefilterTab = "producto";
@@ -627,6 +684,93 @@ function applyWorkspaceChrome() {
   });
 }
 
+// Superficie a la que pertenece un informe por sus filtros: con vendedor,
+// fuerza, ruta o esquema es de Sales Coach; con proveedor foco, de Comercial.
+function reportWorkspaceBinding(data) {
+  if (!data) return null;
+  const applied = data.appliedFilters || {};
+  const available = data.availableFilters || {};
+  if (COACH_ONLY_FILTER_FIELDS.some((field) => applied[field] && isFieldConstrained(field, applied, available))) {
+    return "coach";
+  }
+  if (data.supplierFocus?.selected) {
+    return "bi";
+  }
+  return null;
+}
+
+function dropWorkspaceOnlySelections(target) {
+  if (target === "bi") {
+    COACH_ONLY_FILTER_FIELDS.forEach((field) => {
+      delete state.filters.selected[field];
+      delete state.prefilters.selected[field];
+    });
+    state.prefilters.selected = normalizeSelectedFilters(state.prefilters.selected, state.prefilters.available);
+    return;
+  }
+  const focus = state.reportView.lastData?.supplierFocus;
+  if (focus?.selected) {
+    // El proveedor foco entra al informe como filtro de proveedor.
+    delete state.filters.selected.supplier;
+  }
+  state.supplierFocus = "";
+}
+
+async function switchWorkspace(target, { pushUrl = true, url = "" } = {}) {
+  if (target === workspace) {
+    if (pushUrl && url && url !== window.location.pathname + window.location.search) {
+      window.history.pushState({}, "", url);
+    }
+    return;
+  }
+  if (pushUrl) {
+    window.history.pushState({}, "", url || (target === "coach" ? "/sales-coach" : "/bi"));
+  }
+  workspace = target;
+  DASHBOARD_VIEWS = WORKSPACE_DASHBOARD_VIEWS[workspace];
+  DASHBOARD_VIEW_STORAGE_KEY = `reportDashboardView:${workspace}`;
+  state.reportView.dashboardView = readStoredDashboardView();
+  activeFilterTab = "tiempo";
+  applyWorkspaceChrome();
+
+  const data = state.reportView.lastData;
+  const binding = reportWorkspaceBinding(data);
+  if (binding && binding !== workspace) {
+    dropWorkspaceOnlySelections(workspace);
+    renderDatasetConfigs();
+    renderCommercialGuide();
+    await analyze();
+    return;
+  }
+  normalizeSupplierFocusSelection();
+  renderDatasetConfigs();
+  renderCommercialGuide();
+  if (data) {
+    renderResults(data);
+  }
+}
+
+function bindWorkspaceLinks() {
+  const targets = { "/bi": "bi", "/sales-coach": "coach" };
+  document.querySelectorAll(".surface-switch a[href]").forEach((link) => {
+    const target = targets[link.getAttribute("href")];
+    if (!target) return;
+    link.addEventListener("click", (event) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+        return;
+      }
+      event.preventDefault();
+      switchWorkspace(target, { url: link.getAttribute("href") }).catch(showError);
+    });
+  });
+  window.addEventListener("popstate", () => {
+    const target = workspaceForPath(window.location.pathname);
+    if (target !== workspace) {
+      switchWorkspace(target, { pushUrl: false }).catch(showError);
+    }
+  });
+}
+
 async function boot() {
   setStatus("Preparando estructura de análisis...");
   applyWorkspaceChrome();
@@ -651,7 +795,10 @@ async function boot() {
     api(`/api/files?scope=${encodeURIComponent(state.scope)}`),
     api("/api/datasets"),
     api("/api/session").catch(() => ({ datasets: null })),
-    api("/api/erp/status").catch(() => ({ configured: false, reachable: false, message: "ChessERP no disponible." })),
+    // Consultar el estado inicia sesión en ChessERP: solo Admin lo necesita.
+    isAdminSurface
+      ? api("/api/erp/status").catch(() => ({ configured: false, reachable: false, message: "ChessERP no disponible." }))
+      : Promise.resolve({ configured: false, reachable: false, message: "" }),
     api("/api/erp/storage-status").catch(() => ({ connected: false, available: false, message: "MongoDB ERP no disponible." })),
     api("/api/clickhouse/storage-status").catch(() => ({ connected: false, available: false, configured: false, message: "ClickHouse no disponible." })),
     api("/api/data/freshness").catch(() => ({ available: false, updatedAt: null })),
@@ -935,7 +1082,7 @@ function renderCommercialGuide() {
       <div class="muted">La app resuelve automáticamente la base correcta según el rango que pedís. Cobertura disponible: ${escapeHtml(period)}.</div>
     </div>
     <div class="guide-grid">
-      ${COMMERCIAL_REQUEST_RECIPES.map((recipe) => `
+      ${COMMERCIAL_REQUEST_RECIPES[workspace].map((recipe) => `
         <article class="guide-card">
           <div class="guide-card-title">${escapeHtml(recipe.title)}</div>
           <div class="guide-card-action">${escapeHtml(recipe.action)}</div>
@@ -1169,7 +1316,7 @@ function renderSupplierFocusControl() {
 }
 
 function renderPrefilterPanel(title) {
-  const availableGroups = prefilterGroups.filter((group) =>
+  const availableGroups = workspaceGroups(ALL_PREFILTER_GROUPS).filter((group) =>
     group.fields.some((field) => state.prefilters.available[field]?.options?.length)
   );
   if (!availableGroups.length) {
@@ -5746,8 +5893,8 @@ function showPdvPanel() {
 async function openPdv360(clientKey, updateUrl = true) {
   if (!clientKey) return;
   if (!DASHBOARD_VIEWS.includes("pdv")) {
-    window.location.assign(`/pdv?clientKey=${encodeURIComponent(clientKey)}`);
-    return;
+    await switchWorkspace("coach", { url: `/pdv?clientKey=${encodeURIComponent(clientKey)}` });
+    updateUrl = false;
   }
   state.pdv.clientKey = clientKey;
   showPdvPanel();
@@ -6673,7 +6820,7 @@ function renderFilterPanel(meta) {
     : `Sin filtros aplicados. ${meta.rowsAnalyzed} registros del período disponibles.${comparisonLabel ? ` Comparando contra ${comparisonLabel}.` : ""}`;
 
   // Calcular qué grupos tienen opciones disponibles
-  const availableGroups = filterGroups.filter((g) =>
+  const availableGroups = workspaceGroups(ALL_FILTER_GROUPS).filter((g) =>
     g.fields.some((f) => state.filters.available[f]?.options?.length)
   );
 
@@ -7787,6 +7934,7 @@ function initializeResponsiveNavigation() {
 
 initializeResponsiveNavigation();
 initializeVisualPreferences();
+if (isBiSurface) bindWorkspaceLinks();
 bindClick("uploadBtn", () => uploadFiles().catch(showError));
 bindClick("clearUploadsBtn", () => clearUploads().catch(showError));
 bindClick("refreshFiles", () => boot().catch(showError));

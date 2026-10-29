@@ -1,5 +1,8 @@
+import gzip
+import hashlib
 import json
 import os
+import re
 import traceback
 from datetime import date, datetime, timedelta, timezone
 from email import policy
@@ -57,6 +60,7 @@ from sales_coach.config import (
 from sales_coach.repositories import AuthRepository, SalesRepository
 from sales_coach.schemas import SyncRequest
 from sales_coach.services import AuthService, SyncService
+from sales_coach.cache import cached_status, invalidate_status_cache
 from sales_coach.concurrency import AnalysisCapacityExceeded, heavy_analysis_slot
 from sales_coach.routes import GET_ROUTES, POST_ROUTES
 from sales_coach.routes.auth_routes import AuthRoutesMixin
@@ -85,6 +89,45 @@ PORT = CONFIG.port
 ALLOWED_EXTENSIONS = CONFIG.allowed_extensions
 ALLOWED_ROOTS = CONFIG.allowed_roots
 MAX_SCAN_DEPTH = CONFIG.max_scan_depth
+
+
+# Las páginas referencian JS/CSS con ?v=<hash del contenido>: el navegador los
+# guarda un año y, al desplegar un cambio, el hash nuevo fuerza la descarga.
+ASSET_REFERENCE_PATTERN = re.compile(r'(src|href)="(/[A-Za-z0-9_./-]+\.(?:js|css))"')
+IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
+NO_STORE_CACHE_CONTROL = "no-store, no-cache, must-revalidate, max-age=0"
+COMPRESSIBLE_TYPES = ("text/", "application/javascript", "application/json")
+MIN_COMPRESS_BYTES = 1024
+_static_cache = {}
+
+
+def _static_bytes(path):
+    """Contenido, hash y versión gzip de un archivo estático, recalculados solo si cambia."""
+    stat = path.stat()
+    cached = _static_cache.get(path)
+    if cached and cached["mtime"] == stat.st_mtime_ns and cached["size"] == stat.st_size:
+        return cached
+    data = path.read_bytes()
+    entry = {
+        "mtime": stat.st_mtime_ns,
+        "size": stat.st_size,
+        "data": data,
+        "version": hashlib.sha256(data).hexdigest()[:12],
+        "gzip": None,
+    }
+    _static_cache[path] = entry
+    return entry
+
+
+def _versioned_html(data):
+    def add_version(match):
+        target = (STATIC_DIR / match.group(2).lstrip("/")).resolve()
+        static_root = STATIC_DIR.resolve()
+        if static_root not in target.parents or not target.is_file():
+            return match.group(0)
+        return f'{match.group(1)}="{match.group(2)}?v={_static_bytes(target)["version"]}"'
+
+    return ASSET_REFERENCE_PATTERN.sub(add_version, data.decode("utf-8")).encode("utf-8")
 
 
 class ReusableHTTPServer(ThreadingHTTPServer):
@@ -830,14 +873,18 @@ class AppHandler(
         self.send_json(get_erp_status())
 
     def handle_erp_storage_status(self):
-        self.send_json(get_erp_storage_status())
+        self.send_json(cached_status("mongo_storage", get_erp_storage_status))
 
     def handle_clickhouse_storage_status(self):
-        self.send_json(get_clickhouse_storage_status())
+        self.send_json(cached_status("clickhouse_storage", get_clickhouse_storage_status))
 
     def handle_erp_prefilter_options(self):
         seller_names = (self.data_scope or {}).get("seller_name")
-        filters = get_erp_prefilter_options(seller_names=seller_names)
+        scope_key = None if seller_names is None else tuple(sorted(seller_names))
+        filters = cached_status(
+            ("prefilter_options", scope_key),
+            lambda: get_erp_prefilter_options(seller_names=seller_names),
+        )
         self.send_json({"filters": restrict_filter_options(filters, self.data_scope)})
 
     def handle_admin_errors(self, parsed):
@@ -878,6 +925,8 @@ class AppHandler(
                 },
             )
             self.send_json({"error": str(exc)}, status=500)
+        finally:
+            invalidate_status_cache()
 
     def handle_erp_sync_access_catalogs(self):
         data = {}
@@ -907,6 +956,8 @@ class AppHandler(
         except Exception as exc:
             self.log_application_error("erp_access_catalog_sync", exc)
             self.send_json({"error": str(exc)}, status=500)
+        finally:
+            invalidate_status_cache()
 
     def handle_upload(self):
         try:
@@ -951,20 +1002,51 @@ class AppHandler(
                 removed += 1
         self.send_json({"removed": removed, "files": list_available_files(scope="uploads")})
 
+    def _accepts_gzip(self):
+        return "gzip" in str(self.headers.get("Accept-Encoding") or "").lower()
+
+    def _send_body(self, data, content_type, status=200, headers=None, gzip_data=None):
+        compress = (
+            self._accepts_gzip()
+            and len(data) >= MIN_COMPRESS_BYTES
+            and content_type.startswith(COMPRESSIBLE_TYPES)
+        )
+        if compress:
+            data = gzip_data if gzip_data is not None else gzip.compress(data, compresslevel=5)
+        self.send_response(status)
+        self._send_security_headers()
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Vary", "Accept-Encoding")
+        if compress:
+            self.send_header("Content-Encoding", "gzip")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
+        self.end_headers()
+        self.wfile.write(data)
+
     def serve_file(self, path, content_type):
         if not path.exists():
             self.send_error(404, "Archivo no encontrado")
             return
-        data = path.read_bytes()
-        self.send_response(200)
-        self._send_security_headers()
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
-        self.end_headers()
-        self.wfile.write(data)
+        entry = _static_bytes(path)
+        if content_type.startswith("text/html"):
+            # El HTML nunca se cachea: así siempre apunta a los hashes vigentes.
+            self._send_body(
+                _versioned_html(entry["data"]),
+                content_type,
+                headers={"Cache-Control": NO_STORE_CACHE_CONTROL, "Pragma": "no-cache", "Expires": "0"},
+            )
+            return
+        versioned = "v=" in urlparse(self.path).query
+        if entry["gzip"] is None and len(entry["data"]) >= MIN_COMPRESS_BYTES:
+            entry["gzip"] = gzip.compress(entry["data"], compresslevel=9)
+        self._send_body(
+            entry["data"],
+            content_type,
+            headers={"Cache-Control": IMMUTABLE_CACHE_CONTROL if versioned else "no-cache"},
+            gzip_data=entry["gzip"],
+        )
 
     def serve_vendor_file(self, request_path):
         vendor_root = VENDOR_DIR.resolve()
@@ -983,14 +1065,7 @@ class AppHandler(
 
     def send_json(self, payload, status=200, headers=None):
         data = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
-        self.send_response(status)
-        self._send_security_headers()
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
-        for name, value in (headers or {}).items():
-            self.send_header(name, value)
-        self.end_headers()
-        self.wfile.write(data)
+        self._send_body(data, "application/json; charset=utf-8", status=status, headers=headers)
 
     def log_message(self, format, *args):
         return

@@ -112,3 +112,12 @@ def datasets(sales_records):
             "records": load_fixture("routes.json"),
         },
     }
+
+
+@pytest.fixture(autouse=True)
+def _fresh_status_cache():
+    from sales_coach.cache import invalidate_status_cache
+
+    invalidate_status_cache()
+    yield
+    invalidate_status_cache()
