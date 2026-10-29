@@ -123,19 +123,30 @@ class SeriesQuery:
         rows = self._rows(sql, parameters)
         return rows[0] if rows else (0, 0, 0, 0, 0, 0, 0)
 
-    def _dimension_pairs(self, fields):
-        return "[" + ", ".join(f"('{field}', {FIELD_EXPRESSIONS[field]})" for field in fields) + "]"
+    def _projected(self, start, end, filters, fields, exclude_field=None):
+        """Subconsulta con las ventas filtradas y una columna por campo.
+
+        ClickHouse exige ARRAY JOIN antes del WHERE; filtrando en una subconsulta,
+        la consulta de afuera abre cada fila en un par (campo, valor) por dimensión.
+        """
+        source, parameters = self._base(start, end, filters, exclude_field=exclude_field)
+        columns = ", ".join(f"{FIELD_EXPRESSIONS[field]} AS d_{field}" for field in fields)
+        inner = (
+            f"SELECT {columns}, formatDateTime(s.date, '%Y-%m') AS period, "
+            "s.quantity AS quantity, s.amount_net AS amount_net, s.amount_final AS amount_final, "
+            f"s.amount_net_internal AS amount_net_internal, {CLIENT_EXPRESSION} AS client {source}"
+        )
+        pairs = "[" + ", ".join(f"('{field}', d_{field})" for field in fields) + "]"
+        return f"FROM ({inner}) ARRAY JOIN {pairs} AS pair", parameters
 
     def series_by_dimension(self, start, end, filters, with_period: bool):
-        source, parameters = self._base(start, end, filters)
-        period_select = "formatDateTime(s.date, '%Y-%m') AS period, " if with_period else ""
+        source, parameters = self._projected(start, end, filters, SERIES_DIMENSIONS)
+        period_select = "period, " if with_period else ""
         period_group = ", period" if with_period else ""
         sql = (
             f"SELECT pair.1 AS field, pair.2 AS value, {period_select}"
-            "sum(s.quantity), sum(s.amount_net), sum(s.amount_final), sum(s.amount_net_internal), "
-            f"uniqExact({CLIENT_EXPRESSION}) "
-            f"{source} ARRAY JOIN {self._dimension_pairs(SERIES_DIMENSIONS)} AS pair "
-            f"GROUP BY field, value{period_group}"
+            "sum(quantity), sum(amount_net), sum(amount_final), sum(amount_net_internal), uniqExact(client) "
+            f"{source} GROUP BY field, value{period_group}"
         )
         return self._rows(sql, parameters)
 
@@ -153,11 +164,8 @@ class SeriesQuery:
         for excluded, fields in groups.items():
             if not fields:
                 continue
-            source, parameters = self._base(start, end, filters, exclude_field=excluded)
-            sql = (
-                "SELECT pair.1 AS field, pair.2 AS value, count() "
-                f"{source} ARRAY JOIN {self._dimension_pairs(fields)} AS pair GROUP BY field, value"
-            )
+            source, parameters = self._projected(start, end, filters, fields, exclude_field=excluded)
+            sql = f"SELECT pair.1 AS field, pair.2 AS value, count() {source} GROUP BY field, value"
             for field, value, count in self._rows(sql, parameters):
                 counts.setdefault(field, {})[value] = int(count)
         return counts

@@ -255,3 +255,28 @@ def test_series_endpoint_serves_and_caches_the_report(monkeypatch, caliber_datas
     assert first.sent[0][1]["summary"]["salesCurrent"] == 135
     assert calls == [{"supplier": ["Proveedor B"]}]
     assert second.sent[0][1] == first.sent[0][1]
+
+
+def test_generated_sql_puts_array_join_outside_the_filtered_subquery():
+    from bi.series_clickhouse import SeriesQuery
+
+    class RecordingClient:
+        def __init__(self):
+            self.sql = []
+
+        def query(self, sql, parameters=None):
+            self.sql.append((sql, parameters))
+            return type("Result", (), {"result_rows": []})()
+
+    client = RecordingClient()
+    query = SeriesQuery(client, "db.fact", "db.dim")
+    filters = {"caliber": ["1L"], "year": [2026]}
+    query.series_by_dimension(*JUNE, filters, with_period=True)
+    query.facet_counts(*JUNE, filters)
+    for sql, parameters in client.sql:
+        # ClickHouse: ARRAY JOIN va antes del WHERE, así que el filtro queda en la subconsulta.
+        inner, outer = sql.split(") ARRAY JOIN ", 1)
+        assert "WHERE" in inner and "WHERE" not in outer
+        assert parameters["start"] == JUNE[0]
+    facet_parameters = [parameters for _, parameters in client.sql[1:]]
+    assert any("f_caliber" not in parameters and "f_year" in parameters for parameters in facet_parameters)
