@@ -2853,11 +2853,23 @@ async function clearUploads() {
 
 // "Actualizar informe": Comercial pide totales (rápido); Sales Coach y las
 // vistas de Comercial que lo necesitan usan el informe completo.
+let analysisInFlight = false;
+
 async function analyze() {
-  if (workspace === "bi") {
-    return analyzeSeries();
+  if (analysisInFlight) return;
+  analysisInFlight = true;
+  const button = document.getElementById("analyzeBtn");
+  const wasDisabled = button?.disabled;
+  if (button) button.disabled = true;
+  try {
+    if (workspace === "bi") {
+      return await analyzeSeries();
+    }
+    return await analyzeLegacy();
+  } finally {
+    analysisInFlight = false;
+    if (button) button.disabled = wasDisabled;
   }
-  return analyzeLegacy();
 }
 
 async function analyzeLegacy(options = {}) {
@@ -2940,7 +2952,10 @@ async function analyzeLegacy(options = {}) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-      }).catch(() => null)
+      }).catch(() => {
+        report.tacticalWarning = "El informe principal está disponible, pero no se pudo completar el análisis táctico. Podés volver a actualizar el informe.";
+        return null;
+      })
       : null;
     if (tactical?.tacticalMonth) {
       report.tacticalMonth = tactical.tacticalMonth;
@@ -2959,7 +2974,9 @@ async function analyzeLegacy(options = {}) {
     data._seriesKey = options.seriesKey || "";
     state.reportView.lastData = data;
     renderBiReportData();
-    setStatus(`Informe completo listo: ${data.meta.rowsAnalyzed} registros del período ${data.meta.periodStart} a ${data.meta.periodEnd}.`);
+    setStatus(data.tacticalWarning
+      ? `Informe principal disponible: ${data.meta.rowsAnalyzed} registros del período ${data.meta.periodStart} a ${data.meta.periodEnd}. ${data.tacticalWarning}`
+      : `Informe completo listo: ${data.meta.rowsAnalyzed} registros del período ${data.meta.periodStart} a ${data.meta.periodEnd}.`);
     return data;
   }
   renderResults(data);
@@ -2968,11 +2985,15 @@ async function analyzeLegacy(options = {}) {
   });
   openRequestedSalesCoachDetail().catch(showError);
   const comparisonLabel = data.meta?.comparison?.comparisonLabel;
+  const completionLabel = data.tacticalWarning ? "Informe principal disponible" : "Análisis completo";
   setStatus(
     comparisonLabel
-      ? `Análisis completo: ${data.meta.rowsAnalyzed} registros del período ${data.meta.periodStart} a ${data.meta.periodEnd}, comparados contra ${comparisonLabel}.`
-      : `Análisis completo: ${data.meta.rowsAnalyzed} registros analizados entre ${data.meta.periodStart} y ${data.meta.periodEnd}.`
+      ? `${completionLabel}: ${data.meta.rowsAnalyzed} registros del período ${data.meta.periodStart} a ${data.meta.periodEnd}, comparados contra ${comparisonLabel}.`
+      : `${completionLabel}: ${data.meta.rowsAnalyzed} registros analizados entre ${data.meta.periodStart} y ${data.meta.periodEnd}.`
   );
+  if (data.tacticalWarning) {
+    setStatus(`${document.getElementById("status").textContent} ${data.tacticalWarning}`);
+  }
 }
 
 function buildSalesCoachHomeFromReport(report) {
