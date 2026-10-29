@@ -144,3 +144,22 @@ def test_normalize_article_reads_supplier_grouping_by_description():
     )
     assert record["supplier"] == "PRODUNOA"
     assert record["line"] == "YERBAS"
+
+
+def test_interactive_report_counts_distinct_buyers_and_supports_caliber(datasets):
+    datasets["articles"]["records"] = [
+        {**article, "caliber": "500ml" if article["product_key"] == "P1" else "1L"}
+        for article in datasets["articles"]["records"]
+    ]
+    report = analyze_datasets(datasets)["interactiveReport"]
+    assert {"product_name", "caliber"} <= {item["key"] for item in report["dimensions"]}
+    buyers_total = next(item for item in report["totals"] if item["metric"] == "buyers")
+    # Junio: C1, C3 y C2 compran; C2 no se cuenta dos veces.
+    assert buyers_total["total"] == 3
+    by_product = {item["name"]: item["total"] for item in report["byDimension"]["product_name"]["buyers"]}
+    assert by_product == {"Producto Beta": 2, "Producto Alfa": 1}
+
+    filtered = analyze_datasets(datasets, filters={"caliber": ["1L"]})
+    assert filtered["appliedFilters"] == {"caliber": ["1L"]}
+    assert [option["value"] for option in filtered["availableFilters"]["caliber"]["options"]] == ["1L", "500ml"]
+    assert filtered["summary"]["salesCurrent"] == 135

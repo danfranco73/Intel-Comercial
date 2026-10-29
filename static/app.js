@@ -1,11 +1,43 @@
-// Comercial (/bi) = análisis del negocio: productos, proveedores, clientes y PDV.
-// Sales Coach (/sales-coach) = gestión de personas: vendedores, alertas con
-// responsable y fichas para imprimir. Ambas usan la misma página y el mismo
-// informe; cambia qué dashboards se ofrecen.
-const workspace = window.location.pathname.startsWith("/sales-coach") ? "coach" : "bi";
+// Comercial (/bi) = análisis del negocio: series de producto (familia, categoría,
+// producto, marca, calibre), evolución de proveedores y canales, y clientes
+// compradores. Sales Coach (/sales-coach, /pdv) = todo lo que tiene que ver con
+// fuerzas de ventas, vendedores y clientes: fichas, cartera, PDV 360, plan por
+// responsable, alertas y reuniones. Ambas usan la misma página y el mismo
+// informe; cambia qué dashboards y filtros se ofrecen.
+const workspace = window.location.pathname.startsWith("/sales-coach") || window.location.pathname === "/pdv" ? "coach" : "bi";
 const WORKSPACE_DASHBOARD_VIEWS = {
-  bi: ["executive", "direction", "interactive", "products", "clients", "pdv", "history", "opportunities"],
-  coach: ["coach", "sellers", "alerts", "meetings"],
+  bi: ["series", "evolution", "buyers", "products", "history"],
+  coach: ["coach", "sellers", "executive", "direction", "clients", "pdv", "opportunities", "interactive", "alerts", "meetings"],
+};
+// Vistas que se dibujan sobre el panel "interactive" (serie mensual con
+// aperturas y segmentadores), cada una con su propio recorte de aperturas.
+const PRODUCT_SLICER_FIELDS = ["family", "line", "product_name", "brand", "caliber", "supplier", "channel", "year", "month"];
+const SERIES_VIEW_CONFIG = {
+  series: {
+    title: "Series de producto",
+    summary: "Evolución mensual por familia, categoría, producto, marca y calibre.",
+    dimensions: ["family", "line", "product_name", "brand", "caliber"],
+    slicers: PRODUCT_SLICER_FIELDS,
+  },
+  evolution: {
+    title: "Proveedores y canales",
+    summary: "Evolución mensual de cada proveedor y canal de venta.",
+    dimensions: ["supplier", "channel"],
+    slicers: PRODUCT_SLICER_FIELDS,
+  },
+  buyers: {
+    title: "Clientes compradores",
+    summary: "Clientes distintos con compra por mes, en total o abiertos por producto, proveedor y canal.",
+    dimensions: ["total", "family", "line", "product_name", "brand", "caliber", "supplier", "channel"],
+    metrics: ["buyers"],
+    slicers: PRODUCT_SLICER_FIELDS,
+  },
+  interactive: {
+    title: "Informe filtrable",
+    summary: "Evolución mensual por vendedor, fuerza de ventas, ruta, esquema y canal.",
+    dimensions: ["seller_name", "sales_force", "route_description", "sales_scheme_name", "channel"],
+    slicers: ["seller_name", "sales_force", "route_description", "sales_scheme_name", "channel", "family", "brand", "year", "month"],
+  },
 };
 const DASHBOARD_VIEWS = WORKSPACE_DASHBOARD_VIEWS[workspace];
 const DASHBOARD_VIEW_STORAGE_KEY = `reportDashboardView:${workspace}`;
@@ -30,7 +62,7 @@ const state = {
   biConsistency: { pending: false, report: null, error: "", checkedAt: "" },
   auth: { user: null, csrfToken: "" },
   reportView: { metricMode: readStoredMetricMode(), dashboardView: readStoredDashboardView(), lastData: null },
-  interactiveReport: { metric: "quantity", dimension: "family", chartType: "line" },
+  interactiveReport: { chartType: "line", byView: {} },
   planning: null,
   planningDirty: false,
   objectives: [],
@@ -128,16 +160,18 @@ const isUsersSurface = appSurface === "users";
 const REPORT_METRIC_MODES = ["mixed", "units", "sales"];
 const dashboardState = { charts: {}, tables: { direction: null, executive: null, executiveSensitivity: null, planningTargets: null, ownerTracking: null, history: null, historyBudgetMonthly: null, historyBudgetDimension: null, historyBudgetLineForecast: null, historyBudgetSellerForecast: null, sellers: null, clients: null, opportunities: null, alerts: null, meetings: null } };
 
+// Comercial no filtra por vendedor, fuerza, ruta ni esquema: eso es Sales Coach.
 const filterGroups = [
   { id: "tiempo",     label: "Período",       fields: ["year", "month"] },
-  { id: "producto",   label: "Producto",      fields: ["family", "line", "brand", "business_unit", "supplier", "product_name"] },
-  { id: "comercial",  label: "Comercial",     fields: ["sales_scheme_name", "sales_force", "route_description", "seller_name"] },
+  { id: "producto",   label: "Producto",      fields: ["family", "line", "product_name", "brand", "caliber", "business_unit"] },
+  { id: "proveedor",  label: "Proveedor",     fields: ["supplier"] },
+  { id: "comercial",  label: "Comercial",     fields: ["sales_scheme_name", "sales_force", "route_description", "seller_name"], workspace: "coach" },
   { id: "canal",      label: "Canal",         fields: ["channel"] },
-];
+].filter((group) => !group.workspace || group.workspace === workspace);
 const prefilterGroups = [
   { id: "producto", label: "Producto", fields: ["family", "line", "brand", "business_unit"] },
-  { id: "comercial", label: "Comercial", fields: ["sales_scheme_name", "sales_force", "route_description", "seller_name"] },
-];
+  { id: "comercial", label: "Comercial", fields: ["sales_scheme_name", "sales_force", "route_description", "seller_name"], workspace: "coach" },
+].filter((group) => !group.workspace || group.workspace === workspace);
 
 const ANALYSIS_PLAYBOOK = {
   temporal_trend: {
@@ -566,13 +600,13 @@ const WORKSPACE_CHROME = {
     title: "Comercial · Codenoa",
     eyebrow: "Comercial",
     heading: "Análisis del negocio",
-    lead: "Productos, proveedores, clientes y puntos de venta: dónde está la venta, qué le falta a cada PDV frente a sus pares y cómo llegarle.",
+    lead: "Series de familias, categorías, productos, marcas y calibres; evolución de proveedores y canales; y cuántos clientes compran cada cosa.",
   },
   coach: {
     title: "Sales Coach · Codenoa",
     eyebrow: "Sales Coach",
     heading: "Gestión del equipo comercial",
-    lead: "El resultado de cada vendedor contra el equipo, alertas con responsable y fichas para imprimir y conversar en la reunión.",
+    lead: "Fuerzas de ventas, vendedores y clientes: resultado contra el equipo, cartera y PDV 360, plan por responsable, alertas y fichas para la reunión.",
   },
 };
 
@@ -2643,7 +2677,9 @@ function renderExecutiveDashboard(data, mode = "mixed") {
 }
 
 function renderInteractiveReport(data) {
-  if (state.reportView.dashboardView !== "interactive") {
+  const view = state.reportView.dashboardView;
+  const config = SERIES_VIEW_CONFIG[view];
+  if (!config) {
     return;
   }
   const report = data.interactiveReport || {};
@@ -2655,31 +2691,38 @@ function renderInteractiveReport(data) {
   if (!metricSelect || !dimensionSelect || !chartTypeSelect || !summaryNode || !slicersNode) {
     return;
   }
-  const metrics = report.metrics || [];
-  const dimensions = report.dimensions || [];
+  const panelTitle = document.querySelector('[data-dashboard-panel="interactive"] h2');
+  if (panelTitle) panelTitle.textContent = config.title;
+  const metrics = (report.metrics || []).filter((item) => !config.metrics || config.metrics.includes(item.key));
+  const available = new Map((report.dimensions || []).map((item) => [item.key, item]));
+  const dimensions = config.dimensions
+    .map((key) => (key === "total" ? { key: "total", label: "Total" } : available.get(key)))
+    .filter(Boolean);
   if (!metrics.length || !dimensions.length) {
-    summaryNode.textContent = "No hay datos suficientes para armar el informe filtrable.";
+    summaryNode.textContent = "No hay datos suficientes para armar esta serie.";
     slicersNode.innerHTML = "<div class='muted'>Actualizá el informe con un período que tenga ventas y dimensiones disponibles.</div>";
     return;
   }
-  if (!metrics.some((item) => item.key === state.interactiveReport.metric)) {
-    state.interactiveReport.metric = metrics[0].key;
+  const viewState = state.interactiveReport.byView[view] || (state.interactiveReport.byView[view] = {});
+  if (!metrics.some((item) => item.key === viewState.metric)) {
+    viewState.metric = (metrics.find((item) => item.key === "quantity") || metrics[0]).key;
   }
-  if (!dimensions.some((item) => item.key === state.interactiveReport.dimension)) {
-    state.interactiveReport.dimension = dimensions[0].key;
+  if (!dimensions.some((item) => item.key === viewState.dimension)) {
+    viewState.dimension = dimensions[0].key;
   }
   if (!["line", "bar", "pie"].includes(state.interactiveReport.chartType)) {
     state.interactiveReport.chartType = "line";
   }
-  metricSelect.innerHTML = metrics.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === state.interactiveReport.metric ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
-  dimensionSelect.innerHTML = dimensions.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === state.interactiveReport.dimension ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+  metricSelect.innerHTML = metrics.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === viewState.metric ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+  metricSelect.disabled = metrics.length < 2;
+  dimensionSelect.innerHTML = dimensions.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === viewState.dimension ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
   chartTypeSelect.value = state.interactiveReport.chartType;
   metricSelect.onchange = () => {
-    state.interactiveReport.metric = metricSelect.value;
+    viewState.metric = metricSelect.value;
     renderInteractiveReport(data);
   };
   dimensionSelect.onchange = () => {
-    state.interactiveReport.dimension = dimensionSelect.value;
+    viewState.dimension = dimensionSelect.value;
     renderInteractiveReport(data);
   };
   chartTypeSelect.onchange = () => {
@@ -2687,17 +2730,20 @@ function renderInteractiveReport(data) {
     renderInteractiveReport(data);
   };
 
-  const metric = metrics.find((item) => item.key === state.interactiveReport.metric) || metrics[0];
-  const dimension = dimensions.find((item) => item.key === state.interactiveReport.dimension) || dimensions[0];
-  const series = report.byDimension?.[dimension.key]?.[metric.key] || [];
+  const metric = metrics.find((item) => item.key === viewState.metric) || metrics[0];
+  const dimension = dimensions.find((item) => item.key === viewState.dimension) || dimensions[0];
+  const series = dimension.key === "total"
+    ? interactiveTotalSeries(report, metric)
+    : report.byDimension?.[dimension.key]?.[metric.key] || [];
   const chartTypeLabel = chartTypeSelect.options[chartTypeSelect.selectedIndex]?.textContent || "gráfico";
-  summaryNode.textContent = `${metric.label} por ${dimension.label.toLowerCase()} para ${data.summary?.periodLabel || "el período seleccionado"}.`;
-  document.getElementById("interactiveReportTitle").textContent = `${metric.label} por ${dimension.label}`;
-  document.getElementById("interactiveReportSubtitle").textContent = `${series.length} serie(s) principales visibles como ${chartTypeLabel.toLowerCase()} según los filtros aplicados.`;
+  const byLabel = dimension.key === "total" ? "" : ` por ${dimension.label.toLowerCase()}`;
+  summaryNode.textContent = `${metric.label}${byLabel} para ${data.summary?.periodLabel || "el período seleccionado"}.`;
+  document.getElementById("interactiveReportTitle").textContent = dimension.key === "total" ? metric.label : `${metric.label} por ${dimension.label}`;
+  const buyersNote = metric.key === "buyers" ? " Un cliente cuenta una vez por mes; el total del período no es la suma de los meses." : "";
+  document.getElementById("interactiveReportSubtitle").textContent = `${series.length} serie(s) principales visibles como ${chartTypeLabel.toLowerCase()} según los filtros aplicados.${buyersNote}`;
 
-  const slicerFields = ["family", "brand", "sales_scheme_name", "seller_name", "sales_force", "channel", "supplier", "year", "month"];
   slicersNode.innerHTML = `<div class="filter-fields-row interactive-filter-fields">${
-    slicerFields
+    config.slicers
       .filter((field) => state.filters.available[field]?.options?.length)
       .map((field) => renderSelectableField("filter", field, state.filters.available[field], state.filters.selected[field] || []))
       .join("")
@@ -2746,8 +2792,14 @@ function bindInteractiveSlicerEvents(meta) {
   }
 }
 
+function interactiveTotalSeries(report, metric) {
+  const total = (report.totals || []).find((item) => item.metric === metric.key);
+  if (!total) return [];
+  return [{ name: "Total", total: total.total, data: (total.series || []).map((point) => point.value) }];
+}
+
 function buildInteractiveReportOption(labels, items, metric, chartType = "line") {
-  const formatter = metric.format === "money" ? money : decimalNumber;
+  const formatter = metric.format === "money" ? money : metric.format === "count" ? intNumber : decimalNumber;
   const axisFormatter = metric.format === "money" ? compactMoney : compactNumber;
   const colors = ["#0f766e", "#ea580c", "#2563eb", "#9333ea", "#16a34a", "#be123c", "#0891b2", "#ca8a04", "#4f46e5", "#64748b", "#db2777", "#059669"];
   const visibleItems = (items || []).filter((item) => item?.name);
@@ -2755,7 +2807,9 @@ function buildInteractiveReportOption(labels, items, metric, chartType = "line")
     const pieData = visibleItems
       .map((item) => ({
         name: item.name,
-        value: (item.data || []).reduce((total, value) => total + (Number(value) || 0), 0),
+        // Para conteos (clientes compradores) la suma mensual repite clientes:
+        // se usa el total del período que manda el backend.
+        value: item.total ?? (item.data || []).reduce((total, value) => total + (Number(value) || 0), 0),
       }))
       .filter((item) => item.value > 0)
       .sort((a, b) => b.value - a.value)
@@ -3500,10 +3554,13 @@ function renderDashboardViewSelector(data) {
   }
   const dashboardSummaries = {
     coach: "Ficha clara para conversar con el vendedor: resultado, comparación, mix y tres acciones.",
-    products: "Ficha por familia (con sus líneas) o por línea (con sus marcas), con mejores clientes y vendedores.",
+    products: "Ficha por familia (con sus categorías) o por categoría (con sus marcas), con mejores clientes y vendedores.",
     direction: "Vista de comité: cierre automático, alertas priorizadas y agenda de decisión comercial.",
     executive: "Resumen táctico del período, con ritmo, proyección y principales focos de gestión.",
-    interactive: "Gráfico mensual con segmentadores al estilo Excel y selector de pesos o volumen.",
+    interactive: "Gráfico mensual por vendedor, fuerza, ruta y esquema con segmentadores y selector de métrica.",
+    series: SERIES_VIEW_CONFIG.series.summary,
+    evolution: SERIES_VIEW_CONFIG.evolution.summary,
+    buyers: SERIES_VIEW_CONFIG.buyers.summary,
     sellers: "Productividad, concentración, cartera atendida y alertas por vendedor.",
     clients: "Cartera activa, cuentas en riesgo, recuperación y concentración de clientes.",
     pdv: "El PDV como foco: qué compra por empresa y unidad de negocio, qué le falta frente a sus pares y cómo le llegamos.",
@@ -3518,6 +3575,9 @@ function renderDashboardViewSelector(data) {
     direction: "Dirección",
     executive: "Resumen",
     interactive: "Informe filtrable",
+    series: "Series de producto",
+    evolution: "Proveedores y canales",
+    buyers: "Clientes compradores",
     sellers: "Vendedores",
     clients: "Clientes",
     pdv: "PDV 360",
@@ -3530,7 +3590,7 @@ function renderDashboardViewSelector(data) {
     coach: data.dashboards?.sellers?.summary?.sellerCount || 0,
     products: data.dashboards?.families?.summary?.count || 0,
     direction: buildDirectionBoard(data).alerts.length,
-    interactive: data.interactiveReport?.dimensions?.length || 0,
+    buyers: data.interactiveReport?.totals?.find((item) => item.metric === "buyers")?.total || 0,
     sellers: data.dashboards?.sellers?.summary?.sellerCount || 0,
     clients: data.dashboards?.clients?.summary?.activeCount || 0,
     history: data.dashboards?.history?.summary?.monthsCovered || 0,
@@ -3553,9 +3613,14 @@ function renderDashboardViewSelector(data) {
   });
 }
 
+function dashboardPanelForView(view) {
+  return SERIES_VIEW_CONFIG[view] ? "interactive" : view;
+}
+
 function renderDashboardPanels() {
+  const activePanel = dashboardPanelForView(state.reportView.dashboardView);
   document.querySelectorAll("[data-dashboard-panel]").forEach((panel) => {
-    panel.classList.toggle("hidden", panel.dataset.dashboardPanel !== state.reportView.dashboardView);
+    panel.classList.toggle("hidden", panel.dataset.dashboardPanel !== activePanel);
   });
   if (state.reportView.dashboardView === "pdv") {
     loadPdvPortfolioOptions().catch(showError);
@@ -3966,8 +4031,8 @@ function printSellerCoachSheet(kind) {
 }
 
 const PRODUCT_BRIEF_LABELS = {
-  families: { singular: "Familia", plural: "familias", child: "Línea", childPlural: "Líneas", of: "de la familia" },
-  lines: { singular: "Línea", plural: "líneas", child: "Marca", childPlural: "Marcas", of: "de la línea" },
+  families: { singular: "Familia", plural: "familias", child: "Categoría", childPlural: "Categorías", of: "de la familia" },
+  lines: { singular: "Categoría", plural: "categorías", child: "Marca", childPlural: "Marcas", of: "de la categoría" },
 };
 
 function readProductBriefDimension() {
@@ -6282,11 +6347,11 @@ function renderHistoryBudgetPanel(dashboard) {
       </div>
       <div class="planning-field">
         <label>&nbsp;</label>
-        <button id="applyBudgetBtn" class="primary" type="button">Calcular total, líneas y vendedores</button>
+        <button id="applyBudgetBtn" class="primary" type="button">Calcular total, categorías y vendedores</button>
       </div>
     </div>
     <div class="planning-hint">
-      ${state.planningDirty ? "Hay cambios pendientes. Calculá nuevamente para actualizar el objetivo." : "El porcentaje ajusta los bultos; los importes usan el valor por bulto del último mes de cada línea."}
+      ${state.planningDirty ? "Hay cambios pendientes. Calculá nuevamente para actualizar el objetivo." : "El porcentaje ajusta los bultos; los importes usan el valor por bulto del último mes de cada categoría."}
     </div>
   `;
   bindHistoryBudgetControls(dashboard);
@@ -6390,9 +6455,9 @@ function renderHistoryBudgetForecastTables(forecast) {
   if (!lineHost || !sellerHost || !window.Tabulator) return;
   if (dashboardState.tables.historyBudgetLineForecast) dashboardState.tables.historyBudgetLineForecast.destroy();
   dashboardState.tables.historyBudgetLineForecast = new Tabulator(lineHost, {
-    data: forecast.lines || [], layout: "fitColumns", height: "320px", placeholder: "Sin líneas para proyectar",
+    data: forecast.lines || [], layout: "fitColumns", height: "320px", placeholder: "Sin categorías para proyectar",
     columns: [
-      { title: "Línea", field: "label", minWidth: 160 },
+      { title: "Categoría", field: "label", minWidth: 160 },
       { title: "Prom. 3M", field: "average3Quantity", width: 95, hozAlign: "right", formatter: (cell) => decimalNumber(cell.getValue()) },
       { title: "Obj. bultos", field: "targetQuantity", width: 105, hozAlign: "right", formatter: (cell) => decimalNumber(cell.getValue()) },
       { title: "$ / bulto", field: "lastUnitValue", width: 105, hozAlign: "right", formatter: (cell) => money(cell.getValue()) },
@@ -6770,7 +6835,7 @@ function rerenderSelectableOwner(el) {
 
 function renderSummaryCards(summary, meta = {}, mode = "mixed", coachSummary = null) {
   const comparisonLabel = meta?.comparison?.comparisonLabel || summary.comparisonLabel || "período anterior equivalente";
-  const cards = mode === "mixed" && coachSummary ? [
+  let cards = mode === "mixed" && coachSummary ? [
     ["Venta neta", money(coachSummary.netSales || 0), `crecimiento ${pctNumber(coachSummary.growthPct || 0)}`],
     ["Cantidad", decimalNumber(coachSummary.quantity || 0), "cantidad comercial normalizada"],
     ["Clientes activos", intNumber(coachSummary.activeClients || 0), "clientes únicos con compra"],
@@ -6809,6 +6874,13 @@ function renderSummaryCards(summary, meta = {}, mode = "mixed", coachSummary = n
     ["Mix activo", `${summary.brandCount} marcas`, `${summary.businessUnitCount} unidades negocio · ${summary.channelCount} canales`],
     ["Cobertura BI", `${summary.articleCoveragePct}%`, `${summary.routeCoveragePct}% rutas · ${summary.sellerCoveragePct}% vendedores`],
   ];
+  // En Comercial no se muestran métricas por vendedor ni de cobertura de rutas.
+  if (workspace === "bi") {
+    const sellerCards = new Set(["Productividad comercial", "Bultos por vendedor", "Productividad vendedor"]);
+    cards = cards
+      .filter(([label]) => !sellerCards.has(label))
+      .map(([label, value, sub]) => [label === "Clientes activos" ? "Clientes compradores" : label, value, sub]);
+  }
   cards.unshift([
     "Actualización del dato",
     state.dataFreshness.updatedAt || "No informada",
