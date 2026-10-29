@@ -45,64 +45,94 @@ def _record_summary(result):
     }
 
 
+def cached_report(kind, data, scope, compute, extra=None, heavy=True, user=None):
+    """Devuelve (json gzip, extra, timings) de un informe, calculándolo una sola vez.
+
+    Varios usuarios pidiendo lo mismo comparten el cálculo; el turno de análisis
+    pesado solo se toma cuando de verdad hay que leer ventas. También lo usa el
+    precálculo posterior a cada sync (services/report_warmer).
+    """
+    started = perf_counter()
+    key = result_cache_key(kind, data, scope, _current_data_version())
+    timings = {"cache": "hit"}
+    entry = result_cache.get(key)
+    if entry is None:
+        with result_cache.single_flight(key):
+            entry = result_cache.get(key)
+            if entry is not None:
+                timings["cache"] = "shared"
+            else:
+                timings["cache"] = "miss"
+                wait_started = perf_counter()
+                with heavy_analysis_slot() if heavy else nullcontext():
+                    timings["wait_ms"] = (perf_counter() - wait_started) * 1000
+                    compute_started = perf_counter()
+                    result, service_timings = compute()
+                    timings["load_ms"] = service_timings.get("load_ms", 0.0)
+                    timings["compute_ms"] = (perf_counter() - compute_started) * 1000 - timings["load_ms"]
+                serialize_started = perf_counter()
+                body = json.dumps(result, ensure_ascii=False, default=str).encode("utf-8")
+                body_gzip = gzip.compress(body, compresslevel=5)
+                timings["serialize_ms"] = (perf_counter() - serialize_started) * 1000
+                timings["bytes"] = len(body)
+                entry_extra = extra(result) if extra else {}
+                del result, body
+                result_cache.put(key, body_gzip, entry_extra)
+                entry = {"body_gzip": body_gzip, "extra": entry_extra}
+    timings["total_ms"] = (perf_counter() - started) * 1000
+    timings["gzip_bytes"] = len(entry["body_gzip"])
+    _log_report_timing(kind, timings, entry["extra"], user)
+    return entry["body_gzip"], entry["extra"], timings
+
+
+def _log_report_timing(kind, timings, extra, user):
+    meta = (extra or {}).get("meta") or {}
+    _PERF_LOGGER.info(
+        json.dumps(
+            {
+                "event": "report",
+                "kind": kind,
+                "user": user,
+                "rowsAnalyzed": meta.get("rowsAnalyzed"),
+                "rowsUniverse": meta.get("rowsUniverse"),
+                "cacheEntries": result_cache.stats()["entries"],
+                **{name: round(value, 1) if isinstance(value, float) else value for name, value in timings.items()},
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+def series_request_key(fecha_desde, fecha_hasta, filters=None, supplier_focus=None, compare=False):
+    """Pedido normalizado de /api/bi/series: es la clave de su caché."""
+    return {
+        "fechaDesde": fecha_desde,
+        "fechaHasta": fecha_hasta,
+        "filters": merge_supplier_focus_filter(filters or {}, supplier_focus),
+        "compare": bool(compare),
+    }
+
+
+def compute_series_report(request_key):
+    mongo_status = cached_status("mongo_storage", get_erp_storage_status)
+    report = build_clickhouse_series_report(
+        request_key["fechaDesde"],
+        request_key["fechaHasta"],
+        request_key["filters"],
+        compare=request_key["compare"],
+        articles_version=mongo_status.get("articlesLastSyncAt"),
+        load_articles=lambda: load_erp_articles_dataset()["records"],
+    )
+    return report, {}
+
+
 class AnalysisRoutesMixin:
     def _analysis_service(self):
         return AnalysisService(self.resolve_datasets)
 
     def _cached_report(self, kind, data, compute, extra=None, heavy=True):
-        """Devuelve (json gzip, extra, timings) de un informe, calculándolo una sola vez.
-
-        Varios usuarios pidiendo lo mismo comparten el cálculo; el turno de análisis
-        pesado solo se toma cuando de verdad hay que leer ventas.
-        """
-        started = perf_counter()
-        key = result_cache_key(kind, data, self.data_scope, _current_data_version())
-        timings = {"cache": "hit"}
-        entry = result_cache.get(key)
-        if entry is None:
-            with result_cache.single_flight(key):
-                entry = result_cache.get(key)
-                if entry is not None:
-                    timings["cache"] = "shared"
-                else:
-                    timings["cache"] = "miss"
-                    wait_started = perf_counter()
-                    with heavy_analysis_slot() if heavy else nullcontext():
-                        timings["wait_ms"] = (perf_counter() - wait_started) * 1000
-                        compute_started = perf_counter()
-                        result, service_timings = compute()
-                        timings["load_ms"] = service_timings.get("load_ms", 0.0)
-                        timings["compute_ms"] = (perf_counter() - compute_started) * 1000 - timings["load_ms"]
-                    serialize_started = perf_counter()
-                    body = json.dumps(result, ensure_ascii=False, default=str).encode("utf-8")
-                    body_gzip = gzip.compress(body, compresslevel=5)
-                    timings["serialize_ms"] = (perf_counter() - serialize_started) * 1000
-                    timings["bytes"] = len(body)
-                    entry_extra = extra(result) if extra else {}
-                    del result, body
-                    result_cache.put(key, body_gzip, entry_extra)
-                    entry = {"body_gzip": body_gzip, "extra": entry_extra}
-        timings["total_ms"] = (perf_counter() - started) * 1000
-        timings["gzip_bytes"] = len(entry["body_gzip"])
-        self._log_report_timing(kind, timings, entry["extra"])
-        return entry["body_gzip"], entry["extra"], timings
-
-    def _log_report_timing(self, kind, timings, extra):
-        meta = (extra or {}).get("meta") or {}
-        _PERF_LOGGER.info(
-            json.dumps(
-                {
-                    "event": "report",
-                    "kind": kind,
-                    "user": getattr(getattr(self.auth_context, "user", None), "id", None),
-                    "rowsAnalyzed": meta.get("rowsAnalyzed"),
-                    "rowsUniverse": meta.get("rowsUniverse"),
-                    "cacheEntries": result_cache.stats()["entries"],
-                    **{name: round(value, 1) if isinstance(value, float) else value for name, value in timings.items()},
-                },
-                ensure_ascii=False,
-            )
-        )
+        user_id = getattr(getattr(self.auth_context, "user", None), "id", None)
+        return cached_report(kind, data, self.data_scope, compute, extra=extra, heavy=heavy, user=user_id)
 
     @staticmethod
     def _server_timing(timings):
@@ -188,22 +218,11 @@ class AnalysisRoutesMixin:
         if any(values for values in (self.data_scope or {}).values()) or not clickhouse_configured():
             self.send_json({"error": "Este informe se calcula completo", "fallback": "legacy"}, status=409)
             return
-        filters = merge_supplier_focus_filter(data.get("filters") or {}, data.get("supplierFocus"))
-        compare = bool(data.get("compare"))
-
-        def compute():
-            mongo_status = cached_status("mongo_storage", get_erp_storage_status)
-            report = build_clickhouse_series_report(
-                fecha_desde,
-                fecha_hasta,
-                filters,
-                compare=compare,
-                articles_version=mongo_status.get("articlesLastSyncAt"),
-                load_articles=lambda: load_erp_articles_dataset()["records"],
-            )
-            return report, {}
-
-        request_key = {"fechaDesde": fecha_desde, "fechaHasta": fecha_hasta, "filters": filters, "compare": compare}
+        request_key = series_request_key(
+            fecha_desde, fecha_hasta, data.get("filters"), data.get("supplierFocus"), data.get("compare")
+        )
+        filters = request_key["filters"]
+        compute = lambda: compute_series_report(request_key)
         try:
             body_gzip, _, timings = self._cached_report("series", request_key, compute, extra=_record_summary, heavy=False)
         except SeriesUnavailable as exc:

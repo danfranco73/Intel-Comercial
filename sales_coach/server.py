@@ -1444,6 +1444,10 @@ def main():
         print("MongoDB Atlas conectado — DB: Intel-Comercial")
     else:
         print("MongoDB no conectado (revisá MONGO_URI en .env)")
+    if os.getenv("APP_WARM_REPORTS", "1") != "0":
+        from sales_coach.services.report_warmer import ReportWarmer
+
+        ReportWarmer(get_db).start()
     try:
         ReusableHTTPServer((HOST, PORT), AppHandler).serve_forever()
     except OSError as exc:
