@@ -599,9 +599,8 @@ def get_clickhouse_storage_status():
         }
 
 
-def build_clickhouse_series_report(fecha_desde, fecha_hasta, filters, *, compare=False, articles_version=None, load_articles=None):
-    """Series de Comercial totalizadas en ClickHouse (ver bi/series_clickhouse)."""
-    from bi.series_clickhouse import SeriesQuery, build_series_report, ensure_article_dimension
+def _series_query(articles_version, load_articles):
+    from bi.series_clickhouse import SeriesQuery, ensure_article_dimension
 
     client = get_clickhouse_client()
     if client is None:
@@ -609,11 +608,31 @@ def build_clickhouse_series_report(fecha_desde, fecha_hasta, filters, *, compare
     _ensure_schema()
     database = _config()["database"]
     ensure_article_dimension(client, database, articles_version, load_articles)
-    query = SeriesQuery(client, _qualified_table(), f"{database}.dim_articles")
+    return SeriesQuery(client, _qualified_table(), f"{database}.dim_articles")
+
+
+def build_clickhouse_series_report(fecha_desde, fecha_hasta, filters, *, compare=False, articles_version=None, load_articles=None):
+    """Series de Comercial totalizadas en ClickHouse (ver bi/series_clickhouse)."""
+    from bi.series_clickhouse import build_series_report
+
     return build_series_report(
-        query,
+        _series_query(articles_version, load_articles),
         date.fromisoformat(fecha_desde),
         date.fromisoformat(fecha_hasta),
         filters,
         compare=compare,
     )
+
+
+def build_clickhouse_series_dashboard(view, fecha_desde, fecha_hasta, filters, *, compare=False, planning=None, articles_version=None, load_articles=None):
+    """Ficha producto o Histórico de Comercial con totales de ClickHouse."""
+    from bi.series_clickhouse import _shift_year, build_history_dashboards, build_product_dashboards
+
+    query = _series_query(articles_version, load_articles)
+    start, end = date.fromisoformat(fecha_desde), date.fromisoformat(fecha_hasta)
+    if view == "products":
+        previous = (_shift_year(start, -1), _shift_year(end, -1)) if compare else None
+        return {"dashboards": build_product_dashboards(query, start, end, filters, previous=previous)}
+    if view == "history":
+        return {"dashboards": build_history_dashboards(query, start, end, filters, planning=planning)}
+    raise ValueError("Vista desconocida")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from datetime import date
 
@@ -71,6 +72,91 @@ class PythonSeriesQuery:
             sums, clients, _ = self._aggregate(rows)
             result.append((*key, *sums, len(clients)))
         return result
+
+    # --- Ficha producto e Histórico ---
+
+    def _window_rows(self, start, end, previous, filters):
+        rows = []
+        _, filtered = apply_filters(self.records, filters)
+        for item in filtered:
+            is_cur = start <= item["date"] <= end
+            is_prev = bool(previous) and previous[0] <= item["date"] <= previous[1]
+            if is_cur or is_prev:
+                rows.append((item, is_cur, is_prev))
+        return rows
+
+    def _period_sums(self, rows):
+        cur = [item for item, is_cur, _ in rows if is_cur]
+        prev = [item for item, _, is_prev in rows if is_prev]
+        return (
+            sum(metric_value(i, "amount_net") for i in cur), sum(metric_value(i, "amount_net") for i in prev),
+            sum(metric_value(i, "quantity") for i in cur), sum(metric_value(i, "quantity") for i in prev),
+            len({i["client_canonical"] for i in cur}), len({i["client_canonical"] for i in prev}),
+        )
+
+    def _grouped(self, rows, key_fn):
+        grouped = defaultdict(list)
+        for row in rows:
+            grouped[key_fn(row[0])].append(row)
+        return grouped
+
+    def product_groups(self, start, end, previous, filters, group):
+        result = []
+        for label, rows in self._grouped(self._window_rows(start, end, previous, filters), lambda i: dimension_value(i, group)).items():
+            orders = len({i["invoice"] for i, is_cur, _ in rows if is_cur and i.get("invoice")})
+            result.append((label, *self._period_sums(rows), orders))
+        return result
+
+    def product_client_changes(self, start, end, previous, filters, group):
+        result = []
+        for label, rows in self._grouped(self._window_rows(start, end, previous, filters), lambda i: dimension_value(i, group)).items():
+            now = {i["client_canonical"] for i, is_cur, _ in rows if is_cur}
+            before = {i["client_canonical"] for i, _, is_prev in rows if is_prev}
+            result.append((label, len(now - before), len(before - now)))
+        return result
+
+    def product_children(self, start, end, previous, filters, group, child):
+        key = lambda i: (dimension_value(i, group), dimension_value(i, child))
+        return [(*label, *self._period_sums(rows)) for label, rows in self._grouped(self._window_rows(start, end, previous, filters), key).items()]
+
+    def product_top_clients(self, start, end, previous, filters, group, limit=10):
+        key = lambda i: (dimension_value(i, group), i["client_canonical"])
+        candidates = []
+        for (label, client), rows in self._grouped(self._window_rows(start, end, previous, filters), key).items():
+            sums = self._period_sums(rows)
+            if sums[0] > 0:
+                candidates.append((label, client, rows[0][0]["client"], *sums))
+        candidates.sort(key=lambda row: (row[0], -row[3], -row[4]))
+        result, taken = [], defaultdict(int)
+        for row in candidates:
+            if taken[row[0]] < limit:
+                taken[row[0]] += 1
+                result.append(row)
+        return result
+
+    def window_totals(self, start, end, previous, filters):
+        return self._period_sums(self._window_rows(start, end, previous, filters))
+
+    def clients_by_month(self, start, end, filters):
+        grouped = defaultdict(set)
+        for item in self._rows(start, end, filters):
+            grouped[item["period"]].add(item["client_canonical"])
+        return sorted((period, list(clients)) for period, clients in grouped.items())
+
+    def sales_by_client_label(self, start, end, filters):
+        grouped = defaultdict(float)
+        for item in self._rows(start, end, filters):
+            grouped[item["client"]] += metric_value(item, "amount_net")
+        return list(grouped.items())
+
+    def budget_rows(self, start, end, filters, periods):
+        grouped = defaultdict(lambda: [0.0, 0.0])
+        for item in self._rows(start, end, filters):
+            if item["period"] in periods:
+                key = (item["period"], item["line"], item["channel"], item["family"])
+                grouped[key][0] += metric_value(item, "amount_net")
+                grouped[key][1] += metric_value(item, "quantity")
+        return [(*key, net, quantity) for key, (net, quantity) in grouped.items()]
 
     def facet_counts(self, start, end, filters):
         counts = {}
@@ -280,3 +366,54 @@ def test_generated_sql_puts_array_join_outside_the_filtered_subquery():
         assert parameters["start"] == JUNE[0]
     facet_parameters = [parameters for _, parameters in client.sql[1:]]
     assert any("f_caliber" not in parameters and "f_year" in parameters for parameters in facet_parameters)
+
+
+
+def _strip_sellers(dashboard):
+    dashboard = json.loads(json.dumps(dashboard, default=str))
+    for row in dashboard["rows"]:
+        row.pop("topSellers", None)
+        row.pop("sellers", None)
+    dashboard.pop("comparison", None)
+    return dashboard
+
+
+def test_product_dashboards_from_totals_match_the_full_report(caliber_datasets):
+    from bi.focus_dashboards import build_product_dashboard
+    from bi.series_clickhouse import build_product_dashboards
+
+    query = python_query(caliber_datasets)
+    current = [item for item in query.records if item["period"] == "2026-06"]
+    previous = [item for item in query.records if item["period"] == "2026-05"]
+    ours = build_product_dashboards(query, *JUNE, {}, previous=(date(2026, 5, 1), date(2026, 5, 31)))
+    for key, group, child in (("families", "family", "line"), ("lines", "line", "brand")):
+        assert ours[key]["comparison"] is True
+        assert _strip_sellers(ours[key]) == _strip_sellers(build_product_dashboard(current, previous, group, child)), key
+
+
+def test_product_dashboards_without_comparison_leave_variations_empty(caliber_datasets):
+    from bi.series_clickhouse import build_product_dashboards
+
+    ours = build_product_dashboards(python_query(caliber_datasets), *JUNE, {})
+    row = ours["families"]["rows"][0]
+    assert ours["families"]["comparison"] is False
+    assert row["sales"] > 0 and row["previousSales"] is None and row["newClients"] is None
+    assert ours["families"]["summary"]["growthPct"] is None
+    assert row["children"][0]["growthPct"] is None
+
+
+def test_history_from_totals_matches_the_full_report(caliber_datasets):
+    from bi.series_clickhouse import build_history_dashboards
+    from bi.structural_dashboards import build_history_dashboard
+
+    query = python_query(caliber_datasets)
+    window = (date(2026, 5, 1), date(2026, 6, 30))
+    planning = {"budget": {"dimension": "family", "volumeGrowthPct": 5, "monthlyTotals": {"2026-06": 300}, "dimensionShares": {"family": {"Familia A": 60}}}}
+    ours = build_history_dashboards(query, *window, {}, planning=planning)["history"]
+    legacy = build_history_dashboard(query.records, query.records, {}, planning=planning)
+    # Comercial no informa concentración por vendedor ni reparte el objetivo por vendedor.
+    legacy["charts"]["hhi"] = [row for row in legacy["charts"]["hhi"] if row["label"] != "Vendedores"]
+    legacy["budget"]["forecast"]["sellers"] = []
+    legacy["budget"]["forecast"]["sellerShareTotalPct"] = 0
+    normalize = lambda value: json.loads(json.dumps(value, sort_keys=True, default=str))
+    assert normalize(ours) == normalize(legacy)

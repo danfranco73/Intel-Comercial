@@ -8,7 +8,12 @@ from time import perf_counter
 
 from analyzer import merge_supplier_focus_filter
 from bi.series_clickhouse import SeriesUnavailable
-from clickhouse_client import build_clickhouse_series_report, clickhouse_configured, get_clickhouse_storage_status
+from clickhouse_client import (
+    build_clickhouse_series_dashboard,
+    build_clickhouse_series_report,
+    clickhouse_configured,
+    get_clickhouse_storage_status,
+)
 from mongo_client import get_erp_storage_status, load_erp_articles_dataset
 from sales_coach.cache import cached_status, data_version, result_cache, result_cache_key
 from sales_coach.concurrency import AnalysisCapacityExceeded, heavy_analysis_slot
@@ -113,15 +118,35 @@ def series_request_key(fecha_desde, fecha_hasta, filters=None, supplier_focus=No
     }
 
 
-def compute_series_report(request_key):
+def _articles_source():
     mongo_status = cached_status("mongo_storage", get_erp_storage_status)
+    return mongo_status.get("articlesLastSyncAt"), (lambda: load_erp_articles_dataset()["records"])
+
+
+def compute_series_dashboard(view, request_key, planning):
+    articles_version, load_articles = _articles_source()
+    report = build_clickhouse_series_dashboard(
+        view,
+        request_key["fechaDesde"],
+        request_key["fechaHasta"],
+        request_key["filters"],
+        compare=request_key["compare"],
+        planning=planning,
+        articles_version=articles_version,
+        load_articles=load_articles,
+    )
+    return report, {}
+
+
+def compute_series_report(request_key):
+    articles_version, load_articles = _articles_source()
     report = build_clickhouse_series_report(
         request_key["fechaDesde"],
         request_key["fechaHasta"],
         request_key["filters"],
         compare=request_key["compare"],
-        articles_version=mongo_status.get("articlesLastSyncAt"),
-        load_articles=lambda: load_erp_articles_dataset()["records"],
+        articles_version=articles_version,
+        load_articles=load_articles,
     )
     return report, {}
 
@@ -233,6 +258,43 @@ class AnalysisRoutesMixin:
             return
         except Exception as exc:
             self.log_application_error("bi_series", exc, {"filters": filters})
+            self.send_json({"error": str(exc)}, status=500)
+            return
+        self.send_precompressed_json(body_gzip, headers=self._server_timing(timings))
+
+    def handle_bi_series_dashboard(self):
+        """Ficha producto o Histórico de Comercial con totales de ClickHouse (al abrir la vista)."""
+        try:
+            data = self._read_json_body()
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=400)
+            return
+        view = str(data.get("view") or "")
+        fecha_desde = str(data.get("fechaDesde") or "")
+        fecha_hasta = str(data.get("fechaHasta") or "")
+        if view not in {"products", "history"} or not fecha_desde or not fecha_hasta:
+            self.send_json({"error": "Faltan vista o fechas"}, status=400)
+            return
+        if any(values for values in (self.data_scope or {}).values()) or not clickhouse_configured():
+            self.send_json({"error": "Este informe se calcula completo", "fallback": "legacy"}, status=409)
+            return
+        request_key = series_request_key(
+            fecha_desde, fecha_hasta, data.get("filters"), data.get("supplierFocus"), data.get("compare")
+        )
+        planning = data.get("planning") if view == "history" else None
+        cache_key = {**request_key, "view": view, "planning": planning}
+        try:
+            body_gzip, _, timings = self._cached_report(
+                f"series_{view}", cache_key, lambda: compute_series_dashboard(view, request_key, planning), heavy=False
+            )
+        except SeriesUnavailable as exc:
+            self.send_json({"error": str(exc), "fallback": "legacy"}, status=409)
+            return
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=422)
+            return
+        except Exception as exc:
+            self.log_application_error("bi_series_dashboard", exc, {"view": view})
             self.send_json({"error": str(exc)}, status=500)
             return
         self.send_precompressed_json(body_gzip, headers=self._server_timing(timings))

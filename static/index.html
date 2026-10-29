@@ -333,7 +333,7 @@
         <section class="panel inner-panel dashboard-panel coach-brief hidden" data-dashboard-panel="products">
           <div class="coach-brief-hero">
             <div>
-              <p class="eyebrow">Codenoa Sales Coach</p>
+              <p class="eyebrow">Codenoa Comercial</p>
               <h2 id="productBriefTitle">Ficha por familia o categoría de productos</h2>
               <div class="muted" id="productBriefPeriod">Resultado filtrado y comparación contra el período anterior equivalente.</div>
             </div>
@@ -360,7 +360,7 @@
             </div>
           </div>
 
-          <div class="coach-comparison-bar">
+          <div class="coach-comparison-bar" data-workspace-only="coach">
             <strong>Comparar contra</strong>
             <label><span>Desde</span><input id="productBriefComparisonFrom" type="date"></label>
             <label><span>Hasta</span><input id="productBriefComparisonTo" type="date"></label>
@@ -414,13 +414,13 @@
               </table>
             </div>
 
-            <div class="coach-section-heading coach-client-heading">
+            <div class="coach-section-heading coach-client-heading" data-workspace-only="coach">
               <div>
                 <h3>Top 10 vendedores</h3>
                 <div class="muted">Quién empuja esta apertura y cómo evoluciona contra la comparación.</div>
               </div>
             </div>
-            <div class="coach-table-wrap" tabindex="0" role="region" aria-label="Tabla con desplazamiento horizontal">
+            <div class="coach-table-wrap" data-workspace-only="coach" tabindex="0" role="region" aria-label="Tabla con desplazamiento horizontal">
               <table class="coach-mix-table">
                 <thead>
                   <tr><th>#</th><th>Vendedor</th><th>$ actual</th><th>$&nbsp;anterior</th><th>Var. $</th><th>Participación</th><th>Bultos</th><th>Var.<br>bultos</th><th>Clientes<br>actuales</th><th>Clientes<br>anteriores</th><th>Var.<br>clientes</th></tr>

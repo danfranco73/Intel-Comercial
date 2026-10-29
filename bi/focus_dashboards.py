@@ -121,47 +121,57 @@ def _record_amount(record):
     return record.get("amount", 0) or 0
 
 
-def _ranked_breakdown(current_records, previous_records, key_fn, name_fn, total_sales, limit=None):
-    current = defaultdict(lambda: {"sales": 0.0, "quantity": 0.0, "clients": set()})
-    previous = defaultdict(lambda: {"sales": 0.0, "quantity": 0.0, "clients": set()})
-    names = {}
-    for record in current_records:
+def _accumulate(records, key_fn, name_fn, names):
+    totals = defaultdict(lambda: {"sales": 0.0, "quantity": 0.0, "clients": set()})
+    for record in records:
         key = key_fn(record)
         if not key:
             continue
-        bucket = current[key]
+        bucket = totals[key]
         bucket["sales"] += _record_amount(record)
         bucket["quantity"] += record.get("quantity", 0) or 0
         if _client_id(record):
             bucket["clients"].add(_client_id(record))
         names.setdefault(key, name_fn(record, key))
-    for record in previous_records:
-        key = key_fn(record)
-        if not key:
-            continue
-        previous[key]["sales"] += _record_amount(record)
-        previous[key]["quantity"] += record.get("quantity", 0) or 0
-        if _client_id(record):
-            previous[key]["clients"].add(_client_id(record))
-        names.setdefault(key, name_fn(record, key))
-    rows = [
-        {
-            "key": key,
-            "label": names.get(key, key),
-            "sales": round(current[key]["sales"], 2),
-            "previousSales": round(previous[key]["sales"], 2),
-            "growthPct": _pct_change(current[key]["sales"], previous[key]["sales"]),
-            "quantity": round(current[key]["quantity"], 2),
-            "previousQuantity": round(previous[key]["quantity"], 2),
-            "quantityGrowthPct": _pct_change(current[key]["quantity"], previous[key]["quantity"]),
-            "clients": len(current[key]["clients"]),
-            "previousClients": len(previous[key]["clients"]),
-            "clientsGrowthPct": _pct_change(len(current[key]["clients"]), len(previous[key]["clients"])),
-            "mixPct": _safe_pct(current[key]["sales"], total_sales),
-            "valuePerQuantity": round(current[key]["sales"] / max(current[key]["quantity"], 1), 2),
-        }
-        for key in set(current) | set(previous)
-    ]
+    return {key: {**value, "clients": len(value["clients"])} for key, value in totals.items()}
+
+
+def _ranked_breakdown(current_records, previous_records, key_fn, name_fn, total_sales, limit=None):
+    names = {}
+    current = _accumulate(current_records, key_fn, name_fn, names)
+    previous = _accumulate(previous_records, key_fn, name_fn, names)
+    return _breakdown_rows(current, previous, names, total_sales, limit=limit)
+
+
+_EMPTY_BREAKDOWN = {"sales": 0.0, "quantity": 0.0, "clients": 0}
+
+
+def _breakdown_rows(current, previous, names, total_sales, limit=None):
+    """Filas por clave con venta, bultos y clientes del período y de la comparación.
+
+    current/previous: {clave: {"sales", "quantity", "clients" (cantidad)}}.
+    """
+    rows = []
+    for key in set(current) | set(previous):
+        now = current.get(key, _EMPTY_BREAKDOWN)
+        before = previous.get(key, _EMPTY_BREAKDOWN)
+        rows.append(
+            {
+                "key": key,
+                "label": names.get(key, key),
+                "sales": round(now["sales"], 2),
+                "previousSales": round(before["sales"], 2),
+                "growthPct": _pct_change(now["sales"], before["sales"]),
+                "quantity": round(now["quantity"], 2),
+                "previousQuantity": round(before["quantity"], 2),
+                "quantityGrowthPct": _pct_change(now["quantity"], before["quantity"]),
+                "clients": now["clients"],
+                "previousClients": before["clients"],
+                "clientsGrowthPct": _pct_change(now["clients"], before["clients"]),
+                "mixPct": _safe_pct(now["sales"], total_sales),
+                "valuePerQuantity": round(now["sales"] / max(now["quantity"], 1), 2),
+            }
+        )
     rows.sort(key=lambda item: (item["sales"], item["previousSales"]), reverse=True)
     rank = 0
     for row in rows:
@@ -175,14 +185,19 @@ def _ranked_breakdown(current_records, previous_records, key_fn, name_fn, total_
 
 def build_product_dashboard(current_period, previous_period, group_field, child_field):
     """Ficha por familia o línea: resultado, apertura hija, mejores clientes y vendedores."""
+    return build_product_dashboard_from_parts(
+        group_field,
+        child_field,
+        product_parts_from_records(current_period, previous_period, group_field, child_field),
+    )
+
+
+def product_parts_from_records(current_period, previous_period, group_field, child_field):
+    """Insumos de la ficha de producto desde filas enriquecidas (bi/series_clickhouse los arma con totales)."""
     group_missing = PRODUCT_MISSING_LABELS[group_field]
     child_missing = PRODUCT_MISSING_LABELS[child_field]
     current_grouped = _group_records(current_period, group_field, group_missing)
     previous_grouped = _group_records(previous_period, group_field, group_missing)
-    total_sales = _sum_amount(current_period)
-    total_quantity = _sum_quantity(current_period)
-    total_clients = {_client_id(item) for item in current_period if _client_id(item)}
-    previous_total_clients = {_client_id(item) for item in previous_period if _client_id(item)}
 
     def child_key(record):
         return record.get(child_field) or child_missing
@@ -193,35 +208,70 @@ def build_product_dashboard(current_period, previous_period, group_field, child_
     def seller_key(record):
         return record.get("seller_name") or "Sin vendedor"
 
-    rows = []
+    def breakdown(current_records, previous_records, key_fn, name_fn):
+        names = {}
+        return {
+            "current": _accumulate(current_records, key_fn, name_fn, names),
+            "previous": _accumulate(previous_records, key_fn, name_fn, names),
+            "names": names,
+        }
+
+    groups = []
     for label in set(current_grouped) | set(previous_grouped):
         current_records = current_grouped.get(label, [])
         previous_records = previous_grouped.get(label, [])
-        current_sales = _sum_amount(current_records)
-        previous_sales = _sum_amount(previous_records)
-        current_quantity = _sum_quantity(current_records)
-        previous_quantity = _sum_quantity(previous_records)
         current_clients = {_client_id(item) for item in current_records if _client_id(item)}
         previous_clients = {_client_id(item) for item in previous_records if _client_id(item)}
-        sellers = {item.get("seller_name") for item in current_records if item.get("seller_name")}
-        orders = _unique_orders(current_records)
-        children = _ranked_breakdown(
-            current_records, previous_records, child_key, lambda record, key: key, current_sales
-        )
-        top_clients = _ranked_breakdown(
-            current_records, previous_records, _client_id, client_name, current_sales
-        )
-        top_clients = [row for row in top_clients if row["sales"] > 0][:10]
-        top_sellers = [
-            row
-            for row in _ranked_breakdown(
-                current_records, previous_records, seller_key, lambda record, key: key, current_sales
-            )
-            if row["sales"] > 0
-        ][:10]
-        rows.append(
+        groups.append(
             {
                 "label": label,
+                "sales": _sum_amount(current_records),
+                "previousSales": _sum_amount(previous_records),
+                "quantity": _sum_quantity(current_records),
+                "previousQuantity": _sum_quantity(previous_records),
+                "clients": len(current_clients),
+                "previousClients": len(previous_clients),
+                "newClients": len(current_clients - previous_clients),
+                "clientsWithoutPurchase": len(previous_clients - current_clients),
+                "sellers": len({item.get("seller_name") for item in current_records if item.get("seller_name")}),
+                "orders": len(_unique_orders(current_records)),
+                "children": breakdown(current_records, previous_records, child_key, lambda record, key: key),
+                "topClients": breakdown(current_records, previous_records, _client_id, client_name),
+                "topSellers": breakdown(current_records, previous_records, seller_key, lambda record, key: key),
+            }
+        )
+    return {
+        "groups": groups,
+        "sales": _sum_amount(current_period),
+        "quantity": _sum_quantity(current_period),
+        "clients": len({_client_id(item) for item in current_period if _client_id(item)}),
+        "previousSales": _sum_amount(previous_period),
+        "previousQuantity": _sum_quantity(previous_period),
+        "previousClients": len({_client_id(item) for item in previous_period if _client_id(item)}),
+    }
+
+
+def build_product_dashboard_from_parts(group_field, child_field, parts):
+    group_missing = PRODUCT_MISSING_LABELS[group_field]
+    total_sales = parts["sales"]
+    total_quantity = parts["quantity"]
+
+    def ranked(block, current_sales, top=None):
+        rows = _breakdown_rows(block["current"], block["previous"], block["names"], current_sales)
+        return [row for row in rows if row["sales"] > 0][:top] if top else rows
+
+    rows = []
+    for group in parts["groups"]:
+        current_sales = group["sales"]
+        previous_sales = group["previousSales"]
+        current_quantity = group["quantity"]
+        previous_quantity = group["previousQuantity"]
+        top_clients = ranked(group["topClients"], current_sales, top=10)
+        top_sellers = ranked(group["topSellers"], current_sales, top=10) if group.get("topSellers") else []
+        orders = group["orders"]
+        rows.append(
+            {
+                "label": group["label"],
                 "sales": current_sales,
                 "previousSales": previous_sales,
                 "growthPct": _pct_change(current_sales, previous_sales),
@@ -230,20 +280,20 @@ def build_product_dashboard(current_period, previous_period, group_field, child_
                 "quantityGrowthPct": _pct_change(current_quantity, previous_quantity),
                 "sharePct": _safe_pct(current_sales, total_sales),
                 "valuePerQuantity": round(current_sales / max(current_quantity, 1), 2),
-                "clients": len(current_clients),
-                "previousClients": len(previous_clients),
-                "clientDelta": len(current_clients) - len(previous_clients),
-                "clientsGrowthPct": _pct_change(len(current_clients), len(previous_clients)),
-                "coveragePct": _safe_pct(len(current_clients), len(total_clients)),
-                "newClients": len(current_clients - previous_clients),
-                "clientsWithoutPurchase": len(previous_clients - current_clients),
-                "sellers": len(sellers),
-                "orders": len(orders),
-                "avgTicket": round(current_sales / max(len(orders), 1), 2),
+                "clients": group["clients"],
+                "previousClients": group["previousClients"],
+                "clientDelta": group["clients"] - group["previousClients"],
+                "clientsGrowthPct": _pct_change(group["clients"], group["previousClients"]),
+                "coveragePct": _safe_pct(group["clients"], parts["clients"]),
+                "newClients": group["newClients"],
+                "clientsWithoutPurchase": group["clientsWithoutPurchase"],
+                "sellers": group.get("sellers", 0),
+                "orders": orders,
+                "avgTicket": round(current_sales / max(orders, 1), 2),
                 "top3ClientsSharePct": _safe_pct(
                     sum(item["sales"] for item in top_clients[:3]), current_sales
                 ),
-                "children": children,
+                "children": ranked(group["children"], current_sales),
                 "topClients": top_clients,
                 "topSellers": top_sellers,
             }
@@ -256,8 +306,8 @@ def build_product_dashboard(current_period, previous_period, group_field, child_
             row["rankSales"] = rank
         else:
             row["rankSales"] = None
-    previous_total = _sum_amount(previous_period)
-    previous_quantity_total = _sum_quantity(previous_period)
+    previous_total = parts["previousSales"]
+    previous_quantity_total = parts["previousQuantity"]
     active_rows = [row for row in rows if row["sales"] > 0 and row["label"] != group_missing]
     return {
         "dimension": group_field,
@@ -271,9 +321,9 @@ def build_product_dashboard(current_period, previous_period, group_field, child_
             "previousQuantity": previous_quantity_total,
             "quantityGrowthPct": _pct_change(total_quantity, previous_quantity_total),
             "valuePerQuantity": round(total_sales / max(total_quantity, 1), 2),
-            "clients": len(total_clients),
-            "previousClients": len(previous_total_clients),
-            "clientsGrowthPct": _pct_change(len(total_clients), len(previous_total_clients)),
+            "clients": parts["clients"],
+            "previousClients": parts["previousClients"],
+            "clientsGrowthPct": _pct_change(parts["clients"], parts["previousClients"]),
             "top3SharePct": _safe_pct(sum(item["sales"] for item in active_rows[:3]), total_sales),
         },
         "rows": rows,
