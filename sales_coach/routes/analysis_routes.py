@@ -3,10 +3,13 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+from contextlib import nullcontext
 from time import perf_counter
 
-from clickhouse_client import get_clickhouse_storage_status
-from mongo_client import get_erp_storage_status
+from analyzer import merge_supplier_focus_filter
+from bi.series_clickhouse import SeriesUnavailable
+from clickhouse_client import build_clickhouse_series_report, clickhouse_configured, get_clickhouse_storage_status
+from mongo_client import get_erp_storage_status, load_erp_articles_dataset
 from sales_coach.cache import cached_status, data_version, result_cache, result_cache_key
 from sales_coach.concurrency import AnalysisCapacityExceeded, heavy_analysis_slot
 from sales_coach.repositories import AnalysisRepository, PreferencesRepository
@@ -46,7 +49,7 @@ class AnalysisRoutesMixin:
     def _analysis_service(self):
         return AnalysisService(self.resolve_datasets)
 
-    def _cached_report(self, kind, data, compute, extra=None):
+    def _cached_report(self, kind, data, compute, extra=None, heavy=True):
         """Devuelve (json gzip, extra, timings) de un informe, calculándolo una sola vez.
 
         Varios usuarios pidiendo lo mismo comparten el cálculo; el turno de análisis
@@ -64,7 +67,7 @@ class AnalysisRoutesMixin:
                 else:
                     timings["cache"] = "miss"
                     wait_started = perf_counter()
-                    with heavy_analysis_slot():
+                    with heavy_analysis_slot() if heavy else nullcontext():
                         timings["wait_ms"] = (perf_counter() - wait_started) * 1000
                         compute_started = perf_counter()
                         result, service_timings = compute()
@@ -163,6 +166,56 @@ class AnalysisRoutesMixin:
             data.get("datasets", {}),
             planning=data.get("planning"),
         )
+        self.send_precompressed_json(body_gzip, headers=self._server_timing(timings))
+
+    def handle_bi_series(self):
+        """Series de Comercial totalizadas en ClickHouse, sin traer filas a Python.
+
+        Responde 409 con fallback "legacy" cuando el pedido necesita el informe
+        completo: usuarios con alcance restringido (su cartera se resuelve en
+        Python), filtros de vendedor/fuerza/ruta/esquema o sin ClickHouse.
+        """
+        try:
+            data = self._read_json_body()
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=400)
+            return
+        fecha_desde = str(data.get("fechaDesde") or "")
+        fecha_hasta = str(data.get("fechaHasta") or "")
+        if not fecha_desde or not fecha_hasta:
+            self.send_json({"error": "Elegí fecha desde y fecha hasta"}, status=400)
+            return
+        if any(values for values in (self.data_scope or {}).values()) or not clickhouse_configured():
+            self.send_json({"error": "Este informe se calcula completo", "fallback": "legacy"}, status=409)
+            return
+        filters = merge_supplier_focus_filter(data.get("filters") or {}, data.get("supplierFocus"))
+        compare = bool(data.get("compare"))
+
+        def compute():
+            mongo_status = cached_status("mongo_storage", get_erp_storage_status)
+            report = build_clickhouse_series_report(
+                fecha_desde,
+                fecha_hasta,
+                filters,
+                compare=compare,
+                articles_version=mongo_status.get("articlesLastSyncAt"),
+                load_articles=lambda: load_erp_articles_dataset()["records"],
+            )
+            return report, {}
+
+        request_key = {"fechaDesde": fecha_desde, "fechaHasta": fecha_hasta, "filters": filters, "compare": compare}
+        try:
+            body_gzip, _, timings = self._cached_report("series", request_key, compute, extra=_record_summary, heavy=False)
+        except SeriesUnavailable as exc:
+            self.send_json({"error": str(exc), "fallback": "legacy"}, status=409)
+            return
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=422)
+            return
+        except Exception as exc:
+            self.log_application_error("bi_series", exc, {"filters": filters})
+            self.send_json({"error": str(exc)}, status=500)
+            return
         self.send_precompressed_json(body_gzip, headers=self._server_timing(timings))
 
     def handle_analyze_dynamic(self):

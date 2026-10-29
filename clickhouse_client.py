@@ -577,3 +577,23 @@ def get_clickhouse_storage_status():
             "available": False,
             "message": f"No se pudo consultar ClickHouse: {exc}",
         }
+
+
+def build_clickhouse_series_report(fecha_desde, fecha_hasta, filters, *, compare=False, articles_version=None, load_articles=None):
+    """Series de Comercial totalizadas en ClickHouse (ver bi/series_clickhouse)."""
+    from bi.series_clickhouse import SeriesQuery, build_series_report, ensure_article_dimension
+
+    client = get_clickhouse_client()
+    if client is None:
+        raise RuntimeError("ClickHouse no está configurado")
+    _ensure_schema()
+    database = _config()["database"]
+    ensure_article_dimension(client, database, articles_version, load_articles)
+    query = SeriesQuery(client, _qualified_table(), f"{database}.dim_articles")
+    return build_series_report(
+        query,
+        date.fromisoformat(fecha_desde),
+        date.fromisoformat(fecha_hasta),
+        filters,
+        compare=compare,
+    )

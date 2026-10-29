@@ -71,6 +71,7 @@ POST_ROUTES = {
     "/api/clear-uploads": RouteDefinition("handle_clear_uploads", permission="admin", csrf=True),
     "/api/analyze": RouteDefinition("handle_analyze", csrf=True),  # toma el turno solo si no está en caché
     "/api/bi/consistency": RouteDefinition("handle_bi_consistency", csrf=True, heavy=True),
+    "/api/bi/series": RouteDefinition("handle_bi_series", csrf=True),
     "/api/bi/tactical-month": RouteDefinition("handle_bi_tactical_month", csrf=True),  # toma el turno solo si no está en caché
     "/api/analyze-dynamic": RouteDefinition("handle_analyze_dynamic", csrf=True, heavy=True),
     "/api/session": RouteDefinition("handle_save_session", csrf=True),

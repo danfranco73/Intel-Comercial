@@ -65,7 +65,11 @@ const state = {
   adminErrors: [],
   biConsistency: { pending: false, report: null, error: "", checkedAt: "" },
   auth: { user: null, csrfToken: "" },
+  // lastData = informe completo de la superficie actual (cada una guarda el suyo
+  // al cambiar); series = informe por totales de Comercial (/api/bi/series).
   reportView: { metricMode: readStoredMetricMode(), dashboardView: readStoredDashboardView(), lastData: null },
+  series: { data: null, key: "", compare: false },
+  workspaceState: {},
   interactiveReport: { chartType: "line", byView: {} },
   planning: null,
   planningDirty: false,
@@ -180,7 +184,6 @@ const REPORT_METRIC_MODES = ["mixed", "units", "sales"];
 const dashboardState = { charts: {}, tables: { direction: null, executive: null, executiveSensitivity: null, planningTargets: null, ownerTracking: null, history: null, historyBudgetMonthly: null, historyBudgetDimension: null, historyBudgetLineForecast: null, historyBudgetSellerForecast: null, sellers: null, clients: null, opportunities: null, alerts: null, meetings: null } };
 
 // Comercial no filtra por vendedor, fuerza, ruta ni esquema: eso es Sales Coach.
-const COACH_ONLY_FILTER_FIELDS = ["sales_scheme_name", "sales_force", "route_description", "seller_name"];
 const ALL_FILTER_GROUPS = [
   { id: "tiempo",     label: "Período",       fields: ["year", "month"] },
   { id: "producto",   label: "Producto",      fields: ["family", "line", "product_name", "brand", "caliber", "business_unit"] },
@@ -658,12 +661,14 @@ const WORKSPACE_CHROME = {
     eyebrow: "Comercial",
     heading: "Análisis del negocio",
     lead: "Series de familias, categorías, productos, marcas y calibres; evolución de proveedores y canales; y cuántos clientes compran cada cosa.",
+    controlsNote: "Comercial muestra los últimos 12 meses completos y el mes en curso, totalizados en la base comercial. La comparación con el año anterior se pide aparte.",
   },
   coach: {
     title: "Sales Coach · Codenoa",
     eyebrow: "Sales Coach",
     heading: "Gestión del equipo comercial",
     lead: "Fuerzas de ventas, vendedores y clientes: resultado contra el equipo, cartera y PDV 360, plan por responsable, alertas y fichas para la reunión.",
+    controlsNote: "La vista comercial consulta automáticamente la base correcta según el período elegido y compara cada informe contra el período anterior equivalente.",
   },
 };
 
@@ -678,42 +683,54 @@ function applyWorkspaceChrome() {
     hero.querySelector("h1").textContent = chrome.heading;
     hero.querySelector(".lead").textContent = chrome.lead;
   }
+  const controlsNote = document.querySelector(".controls-bi .subpanel-header .muted");
+  if (controlsNote) controlsNote.textContent = chrome.controlsNote;
   const activeHref = workspace === "coach" ? "/sales-coach" : "/bi";
   document.querySelectorAll(".surface-links a").forEach((link) => {
     link.classList.toggle("active", link.getAttribute("href") === activeHref);
   });
 }
 
-// Superficie a la que pertenece un informe por sus filtros: con vendedor,
-// fuerza, ruta o esquema es de Sales Coach; con proveedor foco, de Comercial.
-function reportWorkspaceBinding(data) {
-  if (!data) return null;
-  const applied = data.appliedFilters || {};
-  const available = data.availableFilters || {};
-  if (COACH_ONLY_FILTER_FIELDS.some((field) => applied[field] && isFieldConstrained(field, applied, available))) {
-    return "coach";
-  }
-  if (data.supplierFocus?.selected) {
-    return "bi";
-  }
-  return null;
+// Cada superficie conserva su período, filtros e informe completo: Comercial
+// arranca en los últimos 12 meses + el mes en curso y Sales Coach en su período
+// habitual, sin heredar uno del otro.
+function captureWorkspaceState() {
+  return {
+    period: { fechaDesde: state.datasets.sales.erp.fechaDesde, fechaHasta: state.datasets.sales.erp.fechaHasta },
+    filters: { available: state.filters.available, selected: { ...state.filters.selected } },
+    prefilters: { ...state.prefilters.selected },
+    supplierFocus: state.supplierFocus,
+    lastData: state.reportView.lastData,
+  };
 }
 
-function dropWorkspaceOnlySelections(target) {
-  if (target === "bi") {
-    COACH_ONLY_FILTER_FIELDS.forEach((field) => {
-      delete state.filters.selected[field];
-      delete state.prefilters.selected[field];
-    });
-    state.prefilters.selected = normalizeSelectedFilters(state.prefilters.selected, state.prefilters.available);
-    return;
+function restoreWorkspaceState(saved, target) {
+  const period = saved?.period || (target === "bi" ? rollingBiWindow() : null);
+  if (period) {
+    state.datasets.sales.erp.fechaDesde = period.fechaDesde;
+    state.datasets.sales.erp.fechaHasta = period.fechaHasta;
   }
-  const focus = state.reportView.lastData?.supplierFocus;
-  if (focus?.selected) {
-    // El proveedor foco entra al informe como filtro de proveedor.
-    delete state.filters.selected.supplier;
+  state.filters = saved?.filters ? { available: saved.filters.available, selected: { ...saved.filters.selected } } : { available: {}, selected: {} };
+  state.prefilters.selected = normalizeSelectedFilters(saved?.prefilters || {}, state.prefilters.available);
+  state.supplierFocus = saved?.supplierFocus || "";
+  state.reportView.lastData = saved?.lastData || null;
+}
+
+function localIsoDate(value) {
+  const pad = (number) => String(number).padStart(2, "0");
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+}
+
+// Ventana por defecto de Comercial: los 12 meses completos anteriores y el mes en curso.
+function rollingBiWindow() {
+  const today = new Date();
+  let fechaHasta = localIsoDate(today);
+  const storage = getCommercialStorageWindow();
+  if (storage.periodEnd && storage.periodEnd < fechaHasta) {
+    fechaHasta = storage.periodEnd;
   }
-  state.supplierFocus = "";
+  const end = new Date(`${fechaHasta}T00:00:00`);
+  return { fechaDesde: localIsoDate(new Date(end.getFullYear(), end.getMonth() - 12, 1)), fechaHasta };
 }
 
 async function switchWorkspace(target, { pushUrl = true, url = "" } = {}) {
@@ -726,28 +743,215 @@ async function switchWorkspace(target, { pushUrl = true, url = "" } = {}) {
   if (pushUrl) {
     window.history.pushState({}, "", url || (target === "coach" ? "/sales-coach" : "/bi"));
   }
+  state.workspaceState[workspace] = captureWorkspaceState();
   workspace = target;
   DASHBOARD_VIEWS = WORKSPACE_DASHBOARD_VIEWS[workspace];
   DASHBOARD_VIEW_STORAGE_KEY = `reportDashboardView:${workspace}`;
   state.reportView.dashboardView = readStoredDashboardView();
   activeFilterTab = "tiempo";
-  applyWorkspaceChrome();
-
-  const data = state.reportView.lastData;
-  const binding = reportWorkspaceBinding(data);
-  if (binding && binding !== workspace) {
-    dropWorkspaceOnlySelections(workspace);
-    renderDatasetConfigs();
-    renderCommercialGuide();
-    await analyze();
-    return;
-  }
+  restoreWorkspaceState(state.workspaceState[target], target);
   normalizeSupplierFocusSelection();
+  applyWorkspaceChrome();
   renderDatasetConfigs();
   renderCommercialGuide();
-  if (data) {
-    renderResults(data);
+
+  if (workspace === "bi") {
+    if (state.series.data && state.series.key === seriesRequestKey()) {
+      renderBiResults();
+      setStatus(`Informe listo: ${state.series.data.summary?.periodLabel || ""}.`);
+    } else {
+      await analyze();
+    }
+    return;
   }
+  if (state.reportView.lastData) {
+    renderResults(state.reportView.lastData);
+    const meta = state.reportView.lastData.meta || {};
+    setStatus(`Informe del período ${meta.periodStart || ""} a ${meta.periodEnd || ""}. Usá “Actualizar informe” para recalcular.`);
+  } else {
+    document.getElementById("results")?.classList.add("hidden");
+    setStatus("Elegí el período y tocá “Actualizar informe”.");
+  }
+}
+
+// --- Comercial: informe por totales ------------------------------------------
+
+// El informe completo carga cada fila en memoria; en Comercial solo se usa
+// para Ficha producto e Histórico y con períodos cortos.
+const BI_FULL_REPORT_MAX_DAYS = 92;
+
+function seriesRequestPayload() {
+  return {
+    fechaDesde: state.datasets.sales.erp.fechaDesde,
+    fechaHasta: state.datasets.sales.erp.fechaHasta,
+    filters: serializeFilters(),
+    supplierFocus: normalizeSupplierFocusSelection(),
+    compare: Boolean(state.series.compare),
+  };
+}
+
+function seriesRequestKey() {
+  return JSON.stringify(seriesRequestPayload());
+}
+
+function currentReportData() {
+  if (workspace !== "bi") return state.reportView.lastData;
+  return state.reportView.lastData || state.series.data;
+}
+
+function rerenderCurrentReport() {
+  if (workspace === "bi") {
+    renderBiReportData();
+    return;
+  }
+  if (state.reportView.lastData) {
+    renderReportData(state.reportView.lastData);
+  }
+}
+
+async function analyzeSeries() {
+  const payload = seriesRequestPayload();
+  if (!payload.fechaDesde || !payload.fechaHasta) {
+    setStatus("Elegí fecha desde y fecha hasta para consultar la base comercial.");
+    return null;
+  }
+  const key = JSON.stringify(payload);
+  setStatus("Consultando los totales de la base comercial...");
+  let data;
+  try {
+    data = await withProgress("Consultando los totales de la base comercial...", () => api("/api/bi/series", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }), { operationType: "series", fechaDesde: payload.fechaDesde, fechaHasta: payload.fechaHasta, sourceMode: "clickhouse" });
+  } catch (error) {
+    if (error?.payload?.fallback !== "legacy") throw error;
+    return analyzeSeriesWithFullReport(key);
+  }
+  state.series = { ...state.series, data, key };
+  if (state.reportView.lastData && state.reportView.lastData._seriesKey !== key) {
+    state.reportView.lastData = null;
+  }
+  renderBiResults();
+  setStatus(`Informe listo: ${data.summary?.periodLabel || ""}${data.meta?.comparison ? ` comparado contra ${data.meta.comparison.comparisonLabel}` : ""}.`);
+  return data;
+}
+
+// Usuarios con alcance restringido o filtros que solo resuelve el informe completo.
+async function analyzeSeriesWithFullReport(key) {
+  const { fechaDesde, fechaHasta } = state.datasets.sales.erp;
+  if (rangeDays(fechaDesde, fechaHasta) > BI_FULL_REPORT_MAX_DAYS) {
+    state.series = { ...state.series, data: null, key: "" };
+    document.getElementById("results")?.classList.add("hidden");
+    setStatus("Para tu usuario este informe se calcula completo y admite hasta 3 meses: elegí un período más corto.");
+    return null;
+  }
+  const data = await analyzeLegacy({ target: "bi", seriesKey: key });
+  if (data) {
+    state.series = { ...state.series, data, key };
+    renderBiResults();
+  }
+  return data;
+}
+
+function renderBiResults() {
+  const data = state.series.data;
+  if (!data) return;
+  document.getElementById("results").classList.remove("hidden");
+  state.filters.available = data.availableFilters || {};
+  state.filters.selected = normalizeSelectedFilters(data.appliedFilters || {}, state.filters.available);
+  renderFilterPanel(data.meta);
+  renderMetricViewBar(data);
+  renderBiReportData();
+}
+
+function renderBiReportData() {
+  const series = state.series.data;
+  if (!series) return;
+  const full = state.reportView.lastData;
+  const data = full || series;
+  const mode = resolveMetricMode(data.summary);
+  if (series.kind === "series") {
+    renderSeriesSummaryCards(series);
+  } else {
+    renderSummaryCards(series.summary, series.meta, mode, null);
+  }
+  renderDashboardViewSelector(data);
+  renderDashboardPanels();
+  renderInteractiveReport(data);
+  renderBiFullReportNotice();
+  if (full) {
+    renderProductBrief(full);
+    renderHistoryDashboard(full, mode);
+    renderSupplierFocusChart(full.supplierFocus);
+    renderRankings(full.rankings, mode);
+  }
+  document.querySelectorAll('[data-workspace-only="bi"]').forEach((node) => node.classList.toggle("hidden", !full));
+  if (!full && ["products", "history"].includes(state.reportView.dashboardView)) {
+    loadBiFullReport().catch(showError);
+  }
+}
+
+function renderBiFullReportNotice() {
+  document.querySelectorAll("[data-bi-full-notice]").forEach((node) => node.remove());
+  const view = state.reportView.dashboardView;
+  if (state.reportView.lastData || !["products", "history"].includes(view)) return;
+  const panel = document.querySelector(`[data-dashboard-panel="${view}"]`);
+  if (!panel) return;
+  const { fechaDesde, fechaHasta } = state.datasets.sales.erp;
+  const tooLong = rangeDays(fechaDesde, fechaHasta) > BI_FULL_REPORT_MAX_DAYS;
+  const notice = document.createElement("div");
+  notice.className = "guide-callout";
+  notice.dataset.biFullNotice = "1";
+  notice.innerHTML = tooLong
+    ? `<strong>Esta vista todavía usa el cálculo completo</strong>
+       <div class="muted">Admite períodos de hasta 3 meses. Elegí un período más corto en Parámetros del informe o usá el mes en curso.</div>
+       <div class="button-row"><button type="button" class="primary" data-bi-current-month>Usar el mes en curso</button></div>`
+    : `<strong>Calculando el informe completo del período...</strong>`;
+  panel.prepend(notice);
+  notice.querySelector("[data-bi-current-month]")?.addEventListener("click", () => {
+    // Mes de la última fecha con datos (hoy, salvo que la base venga atrasada).
+    const { fechaHasta } = rollingBiWindow();
+    state.datasets.sales.erp.fechaDesde = `${fechaHasta.slice(0, 7)}-01`;
+    state.datasets.sales.erp.fechaHasta = fechaHasta;
+    renderDatasetConfigs();
+    analyze().catch(showError);
+  });
+}
+
+let biFullReportPending = false;
+async function loadBiFullReport() {
+  const { fechaDesde, fechaHasta } = state.datasets.sales.erp;
+  if (biFullReportPending || rangeDays(fechaDesde, fechaHasta) > BI_FULL_REPORT_MAX_DAYS) return;
+  biFullReportPending = true;
+  try {
+    await analyzeLegacy({ target: "bi", seriesKey: state.series.key });
+  } finally {
+    biFullReportPending = false;
+  }
+}
+
+function renderSeriesSummaryCards(data) {
+  const summary = data.summary || {};
+  const comparison = data.meta?.comparison;
+  const growth = (value) => (value === null || value === undefined ? "sin base el año anterior" : `${pctNumber(value)} vs año anterior`);
+  const cards = [
+    ["Actualización del dato", state.dataFreshness.updatedAt || "No informada", `${state.dataFreshness.source || "base comercial"} · cobertura hasta ${state.dataFreshness.periodEnd || data.meta?.periodEnd || "-"}`],
+    ["Período", summary.periodLabel || "-", `${intNumber(summary.monthsCovered || 0)} meses${comparison ? ` · vs ${comparison.comparisonLabel}` : ""}`],
+    ["Venta neta", money(summary.salesCurrent || 0), comparison ? growth(summary.salesGrowthPct) : "neto sin IVA"],
+    ["Bultos", decimalNumber(summary.unitsCurrent || 0), comparison ? growth(summary.unitsGrowthPct) : `${decimalNumber(summary.avgUnitsPerOrder || 0)} por pedido`],
+    ["Pedidos", intNumber(summary.ordersCurrent || 0), `${money(summary.avgOrderValue || 0)} por pedido`],
+    ["Clientes compradores", intNumber(summary.activeClients || 0), comparison ? growth(summary.activeClientsGrowthPct) : "clientes distintos con compra"],
+    ["Precio promedio / bulto", money(summary.avgUnitPrice || 0), "venta neta / bultos"],
+    ["Mix", `${intNumber(summary.familyCount || 0)} familias`, `${intNumber(summary.brandCount || 0)} marcas · ${intNumber(summary.supplierCount || 0)} proveedores · ${intNumber(summary.channelCount || 0)} canales`],
+  ];
+  document.getElementById("summaryCards").innerHTML = cards.map(([label, value, sub]) => `
+    <article class="card summary-card">
+      <div class="label">${escapeHtml(label)}</div>
+      <div class="value ${summaryValueClass(value)}">${escapeHtml(value)}</div>
+      <div class="sub">${escapeHtml(sub)}</div>
+    </article>
+  `).join("");
 }
 
 function bindWorkspaceLinks() {
@@ -866,13 +1070,21 @@ async function boot() {
       fechaHasta: cachedWorkspace.ui.coachComparison?.fechaHasta || "",
     };
   }
+  if (isBiSurface && workspace === "bi") {
+    // Sales Coach conserva su período y su informe guardado para cuando se cambie.
+    state.workspaceState.coach = {
+      period: { fechaDesde: state.datasets.sales.erp.fechaDesde, fechaHasta: state.datasets.sales.erp.fechaHasta },
+      lastData: cachedWorkspace?.report || null,
+    };
+    Object.assign(state.datasets.sales.erp, rollingBiWindow());
+  }
   renderFileLibrary();
   renderDatasetConfigs();
   renderCommercialGuide();
   renderPreview();
   renderAdminDiagnostics();
   renderAccessConfiguration();
-  if (cachedWorkspace?.report) {
+  if (cachedWorkspace?.report && workspace !== "bi") {
     renderResults(cachedWorkspace.report);
     const savedAt = cachedWorkspace.savedAt
       ? new Date(cachedWorkspace.savedAt).toLocaleString("es-AR")
@@ -880,6 +1092,9 @@ async function boot() {
     setStatus(`Informe restaurado localmente (${savedAt}). Usá “Actualizar informe” cuando quieras consultar datos nuevos.`);
   }
   startErpKeepalive();
+  if (isBiSurface && workspace === "bi") {
+    analyze().catch(showError);
+  }
 }
 
 function startErpKeepalive() {
@@ -977,7 +1192,13 @@ function restoreBiDefaults(saved, planning) {
   const savedErp = savedSales.erp || {};
   const requestedFrom = savedSales.fechaDesde || savedErp.fechaDesde || "";
   const requestedTo = savedSales.fechaHasta || savedErp.fechaHasta || "";
-  const { from, to } = resolveCommercialRange(requestedFrom, requestedTo);
+  let { from, to } = resolveCommercialRange(requestedFrom, requestedTo);
+  // El informe completo carga cada fila en memoria: sin fechas guardadas (o con
+  // un rango largo) se arranca en el mes de la última fecha con datos, no en
+  // toda la ventana disponible.
+  if (to && (!requestedFrom || !requestedTo || rangeDays(from, to) > BI_FULL_REPORT_MAX_DAYS)) {
+    from = `${to.slice(0, 7)}-01`;
+  }
   if (from) {
     state.datasets.sales.erp.fechaDesde = from;
   }
@@ -1171,6 +1392,13 @@ function renderBiSalesPanel(erp) {
           <input data-erp-to="1" type="date" value="${escapeHtml(erp.fechaHasta || "")}">
         </label>
       </div>
+      ${workspace === "bi" ? `
+        <div class="muted">Por defecto, los últimos 12 meses completos y el mes en curso. Para ver períodos anteriores cambiá las fechas y actualizá.</div>
+        <label class="bi-compare-toggle">
+          <input data-bi-compare="1" type="checkbox" ${state.series.compare ? "checked" : ""}>
+          Comparar con el mismo período del año anterior
+        </label>
+      ` : ""}
       ${renderSupplierFocusControl()}
       ${renderPrefilterPanel("Enfoque del informe")}
       <div class="request-flow">
@@ -2217,6 +2445,12 @@ function bindDatasetEvents(container) {
     });
   });
 
+  container.querySelectorAll("[data-bi-compare]").forEach((input) => {
+    input.addEventListener("change", () => {
+      state.series.compare = input.checked;
+    });
+  });
+
   container.querySelectorAll("[data-erp-from]").forEach((input) => {
     input.addEventListener("change", () => {
       state.datasets.sales.erp.fechaDesde = input.value;
@@ -2600,7 +2834,16 @@ async function clearUploads() {
   setStatus(`Se eliminaron ${response.removed} archivo(s) subidos. Ya podés empezar de nuevo.`);
 }
 
+// "Actualizar informe": Comercial pide totales (rápido); Sales Coach y las
+// vistas de Comercial que lo necesitan usan el informe completo.
 async function analyze() {
+  if (workspace === "bi") {
+    return analyzeSeries();
+  }
+  return analyzeLegacy();
+}
+
+async function analyzeLegacy(options = {}) {
   const payload = {
     datasets: {},
     filters: serializeFilters(),
@@ -2693,12 +2936,20 @@ async function analyze() {
     fechaHasta: state.datasets.sales.erp?.fechaHasta,
     sourceMode: state.datasets.sales.sourceMode,
   });
+  state.planningDirty = false;
+  if (options.target === "bi") {
+    // Ficha producto / Histórico de Comercial: no pisa filtros ni el informe por totales.
+    data._seriesKey = options.seriesKey || "";
+    state.reportView.lastData = data;
+    renderBiReportData();
+    setStatus(`Informe completo listo: ${data.meta.rowsAnalyzed} registros del período ${data.meta.periodStart} a ${data.meta.periodEnd}.`);
+    return data;
+  }
   renderResults(data);
   saveCachedWorkspace(data).catch(() => {
     // El informe sigue siendo utilizable aunque el navegador bloquee el almacenamiento local.
   });
   openRequestedSalesCoachDetail().catch(showError);
-  state.planningDirty = false;
   const comparisonLabel = data.meta?.comparison?.comparisonLabel;
   setStatus(
     comparisonLabel
@@ -2801,9 +3052,10 @@ function renderMetricViewBar(data) {
     container.querySelectorAll("[data-metric-mode]").forEach((button) => {
       button.addEventListener("click", () => {
         storeMetricMode(button.dataset.metricMode);
-        if (state.reportView.lastData) {
-          renderMetricViewBar(state.reportView.lastData);
-          renderReportData(state.reportView.lastData);
+        const current = currentReportData();
+        if (current) {
+          renderMetricViewBar(current);
+          rerenderCurrentReport();
         }
       });
     });
@@ -2915,8 +3167,8 @@ function bindInteractiveSlicerEvents(meta) {
   document.querySelectorAll("#interactiveSlicers [data-selectable-kind='filter'][data-selectable-role='action']").forEach((button) => {
     button.addEventListener("click", () => {
       applySelectableAction("filter", button.dataset.selectableField, button.dataset.selectableAction);
-      if (state.reportView.lastData) {
-        renderInteractiveReport(state.reportView.lastData);
+      if (currentReportData()) {
+        renderInteractiveReport(currentReportData());
         renderFilterPanel(meta);
       }
     });
@@ -2927,8 +3179,8 @@ function bindInteractiveSlicerEvents(meta) {
       const field = input.dataset.selectableField;
       const caret = input.selectionStart;
       state.filterSearch[buildSelectableKey(kind, field)] = input.value || "";
-      if (state.reportView.lastData) {
-        renderInteractiveReport(state.reportView.lastData);
+      if (currentReportData()) {
+        renderInteractiveReport(currentReportData());
         restoreSelectableSearchFocus(kind, field, caret);
       }
     });
@@ -3733,18 +3985,21 @@ function renderDashboardViewSelector(data) {
     alerts: "Alertas",
     meetings: "Reuniones",
   };
-  const counts = {
-    coach: data.dashboards?.sellers?.summary?.sellerCount || 0,
-    products: data.dashboards?.families?.summary?.count || 0,
-    direction: buildDirectionBoard(data).alerts.length,
-    buyers: data.interactiveReport?.totals?.find((item) => item.metric === "buyers")?.total || 0,
-    sellers: data.dashboards?.sellers?.summary?.sellerCount || 0,
-    clients: data.dashboards?.clients?.summary?.activeCount || 0,
-    history: data.dashboards?.history?.summary?.monthsCovered || 0,
-    opportunities: data.dashboards?.opportunities?.summary?.opportunityCount || 0,
-    alerts: state.alerts.rows.filter((item) => !["resolved", "dismissed"].includes(item.status)).length,
-    meetings: state.meetings.rows.length,
+  // Se calculan solo para las vistas de la superficie: el informe por totales
+  // de Comercial no trae los dashboards del informe completo.
+  const countFor = {
+    coach: () => data.dashboards?.sellers?.summary?.sellerCount || 0,
+    products: () => data.dashboards?.families?.summary?.count || 0,
+    direction: () => (data.dashboards ? buildDirectionBoard(data).alerts.length : 0),
+    buyers: () => data.interactiveReport?.totals?.find((item) => item.metric === "buyers")?.total || 0,
+    sellers: () => data.dashboards?.sellers?.summary?.sellerCount || 0,
+    clients: () => data.dashboards?.clients?.summary?.activeCount || 0,
+    history: () => data.dashboards?.history?.summary?.monthsCovered || 0,
+    opportunities: () => data.dashboards?.opportunities?.summary?.opportunityCount || 0,
+    alerts: () => state.alerts.rows.filter((item) => !["resolved", "dismissed"].includes(item.status)).length,
+    meetings: () => state.meetings.rows.length,
   };
+  const counts = Object.fromEntries(DASHBOARD_VIEWS.map((view) => [view, countFor[view]?.() || 0]));
   summary.textContent = dashboardSummaries[state.reportView.dashboardView] || dashboardSummaries.executive;
   selector.innerHTML = DASHBOARD_VIEWS.map((view) => {
     const badge = counts[view] ? `<span class="dashboard-view-badge">${intNumber(counts[view])}</span>` : "";
@@ -3753,9 +4008,7 @@ function renderDashboardViewSelector(data) {
   selector.querySelectorAll("[data-dashboard-view]").forEach((button) => {
     button.addEventListener("click", () => {
       storeDashboardView(button.dataset.dashboardView);
-      if (state.reportView.lastData) {
-        renderReportData(state.reportView.lastData);
-      }
+      rerenderCurrentReport();
     });
   });
 }
@@ -6965,8 +7218,8 @@ function restoreSelectableSearchFocus(kind, field, caret) {
 
 function rerenderSelectableOwner(el) {
   if (el.closest("#interactiveSlicers")) {
-    if (state.reportView.lastData) {
-      renderInteractiveReport(state.reportView.lastData);
+    if (currentReportData()) {
+      renderInteractiveReport(currentReportData());
     }
     return;
   }

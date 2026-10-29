@@ -3527,6 +3527,17 @@ textarea {
   font-weight: 400;
 }
 
+.bi-compare-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.bi-compare-toggle input {
+  width: auto;
+}
+
 /* Comercial vs Sales Coach: secciones propias de cada superficie. */
 body[data-workspace="coach"] [data-workspace-only="bi"],
 body[data-workspace="bi"] [data-workspace-only="coach"] {
