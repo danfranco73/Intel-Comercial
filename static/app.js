@@ -4708,7 +4708,11 @@ function renderProductBriefSheet(row, dashboard, labels, meta) {
 
 function printProductSheet(kind) {
   const dimension = document.getElementById("productBriefDimension")?.value || "families";
-  if (!state.reportView.lastData?.dashboards?.[dimension]) {
+  // En Comercial por totales la ficha llega aparte (biDashboards), no en el informe completo.
+  const dashboards = workspace === "bi" && state.series.data?.kind === "series"
+    ? biDashboards()
+    : state.reportView.lastData?.dashboards;
+  if (!dashboards?.[dimension]) {
     setStatus("Primero actualizá el informe para generar la ficha.");
     return;
   }
