@@ -4793,7 +4793,8 @@ function tablesToHtml(panel) {
   const copies = [];
   panel.querySelectorAll(".tabulator-host").forEach((host) => {
     const table = window.Tabulator?.findTable?.(host)?.[0];
-    if (!table || !host.clientWidth) return;
+    // Una tabla recién creada no tiene getHtml hasta terminar de armarse.
+    if (typeof table?.getHtml !== "function" || !host.clientWidth) return;
     const copy = document.createElement("div");
     copy.className = "print-table-copy print-only";
     copy.innerHTML = table.getHtml("all", false);
