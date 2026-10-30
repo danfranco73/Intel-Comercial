@@ -509,6 +509,13 @@ table,
   background: rgba(255, 255, 255, 0.12);
 }
 
+/* Mismos controles sobre paneles claros (informes de Comercial). */
+.report-print-actions button {
+  color: var(--ink);
+  border-color: var(--line);
+  background: white;
+}
+
 .coach-seller-picker span {
   display: block;
   margin-bottom: 6px;
